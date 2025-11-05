@@ -9,6 +9,7 @@ from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
+from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from app.core.security import (
@@ -20,6 +21,8 @@ from app.core.security import (
     decode_token,
 )
 from app.core.config import settings
+from app.core.database import get_db
+from app.services.user_service import UserService
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -43,7 +46,10 @@ class RefreshTokenRequest(BaseModel):
 
 
 @router.post("/register", response_model=Dict, status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserRegister):
+async def register(
+    user_data: UserRegister,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Register a new user
     """
@@ -55,26 +61,56 @@ async def register(user_data: UserRegister):
                    "and contain uppercase, lowercase, digit, and special character",
         )
 
-    # TODO: Check if user already exists
-    # TODO: Create user in database
+    # Create user service
+    user_service = UserService(db)
 
-    logger.info("User registered", email=user_data.email)
+    try:
+        # Create user in database
+        user = await user_service.create_user(
+            email=user_data.email,
+            password=user_data.password,
+            full_name=user_data.full_name,
+            organization=user_data.organization,
+            role="viewer",  # Default role for new users
+        )
 
-    return {
-        "message": "User registered successfully",
-        "email": user_data.email,
-    }
+        logger.info("User registered", email=user.email, user_id=str(user.id))
+
+        return {
+            "message": "User registered successfully",
+            "email": user.email,
+            "user_id": str(user.id),
+        }
+
+    except ValueError as e:
+        # User already exists or other validation error
+        logger.warning("Registration failed", email=user_data.email, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
     """
     User login with email and password
     Returns access and refresh tokens
     """
-    # TODO: Fetch user from database
-    # Mock authentication for now
-    if form_data.username != "admin@cybersentinel.local" or form_data.password != "ChangeMe123!":
+    # Create user service
+    user_service = UserService(db)
+
+    # Authenticate user
+    user = await user_service.authenticate_user(
+        email=form_data.username,
+        password=form_data.password,
+    )
+
+    if not user:
+        logger.warning("Login failed - invalid credentials", email=form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -84,20 +120,20 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     # Create tokens
     access_token = create_access_token(
         data={
-            "sub": "user-123",
-            "email": form_data.username,
-            "role": "admin",
+            "sub": str(user.id),
+            "email": user.email,
+            "role": user.role,
         }
     )
 
     refresh_token = create_refresh_token(
         data={
-            "sub": "user-123",
-            "email": form_data.username,
+            "sub": str(user.id),
+            "email": user.email,
         }
     )
 
-    logger.info("User logged in", email=form_data.username)
+    logger.info("User logged in", email=user.email, user_id=str(user.id))
 
     return {
         "access_token": access_token,

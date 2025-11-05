@@ -21,7 +21,15 @@
       "Bash(git remote add:*)",
       "Bash(git branch:*)",
       "Bash(git push:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(git init:*)",
+      "Bash(git config user.email \"effaaykhan@users.noreply.github.com\")",
+      "Bash(git pull:*)",
+      "Bash(cd:*)",
+      "Bash(python3:*)",
+      "Bash(find:*)",
+      "Bash(awk:*)",
+      "Bash(del /F page_old.tsx 2)"
     ],
     "deny": [],
     "ask": []

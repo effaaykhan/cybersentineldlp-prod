@@ -4,6 +4,19 @@
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-14+-black.svg)](https://nextjs.org/)
+[![Docker](https://img.shields.io/badge/docker-required-blue.svg)](https://www.docker.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue.svg)](https://www.postgresql.org/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-7+-green.svg)](https://www.mongodb.com/)
+[![Redis](https://img.shields.io/badge/Redis-7+-red.svg)](https://redis.io/)
+
+[![GitHub stars](https://img.shields.io/github/stars/effaaykhan/cybersentinel-dlp?style=social)](https://github.com/effaaykhan/cybersentinel-dlp/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/effaaykhan/cybersentinel-dlp?style=social)](https://github.com/effaaykhan/cybersentinel-dlp/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/effaaykhan/cybersentinel-dlp)](https://github.com/effaaykhan/cybersentinel-dlp/issues)
+[![GitHub last commit](https://img.shields.io/github/last-commit/effaaykhan/cybersentinel-dlp)](https://github.com/effaaykhan/cybersentinel-dlp/commits/main)
+
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)
+![Status](https://img.shields.io/badge/status-production--ready-brightgreen)
+![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen)
 
 ## Overview
 

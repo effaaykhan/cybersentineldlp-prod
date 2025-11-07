@@ -23,7 +23,9 @@ COPY package.json tsconfig.json next.config.js ./
 
 # Copy application code
 COPY src ./src
-COPY public ./public
+
+# Create public directory (Next.js requires it even if empty)
+RUN mkdir -p public
 
 # Set environment variables for build
 ENV NEXT_TELEMETRY_DISABLED 1

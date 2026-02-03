@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import logo from '@/elements/logo.png'
 import {
   LayoutDashboard,
   Server,
@@ -22,9 +23,13 @@ export default function Sidebar() {
   return (
     <aside className="w-64 bg-[#1a1d1f] text-white flex flex-col">
       {/* Logo */}
-      <div className="h-16 flex items-center px-6 border-b border-gray-800">
-        <Shield className="h-8 w-8 text-primary-400" />
-        <span className="ml-3 text-lg font-semibold">Cybersentinel dlp</span>
+      <div className="h-16 flex items-center pl-3 border-b border-gray-800">
+        <img
+	  src={logo}
+	  alt="CyberSentinel-DLP Logo"
+	  className="h-12 w-12 object-contain"
+	/>
+        <span className="ml-1 text-xl font-semibold">CyberSentinel-DLP</span>
       </div>
 
       {/* Navigation */}
@@ -51,7 +56,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="px-6 py-4 border-t border-gray-800 text-xs text-gray-400">
         <div>Version 2.0.0</div>
-        <div className="mt-1">© 2025 Cybersentinel dlp</div>
+        <div className="mt-1">© 2025 CyberSentinel DLP</div>
       </div>
     </aside>
   )

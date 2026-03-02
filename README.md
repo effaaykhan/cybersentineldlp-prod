@@ -61,7 +61,7 @@ No source code checkout. No build step. Just pull and run.
 | API Server | `http://<server-ip>:55000` |
 | API Docs (Swagger) | `http://<server-ip>:55000/docs` |
 
-**Default credentials:** `admin@cybersentinel.local` / `ChangeMe123!`
+**Default credentials:** `admin` / `admin`
 
 ---
 
@@ -283,7 +283,7 @@ You should see 8 containers: postgres, mongodb, redis, opensearch, manager, cele
 #### Change the Default Admin Password
 
 1. Open `http://<server-ip>:3000` in your browser
-2. Log in with `admin@cybersentinel.local` / `ChangeMe123!`
+2. Log in with username `admin` and password `admin`
 3. Navigate to **Settings** or **Users** and change the admin password immediately
 
 #### Create Your First Policy
@@ -637,7 +637,7 @@ The API is fully documented via Swagger at `http://<server-ip>:55000/docs`.
 # Login — returns access_token and refresh_token
 curl -X POST "http://<server-ip>:55000/api/v1/auth/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=admin@cybersentinel.local&password=ChangeMe123!"
+  -d "username=admin&password=admin"
 
 # Use the token for all subsequent requests
 curl -H "Authorization: Bearer <access_token>" http://<server-ip>:55000/api/v1/agents/
@@ -884,7 +884,7 @@ print(get_password_hash('NewPassword123!'))
 "
 # Use the hash to update directly:
 docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c \
-  "UPDATE users SET hashed_password='<hash>' WHERE email='admin@cybersentinel.local';"
+  "UPDATE users SET hashed_password='<hash>' WHERE email='admin';"
 ```
 
 ---

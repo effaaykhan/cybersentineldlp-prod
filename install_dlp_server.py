@@ -313,8 +313,8 @@ def print_summary(install_dir, host_ip, started):
       API Docs    →  http://{host_ip}:55000/docs
 
     {Color.BOLD}Default login:{Color.RESET}
-      Email:     admin@cybersentinel.local
-      Password:  ChangeMe123!
+      Username:  admin
+      Password:  admin
     """)
     )
 

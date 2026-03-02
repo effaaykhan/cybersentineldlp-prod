@@ -92,7 +92,7 @@ def banner():
 # ──────────────────────────────────────────────
 
 def check_prerequisites():
-    """Verify Docker and Docker Compose are available."""
+    """Verify Docker daemon is running and Docker Compose is available."""
     print(f"\n{Color.BOLD}[1/4] Checking prerequisites{Color.RESET}\n")
     all_ok = True
 
@@ -103,8 +103,11 @@ def check_prerequisites():
         err(f"Python >= 3.8 required (found {platform.python_version()})")
         all_ok = False
 
-    # Docker
-    if shutil.which("docker"):
+    # Docker binary
+    if not shutil.which("docker"):
+        err("Docker not found. Install: https://docs.docker.com/engine/install/")
+        all_ok = False
+    else:
         try:
             ver = subprocess.check_output(
                 ["docker", "--version"], stderr=subprocess.DEVNULL, text=True
@@ -112,26 +115,53 @@ def check_prerequisites():
             ok(f"Docker found  ({ver})")
         except subprocess.CalledProcessError:
             ok("Docker found")
-    else:
-        err("Docker not found. Install: https://docs.docker.com/engine/install/")
-        all_ok = False
 
-    # Docker Compose (v2 plugin or standalone)
+        # Docker daemon must be running (docker info talks to the daemon)
+        result = subprocess.run(
+            ["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if result.returncode != 0:
+            err("Docker daemon is not running!")
+            info("Start it with:  sudo systemctl start docker")
+            all_ok = False
+        else:
+            ok("Docker daemon is running")
+
+    # Docker Compose — prefer v2 plugin, skip legacy v1 entirely
     compose_cmd = None
-    for candidate in (["docker", "compose", "version"], ["docker-compose", "--version"]):
-        try:
-            subprocess.check_output(candidate, stderr=subprocess.DEVNULL, text=True)
-            compose_cmd = candidate[:-1]  # drop the version arg
-            ok(f"Docker Compose found  ({' '.join(candidate[:-1])})")
-            break
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            continue
-    if compose_cmd is None:
-        err("Docker Compose not found. Install: https://docs.docker.com/compose/install/")
+    try:
+        subprocess.check_output(
+            ["docker", "compose", "version"], stderr=subprocess.DEVNULL, text=True
+        )
+        compose_cmd = ["docker", "compose"]
+        ok("Docker Compose v2 found  (docker compose)")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # v2 plugin not available — check standalone docker-compose
+        if shutil.which("docker-compose"):
+            try:
+                ver_out = subprocess.check_output(
+                    ["docker-compose", "--version"], stderr=subprocess.DEVNULL, text=True
+                ).strip()
+                # docker-compose v1 (Python) reports "docker-compose version 1.x.x"
+                # docker-compose v2 standalone reports "Docker Compose version v2.x.x"
+                if "version 1." in ver_out.lower() or "1.29" in ver_out:
+                    warn(f"Found legacy docker-compose v1 ({ver_out})")
+                    err("docker-compose v1 is deprecated and unsupported.")
+                    info("Install Docker Compose v2: https://docs.docker.com/compose/install/")
+                else:
+                    compose_cmd = ["docker-compose"]
+                    ok(f"Docker Compose found  ({ver_out})")
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pass
+
+    if compose_cmd is None and all_ok:
+        err("Docker Compose v2 not found.")
+        info("Install: https://docs.docker.com/compose/install/")
         all_ok = False
 
     if not all_ok:
-        err("Please install missing prerequisites and re-run the installer.")
+        print()
+        err("Please fix the issues above and re-run the installer.")
         sys.exit(1)
 
     return compose_cmd

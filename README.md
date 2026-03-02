@@ -141,17 +141,19 @@ CyberSentinel DLP is a comprehensive data loss prevention platform designed for 
 The fastest way to deploy the DLP server. Run this single command on any machine with **Python 3.8+** and **Docker**:
 
 ```bash
-curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_dlp_server.py && python3 install_dlp_server.py --build --start
+curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_dlp_server.py && python3 install_dlp_server.py
 ```
 
 This will:
-1. Download only the server-relevant files (API, dashboard, databases, configs)
+1. Download `docker-compose.yml`, `.env.example`, and DB init script (3 files total)
 2. Generate `.env` with random secrets and auto-detected host IP
-3. Build all Docker images
+3. Pull pre-built images from GitHub Container Registry
 4. Start the full stack (PostgreSQL, MongoDB, Redis, OpenSearch, FastAPI, React dashboard)
 
-> **Flags:** Omit `--build --start` to download files only and build/start later manually.
-> Use `python3 install_dlp_server.py /opt/cybersentinel --build --start` to install to a custom path.
+No source code checkout. No build step. Just pull and run.
+
+> **Flags:** Add `--no-start` to download and configure only without starting services.
+> Use `python3 install_dlp_server.py /opt/cybersentinel` to install to a custom path.
 
 ### Access the Platform
 

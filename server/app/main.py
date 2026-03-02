@@ -19,7 +19,8 @@ import structlog
 
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.core.database import init_databases, close_databases, postgres_engine, Base
+from app.core.database import init_databases, close_databases, Base
+import app.core.database as _db
 from app.core.cache import init_cache, close_cache
 from app.core.opensearch import init_opensearch, close_opensearch
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -47,13 +48,12 @@ async def _auto_init_schema_and_admin():
     import app.models.onedrive  # noqa: F401
     import app.models.classified_file  # noqa: F401
 
-    async with postgres_engine.begin() as conn:
+    async with _db.postgres_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database schema verified / created")
 
     # Seed default admin if no users exist yet
-    from app.core.database import postgres_session_factory
-    async with postgres_session_factory() as session:
+    async with _db.postgres_session_factory() as session:
         result = await session.execute(
             text("SELECT COUNT(*) FROM users")
         )

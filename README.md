@@ -5,140 +5,40 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104.1-009688.svg)](https://fastapi.tiangolo.com)
-[![Test Coverage](https://img.shields.io/badge/coverage-87%25-brightgreen.svg)](https://github.com/cybersentinel-06/Data-Loss-Prevention)
+[![React](https://img.shields.io/badge/React-18.2-61DAFB.svg)](https://react.dev)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg)](https://docs.docker.com/compose/)
 
-A production-ready Data Loss Prevention platform with ML-based PII detection, multi-channel monitoring, automated response actions, and enterprise SIEM integration.
+A production-ready Data Loss Prevention platform with real-time endpoint monitoring, cloud storage integration (Google Drive, OneDrive), automated policy enforcement, SIEM forwarding, and a React dashboard — deployable with a single command.
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Key Features](#key-features)
+- [Quick Start — One-Command Install](#quick-start--one-command-install)
 - [Architecture](#architecture)
-- [Quick Start with Docker](#quick-start-with-docker)
-- [Agent Deployment](#agent-deployment)
-- [Configuration](#configuration)
-- [API Documentation](#api-documentation)
+- [Features](#features)
+- [Step-by-Step Installation Guide](#step-by-step-installation-guide)
+  - [Prerequisites](#1-prerequisites)
+  - [Server Deployment (Docker)](#2-server-deployment-docker)
+  - [Post-Deployment Configuration](#3-post-deployment-configuration)
+  - [Windows Agent Installation](#4-windows-agent-installation)
+  - [Linux Agent Installation](#5-linux-agent-installation)
+  - [Cloud Storage Integration](#6-cloud-storage-integration)
+  - [SIEM Integration (Optional)](#7-siem-integration-optional)
+- [Agent Configuration Reference](#agent-configuration-reference)
+- [API Reference](#api-reference)
+- [Environment Variables](#environment-variables)
+- [Management & Operations](#management--operations)
 - [Troubleshooting](#troubleshooting)
-
----
-
-## Overview
-
-CyberSentinel DLP is a comprehensive data loss prevention platform designed for enterprise environments. It provides real-time monitoring of endpoints, network traffic, and cloud storage to detect and prevent unauthorized data exfiltration.
-
-**Project Status:** Production Ready ✅
-
-- **Completion Date:** January 2025
-- **Code Base:** 27,500+ lines across 72 files
-- **Test Coverage:** 87%
-- **Investment:** 600+ hours of development
-- **Annual Value:** $2.7M+ (average enterprise deployment)
-
----
-
-## Key Features
-
-### Core Capabilities
-
-- **ML-Based PII Detection** (96%+ accuracy)
-  - Credit cards (Luhn validation)
-  - Social Security Numbers (SSN)
-  - Email addresses & phone numbers
-  - API keys & secrets (AWS, GitHub, Stripe, OpenAI)
-  - Healthcare data (HIPAA)
-  - Financial data (PCI-DSS)
-
-- **Multi-Channel Monitoring**
-  - Endpoint agents (Windows, Linux)
-  - File system monitoring (real-time)
-  - Clipboard monitoring
-  - USB device detection
-  - Google Drive cloud monitoring (OAuth integration)
-  - OneDrive cloud monitoring (OAuth integration, hybrid modification detection)
-  - Network traffic inspection
-
-- **Compliance Frameworks**
-  - **GDPR** (EU data protection)
-  - **HIPAA** (healthcare)
-  - **PCI-DSS** (payment cards)
-  - **SOX** (financial reporting)
-
-- **Automated Response Actions**
-  - Block file transfers (USB, network)
-  - Alert administrators (email, SMS)
-  - Create JIRA tickets automatically
-  - Send Slack/Teams notifications
-  - Forward to SIEM systems (ELK, Splunk)
-  - Quarantine suspicious data
-  - Generate incident reports
-  - Monitor Google Drive activity (file created, modified, deleted, moved)
-  - Monitor OneDrive activity (file created, modified, deleted, moved) with hybrid modification detection
-
-### Advanced Features
-
-- **Real-Time Analytics** (<100ms p95 latency)
-  - Time-series incident trends
-  - Top violators analysis
-  - Data type statistics
-  - Policy violation breakdowns
-
-- **Professional Reporting**
-  - Automated PDF/CSV reports
-  - Scheduled email delivery
-  - Executive summaries
-  - Compliance audit reports
-
-- **SIEM Integration**
-  - Elasticsearch/ELK Stack
-  - Splunk Enterprise/Cloud
-  - Batch event forwarding (500 events/batch)
-  - Health checks and monitoring
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     DLP Management Server                    │
-│                                                               │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │  FastAPI │  │   ML     │  │  Policy  │  │Analytics │   │
-│  │   API    │  │ Engine   │  │  Engine  │  │ Service  │   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
-│                                                               │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
-│  │PostgreSQL│  │  Redis   │  │OpenSearch│  │Prometheus│   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                          ▲
-                          │ HTTPS/REST
-                          │
-         ┌────────────────┼────────────────┐
-         │                │                │
-    ┌────▼────┐      ┌────▼────┐     ┌────▼────┐
-    │ Windows │      │  Linux  │     │  Linux  │
-    │  Agent  │      │  Agent  │     │  Agent  │
-    │         │      │         │     │         │
-    │ Desktop │      │ Server  │     │ Laptop  │
-    └─────────┘      └─────────┘     └─────────┘
-```
-
-**Components:**
-- **DLP Server**: Central management and processing (FastAPI)
-- **PostgreSQL**: Event storage and audit logs
-- **Redis**: Caching and real-time data
-- **OpenSearch**: Full-text search and analytics
-- **Prometheus**: Metrics and monitoring
-- **Agents**: Lightweight endpoint monitors (Windows/Linux)
+- [Technology Stack](#technology-stack)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
 ## Quick Start — One-Command Install
 
-The fastest way to deploy the DLP server. Run this single command on any machine with **Python 3.8+** and **Docker**:
+Run this on any machine with **Python 3.8+** and **Docker**:
 
 ```bash
 curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_dlp_server.py && python3 install_dlp_server.py
@@ -152,246 +52,545 @@ This will:
 
 No source code checkout. No build step. Just pull and run.
 
-> **Flags:** Add `--no-start` to download and configure only without starting services.
+> Add `--no-start` to download and configure only without starting services.
 > Use `python3 install_dlp_server.py /opt/cybersentinel` to install to a custom path.
 
-### Access the Platform
-
-| Service | URL |
+| Service | Default URL |
 |---|---|
-| Dashboard | `http://<your-ip>:3000` |
-| API Server | `http://<your-ip>:55000` |
-| API Docs | `http://<your-ip>:55000/docs` |
+| Dashboard | `http://<server-ip>:3000` |
+| API Server | `http://<server-ip>:55000` |
+| API Docs (Swagger) | `http://<server-ip>:55000/docs` |
 
-### Default Credentials
+**Default credentials:** `admin@cybersentinel.local` / `ChangeMe123!`
+
+---
+
+## Architecture
 
 ```
-Username: admin@cybersentinel.com
-Password: changeme123!
+                        ┌──────────────────────────────────────────────────────┐
+                        │              DLP Management Server                   │
+                        │                                                      │
+  ┌──────────┐          │  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
+  │ React    │ :3000    │  │ FastAPI  │  │  Celery  │  │  Celery  │          │
+  │Dashboard ├─────────►│  │  API     │  │  Worker  │  │   Beat   │          │
+  │ (nginx)  │  /api/   │  │  :55000  │  │          │  │          │          │
+  └──────────┘ proxy    │  └────┬─────┘  └────┬─────┘  └────┬─────┘          │
+                        │       │              │              │                │
+                        │  ┌────▼────┐  ┌─────▼────┐  ┌─────▼─────┐  ┌─────┐│
+                        │  │PostgreSQL│  │  Redis   │  │ OpenSearch │  │Mongo││
+                        │  │  :5432  │  │  :6379   │  │   :9200   │  │:27017││
+                        │  └─────────┘  └──────────┘  └───────────┘  └─────┘│
+                        └──────────────────────────────────────────────────────┘
+                                              ▲
+                                              │ HTTPS / REST
+                          ┌───────────────────┼───────────────────┐
+                          │                   │                   │
+                   ┌──────▼──────┐     ┌──────▼──────┐     ┌──────▼──────┐
+                   │   Windows   │     │    Linux    │     │   Cloud     │
+                   │   Agent     │     │    Agent    │     │  Connectors │
+                   │             │     │             │     │             │
+                   │ File System │     │ File System │     │Google Drive │
+                   │ Clipboard   │     │ File Xfer   │     │  OneDrive   │
+                   │ USB Monitor │     │             │     │             │
+                   │ File Xfer   │     │             │     │             │
+                   └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
-**⚠️ IMPORTANT**: Change the default password immediately after first login!
+**Components:**
 
-### Verify Installation
+| Component | Purpose | Technology |
+|---|---|---|
+| API Server | Central management, event processing, policy evaluation | FastAPI + Uvicorn |
+| Dashboard | Web UI for monitoring, policies, alerts | React 18 + Vite + Nginx |
+| PostgreSQL | Users, agents, policies, alerts, cloud connections | PostgreSQL 15 |
+| MongoDB | Event document storage | MongoDB 7 |
+| Redis | Caching, sessions, token blacklist, Celery broker | Redis 7 |
+| OpenSearch | Full-text event search and analytics | OpenSearch 2.11 |
+| Celery Worker | Background tasks (Google Drive/OneDrive polling, reports) | Celery 5.3 |
+| Celery Beat | Scheduled task execution | Celery Beat |
+| Windows Agent | Endpoint monitoring (files, clipboard, USB) | Python + watchdog + pywin32 |
+| Linux Agent | Endpoint monitoring (files, transfers) | Python + watchdog |
+
+---
+
+## Features
+
+### Endpoint Monitoring
+- **File System Monitoring** — Real-time detection of file create, modify, move, delete
+- **Clipboard Monitoring** — Captures clipboard content for PII scanning (Windows)
+- **USB Device Detection** — Logs USB connect/disconnect events (Windows)
+- **USB File Transfer Blocking** — Block or quarantine copies to removable drives (Windows)
+- **File Transfer Monitoring** — Detect and block copies from protected paths to monitored destinations
+
+### Cloud Storage Integration
+- **Google Drive** — OAuth connection, folder-level monitoring, activity polling, baseline tracking
+- **OneDrive** — OAuth connection, Microsoft Graph delta queries, hybrid modification detection
+
+### Policy Engine
+- **Policy Types:** File system, clipboard, USB device, USB transfer, file transfer, Google Drive (local + cloud), OneDrive cloud
+- **Actions:** Log, alert, block (delete), quarantine (move to quarantine folder)
+- **Agent Scoping** — Assign policies to specific agents or all agents
+- **Priority & Severity** — Configurable per policy
+- **Versioned Bundles** — Agents fetch policy updates via versioned sync
+
+### PII Detection & Classification
+- Credit cards (Luhn validation)
+- Social Security Numbers
+- Email addresses, phone numbers
+- API keys and secrets (AWS, GitHub, Stripe, OpenAI)
+- Healthcare data (HIPAA), Financial data (PCI-DSS)
+
+### Alerting & Analytics
+- Real-time alert creation from policy violations
+- Alert lifecycle: New → Acknowledged → Investigating → Resolved
+- Time-series incident trends and top violators
+- CSV and PDF report export
+
+### SIEM Integration
+- Splunk Enterprise/Cloud connector
+- Elasticsearch/ELK Stack connector
+- Batch event forwarding
+
+### Compliance
+- GDPR (EU data protection)
+- HIPAA (healthcare)
+- PCI-DSS (payment cards)
+- SOX (financial reporting)
+
+---
+
+## Step-by-Step Installation Guide
+
+### 1. Prerequisites
+
+#### Server Requirements
+
+| Requirement | Minimum |
+|---|---|
+| OS | Ubuntu 20.04+, Debian 11+, RHEL 8+, or any Linux with Docker |
+| CPU | 2 cores |
+| RAM | 4 GB (8 GB recommended) |
+| Disk | 20 GB free |
+| Docker | 20.10+ |
+| Docker Compose | v2.0+ (plugin or standalone) |
+| Python | 3.8+ (for the installer script only) |
+| Network | Ports 3000 (dashboard) and 55000 (API) accessible from agents |
+
+#### Agent Requirements
+
+| Requirement | Windows | Linux |
+|---|---|---|
+| OS | Windows 10/11 or Server 2016+ | Ubuntu 20.04+, Debian 11+, RHEL 8+ |
+| Python | 3.8+ | 3.8+ |
+| Network | Outbound HTTPS to server:55000 | Same |
+
+#### Install Docker (if not present)
 
 ```bash
-# Check all services are healthy
-docker-compose ps
+# Ubuntu / Debian
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# Log out and back in for group change to take effect
 
-# View server logs
-docker-compose logs -f server
-
-# Test API endpoint
-curl http://localhost:8000/api/v1/health
-
-# Expected response:
-# {"status":"healthy","service":"cybersentinel-dlp"}
-```
-
-### Stopping and Restarting
-
-```bash
-# Stop all services
-docker-compose down
-
-# Stop and remove all data
-docker-compose down -v
-
-# Restart services
-docker-compose restart
-
-# Update to latest code
-git pull
-docker-compose up -d --build
+# Verify
+docker --version
+docker compose version
 ```
 
 ---
 
-## Agent Deployment
+### 2. Server Deployment (Docker)
 
-Agents monitor endpoints and send events to the DLP server.
+#### Option A: One-Command Install (Recommended)
 
-### Windows Agent (Endpoint)
+```bash
+curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_dlp_server.py && python3 install_dlp_server.py
+```
 
-The production-ready Windows endpoint agent lives in `agents/endpoint/windows/agent.py` and uses `agent_config.json` for all settings.
+The script will:
+- Create a `cybersentinel-dlp/` directory
+- Download `docker-compose.yml`, `.env.example`, and the DB init SQL
+- Generate `.env` with random passwords and your server's IP
+- Pull pre-built images from `ghcr.io/cybersentinel-06`
+- Start all 8 services
 
-**Quick Installation**
+**To install to a custom directory:**
+```bash
+python3 install_dlp_server.py /opt/cybersentinel
+```
+
+**To download and configure only (start manually later):**
+```bash
+python3 install_dlp_server.py --no-start
+cd cybersentinel-dlp
+# Edit .env if needed
+docker compose up -d
+```
+
+#### Option B: Manual Setup
+
+```bash
+# 1. Create a directory and download the 3 required files
+mkdir cybersentinel-dlp && cd cybersentinel-dlp
+mkdir -p init-scripts
+
+BASE="https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main"
+curl -sLO "$BASE/docker-compose.deploy.yml" && mv docker-compose.deploy.yml docker-compose.yml
+curl -sLO "$BASE/.env.example"
+curl -sL  "$BASE/database/postgresql/init/01-init.sql" -o init-scripts/01-init.sql
+
+# 2. Create .env from the example
+cp .env.example .env
+
+# 3. Edit .env — at minimum, set passwords and your server IP
+nano .env
+#   SECRET_KEY=<random 32+ char string>
+#   POSTGRES_PASSWORD=<strong password>
+#   MONGODB_PASSWORD=<strong password>
+#   REDIS_PASSWORD=<strong password>
+#   HOST_IP=<your server IP>
+#   VITE_API_URL=http://<your server IP>:55000/api/v1
+#   CORS_ORIGINS=["http://<your server IP>:3000"]
+
+# 4. Start services
+docker compose up -d
+```
+
+#### Verify Deployment
+
+```bash
+# Check all containers are running
+docker compose ps
+
+# Test API health
+curl http://localhost:55000/health
+# Expected: {"status":"healthy"}
+
+# Test readiness (checks all DB connections)
+curl http://localhost:55000/ready
+
+# Open dashboard in browser
+# http://<server-ip>:3000
+```
+
+You should see 8 containers: postgres, mongodb, redis, opensearch, manager, celery-worker, celery-beat, dashboard.
+
+---
+
+### 3. Post-Deployment Configuration
+
+#### Change the Default Admin Password
+
+1. Open `http://<server-ip>:3000` in your browser
+2. Log in with `admin@cybersentinel.local` / `ChangeMe123!`
+3. Navigate to **Settings** or **Users** and change the admin password immediately
+
+#### Create Your First Policy
+
+1. Go to **Policies** in the dashboard
+2. Click **Create Policy**
+3. Select a policy type (e.g., File System Monitoring)
+4. Configure:
+   - **Name:** e.g., "Monitor Documents Folder"
+   - **Severity:** High
+   - **Monitored Paths:** e.g., `/home/user/Documents`
+   - **File Extensions:** `.pdf, .docx, .xlsx, .csv`
+   - **Action:** Alert (or Block/Quarantine)
+5. **Enable** the policy
+6. Optionally scope it to specific agents via the Agent IDs field
+
+#### Customize Environment (Optional)
+
+Edit `.env` and restart to apply changes:
+
+```bash
+nano .env
+docker compose down && docker compose up -d
+```
+
+Key settings to review:
+- `CORS_ORIGINS` — Add all URLs that access the dashboard
+- `SMTP_*` — Enable email alerts
+- `COMPLIANCE_MODE` — Set applicable frameworks (GDPR, HIPAA, PCI-DSS)
+- `DATA_RETENTION_DAYS` — How long to keep events (default: 90)
+
+---
+
+### 4. Windows Agent Installation
+
+#### Option A: PowerShell Installer (Recommended)
+
+Run in an **elevated PowerShell** (Run as Administrator):
 
 ```powershell
-# 1. Install dependencies
-cd agents\endpoint\windows
+# Download and run the installer
+# -ManagerUrl: point to your DLP server
+cd C:\Temp
+git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
+cd Data-Loss-Prevention\scripts
+.\install_windows_agent.ps1 -ManagerUrl "http://<SERVER-IP>:55000/api/v1"
+```
+
+The installer will:
+- Create a Python virtual environment
+- Install dependencies from `agents/endpoint/windows/requirements.txt`
+- Copy `agent_config.json` to `C:\ProgramData\CyberSentinel\`
+- Register a Windows Scheduled Task (`CyberSentinelAgent`) that starts at boot
+
+#### Option B: Manual Installation
+
+```powershell
+# 1. Clone the repository
+git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
+cd Data-Loss-Prevention\agents\endpoint\windows
+
+# 2. Create virtual environment and install dependencies
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate
 pip install -r requirements.txt
 
-# 2. Configure server + monitoring paths
-Copy-Item agent_config.json C:\ProgramData\CyberSentinel\agent_config.json -Force
+# 3. Copy and edit the config file
+mkdir -Force C:\ProgramData\CyberSentinel
+Copy-Item agent_config.json C:\ProgramData\CyberSentinel\agent_config.json
 notepad C:\ProgramData\CyberSentinel\agent_config.json
+# Set: "server_url": "http://<SERVER-IP>:55000/api/v1"
 
-# 3. Run the agent
+# 4. Run the agent
 python agent.py
 ```
 
-**Install as Windows Service (NSSM)**
+#### Install as Windows Service (NSSM)
 
 ```powershell
+# Install NSSM
 choco install nssm -y
-nssm install CyberSentinelAgent "C:\Python3\python.exe" "C:\cybersentinel-dlp\agents\endpoint\windows\agent.py"
-nssm set CyberSentinelAgent AppDirectory "C:\cybersentinel-dlp\agents\endpoint\windows"
-nssm set CyberSentinelAgent AppParameters ""
+
+# Register the service
+nssm install CyberSentinelAgent "C:\...\Data-Loss-Prevention\agents\endpoint\windows\.venv\Scripts\python.exe" "C:\...\Data-Loss-Prevention\agents\endpoint\windows\agent.py"
+nssm set CyberSentinelAgent AppDirectory "C:\...\Data-Loss-Prevention\agents\endpoint\windows"
 nssm set CyberSentinelAgent Start SERVICE_AUTO_START
 nssm start CyberSentinelAgent
 ```
 
-**Verify Windows Agent**
+#### Verify Windows Agent
 
 ```powershell
-Get-Content "C:\ProgramData\CyberSentinel\agent.log" -Tail 20
-curl http://your-server.com:55000/health
+# Check logs
+Get-Content "C:\ProgramData\CyberSentinel\cybersentinel_agent.log" -Tail 20
+
+# Test connectivity to server
+Test-NetConnection -ComputerName <SERVER-IP> -Port 55000
+
+# The agent should appear in Dashboard > Agents within 30 seconds
 ```
+
+**Windows Agent Capabilities:**
+
+| Feature | Status |
+|---|---|
+| File System Monitoring | Watches configured paths for create/modify/move/delete |
+| Clipboard Monitoring | Captures text clipboard, classifies for PII |
+| USB Device Monitoring | Logs USB connect/disconnect events |
+| USB File Transfer | Detects copies to removable drives; can block or quarantine |
+| File Transfer Blocking | Blocks copies from protected paths to monitored destinations |
+| Google Drive Local Mirror | Monitors `G:\My Drive\...` paths from policies |
 
 ---
 
-### Linux Agent (Endpoint)
+### 5. Linux Agent Installation
 
-The actively maintained Linux agent is located in `agents/endpoint/linux/agent.py` and includes an installer plus systemd unit file.
-
-**Quick Installation**
+#### Option A: Automated Installer (Recommended)
 
 ```bash
-cd agents/endpoint/linux
-chmod +x install.sh
+git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
+cd Data-Loss-Prevention/agents/endpoint/linux
+
+# Edit config FIRST — set server_url
+nano agent_config.json
+# Set: "server_url": "http://<SERVER-IP>:55000/api/v1"
+
+# Run the installer (requires root)
+sudo chmod +x install.sh
 sudo ./install.sh
 ```
 
-**Manual Installation**
+The installer will:
+1. Install Python 3 and pip
+2. Install dependencies from `requirements.txt`
+3. Copy `agent.py` to `/opt/cybersentinel/`
+4. Copy `agent_config.json` to `/etc/cybersentinel/`
+5. Install and enable the `cybersentinel-agent` systemd service
+
+#### Option B: Manual Installation
 
 ```bash
-cd agents/endpoint/linux
+cd Data-Loss-Prevention/agents/endpoint/linux
+
+# 1. Create virtual environment and install dependencies
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
+# 2. Copy and configure
 sudo mkdir -p /etc/cybersentinel
 sudo cp agent_config.json /etc/cybersentinel/agent_config.json
 sudo nano /etc/cybersentinel/agent_config.json
+# Set: "server_url": "http://<SERVER-IP>:55000/api/v1"
 
+# 3. Run the agent
 python3 agent.py
 ```
 
-**Install as systemd Service**
+#### Install as systemd Service (Manual)
 
 ```bash
 sudo cp cybersentinel-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable cybersentinel-agent
 sudo systemctl start cybersentinel-agent
+```
+
+#### Verify Linux Agent
+
+```bash
+# Check service status
 sudo systemctl status cybersentinel-agent
-```
 
-**Verify Linux Agent**
-
-```bash
+# View logs
 sudo journalctl -u cybersentinel-agent -f
+# or
 tail -f /var/log/cybersentinel_agent.log
-curl http://your-server.com:55000/health
+
+# Test connectivity
+curl http://<SERVER-IP>:55000/health
 ```
 
----
+**Linux Agent Capabilities:**
 
-### Endpoint Policy Coverage
-
-#### Windows
-
-- Clipboard Monitoring: Captures text clipboard when clipboard policies exist; classifies predefined labels and sends alert-only events (no block).
-- File System Monitoring: Watches policy paths (including Google Drive local mirrors) for create/modify/move/delete; detection-only, no block/quarantine enforcement.
-- File Transfer Monitoring: Blocks or quarantines copies from protected paths to monitored destinations (non-USB).
-- USB Device Monitoring: Logs USB connect events; does not block or eject devices.
-- USB File Transfer Monitoring: Detects copies from monitored paths to removable drives; can block (delete destination) or quarantine (move into configured quarantine folder, default `C:\Quarantine`).
-- Google Drive Local Monitoring: Observes `G:\My Drive\...` paths from policy bundle; detection-only, no blocking.
-
-#### Linux
-
-- File System Monitoring: Real-time watchers on policy `monitoredPaths` for create/modify/move/delete; supports `log`/`alert`, `quarantine` (moves to configured folder), and `block` (deletes file) actions.
-- File Transfer Monitoring: Blocks or quarantines copies from protected paths to monitored destinations on endpoints (non-USB).
-- Clipboard Monitoring: Not implemented on Linux.
-- USB Device Monitoring: Not implemented on Linux.
-- USB File Transfer Monitoring: Not implemented (no removable-drive watchers on Linux).
-- Google Drive Local Monitoring: Not implemented on Linux.
+| Feature | Status |
+|---|---|
+| File System Monitoring | Watches configured paths for create/modify/move/delete |
+| File Transfer Monitoring | Blocks or quarantines copies from protected paths |
+| Clipboard Monitoring | Not implemented |
+| USB Monitoring | Not implemented |
 
 ---
 
-## Configuration
+### 6. Cloud Storage Integration
 
-### Server Configuration
+#### Google Drive Setup
 
-Edit `.env`:
+1. **Create Google Cloud OAuth Credentials:**
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a project (or select existing)
+   - Enable the **Google Drive Activity API** and **Google Drive API**
+   - Go to **Credentials** → **Create Credentials** → **OAuth 2.0 Client ID**
+   - Application type: **Web application**
+   - Authorized redirect URI: `http://<SERVER-IP>:55000/api/v1/google-drive/callback`
+   - Download the client ID and secret
+
+2. **Connect in the Dashboard:**
+   - Go to **Dashboard** → **Settings** or the **Google Drive** section
+   - Click **Connect Google Drive**
+   - Authenticate with your Google account
+   - Select folders to monitor
+
+3. **Polling:** The Celery Beat scheduler automatically polls for changes. You can also trigger a manual poll from the dashboard.
+
+#### OneDrive Setup
+
+1. **Register an Azure AD Application:**
+   - Go to [Azure Portal](https://portal.azure.com/) → **Azure Active Directory** → **App registrations**
+   - Click **New registration**
+   - Redirect URI: `http://<SERVER-IP>:55000/api/v1/onedrive/callback`
+   - Under **API permissions**, add:
+     - `Files.Read.All`
+     - `Sites.Read.All`
+     - `User.Read`
+   - Under **Certificates & secrets**, create a new client secret
+
+2. **Add to `.env`:**
+   ```bash
+   ONEDRIVE_CLIENT_ID=<your-app-client-id>
+   ONEDRIVE_CLIENT_SECRET=<your-client-secret>
+   ONEDRIVE_REDIRECT_URI=http://<SERVER-IP>:55000/api/v1/onedrive/callback
+   ONEDRIVE_TENANT_ID=common   # or your specific tenant ID
+   ```
+   Restart services: `docker compose down && docker compose up -d`
+
+3. **Connect in the Dashboard:**
+   - Go to the **OneDrive** section
+   - Click **Connect OneDrive**
+   - Authenticate with your Microsoft account
+   - Select folders to monitor
+
+---
+
+### 7. SIEM Integration (Optional)
+
+#### Splunk
+
+Configure in the dashboard under **Settings** → **SIEM Integration** or via the API:
 
 ```bash
-# Database
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dlp
-REDIS_URL=redis://localhost:6379/0
-OPENSEARCH_URL=http://localhost:9200
-
-# Security
-SECRET_KEY=your-secret-key-minimum-32-characters
-PASSWORD_MIN_LENGTH=12
-ACCESS_TOKEN_EXPIRE_MINUTES=60
-REFRESH_TOKEN_EXPIRE_DAYS=30
-
-# Rate Limiting
-RATE_LIMIT_PER_MINUTE=100
-
-# ML Models
-ML_MODEL_PATH=/app/models
-ML_CONFIDENCE_THRESHOLD=0.85
-
-# Monitoring
-PROMETHEUS_ENABLED=true
-PROMETHEUS_PORT=9090
-
-# Logging
-LOG_LEVEL=INFO
-LOG_FORMAT=json
+curl -X POST "http://<SERVER-IP>:55000/api/v1/siem/connectors" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "splunk",
+    "host": "splunk-server.company.com",
+    "port": 8089,
+    "token": "your-splunk-hec-token"
+  }'
 ```
 
-### Agent Configuration
+#### Elasticsearch / ELK
 
-Agent configuration file (`agent_config.json`):
+```bash
+curl -X POST "http://<SERVER-IP>:55000/api/v1/siem/connectors" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "elasticsearch",
+    "host": "elk-server.company.com",
+    "port": 9200
+  }'
+```
+
+---
+
+## Agent Configuration Reference
+
+Both agents use `agent_config.json`:
 
 ```json
 {
-  "server_url": "https://dlp-server.company.com:55000/api/v1",
+  "server_url": "http://<SERVER-IP>:55000/api/v1",
   "agent_id": "",
-  "agent_name": "my-laptop",
+  "agent_name": "my-endpoint",
   "heartbeat_interval": 30,
+  "policy_sync_interval": 60,
   "monitoring": {
     "file_system": true,
+    "clipboard": true,
+    "usb_devices": true,
     "monitored_paths": [
-      "/home/user/Desktop",
-      "/home/user/Documents",
-      "/home/user/Downloads"
+      "C:\\Users\\<user>\\Documents",
+      "C:\\Users\\<user>\\Desktop",
+      "C:\\Users\\<user>\\Downloads"
     ],
-    "file_extensions": [
-      ".pdf",
-      ".docx",
-      ".xlsx",
-      ".txt",
-      ".csv",
-      ".pptx"
-    ],
-    "exclude_paths": [
-      "/home/user/.cache",
-      "/home/user/.local"
-    ],
+    "exclude_paths": [],
+    "file_extensions": [".pdf", ".docx", ".xlsx", ".csv", ".txt", ".pptx"],
     "transfer_blocking": {
       "enabled": false,
-      "block_removable_drives": true
+      "block_removable_drives": true,
+      "poll_interval_seconds": 5
     }
   },
-  "monitoring_options": {
-    "clipboard": true,
-    "usb_devices": true
+  "quarantine": {
+    "enabled": true,
+    "folder": "C:\\Quarantine"
   },
   "classification": {
     "enabled": true,
@@ -399,253 +598,293 @@ Agent configuration file (`agent_config.json`):
   },
   "performance": {
     "max_events_per_minute": 100,
-    "max_event_size": 1048576,
     "batch_size": 10,
     "queue_size": 1000
   },
   "logging": {
     "level": "INFO",
-    "format": "json",
-    "file": "/var/log/cybersentinel_agent.log"
+    "file": "C:\\ProgramData\\CyberSentinel\\cybersentinel_agent.log"
   }
 }
 ```
 
+| Field | Description | Default |
+|---|---|---|
+| `server_url` | DLP server API endpoint | Required |
+| `agent_id` | Auto-generated on first registration | Auto |
+| `agent_name` | Display name in dashboard | Hostname |
+| `heartbeat_interval` | Seconds between heartbeats | 30 |
+| `policy_sync_interval` | Seconds between policy fetches | 60 |
+| `monitoring.file_system` | Enable file system watcher | true |
+| `monitoring.clipboard` | Enable clipboard monitoring (Windows only) | true |
+| `monitoring.usb_devices` | Enable USB detection (Windows only) | true |
+| `monitoring.monitored_paths` | Paths to watch | See above |
+| `monitoring.file_extensions` | File types to classify | See above |
+| `monitoring.transfer_blocking.enabled` | Block unauthorized transfers | false |
+| `quarantine.enabled` | Move violations to quarantine folder | true |
+| `quarantine.folder` | Quarantine directory path | OS-specific |
+| `classification.max_file_size_mb` | Max file size for PII scanning | 10 |
+
 ---
 
-## API Documentation
+## API Reference
 
-### Interactive API Documentation
+The API is fully documented via Swagger at `http://<server-ip>:55000/docs`.
 
-Access Swagger UI at: **http://localhost:8000/docs**
+### Authentication
+
+```bash
+# Login — returns access_token and refresh_token
+curl -X POST "http://<server-ip>:55000/api/v1/auth/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin@cybersentinel.local&password=ChangeMe123!"
+
+# Use the token for all subsequent requests
+curl -H "Authorization: Bearer <access_token>" http://<server-ip>:55000/api/v1/agents/
+```
 
 ### Key Endpoints
 
-#### Authentication
+| Method | Endpoint | Description |
+|---|---|---|
+| **Auth** | | |
+| POST | `/api/v1/auth/login` | Login (returns JWT) |
+| POST | `/api/v1/auth/register` | Register user |
+| POST | `/api/v1/auth/refresh` | Refresh token |
+| **Agents** | | |
+| POST | `/api/v1/agents/register` | Register agent |
+| GET | `/api/v1/agents/` | List agents |
+| POST | `/api/v1/agents/{id}/heartbeat` | Agent heartbeat |
+| GET | `/api/v1/agents/{id}/policies` | Get agent policy bundle |
+| **Events** | | |
+| POST | `/api/v1/events/` | Submit event (from agents) |
+| GET | `/api/v1/events/` | Query events (filters, pagination) |
+| GET | `/api/v1/events/stats/summary` | Event statistics |
+| **Policies** | | |
+| POST | `/api/v1/policies/` | Create policy |
+| GET | `/api/v1/policies/` | List policies |
+| PATCH | `/api/v1/policies/{id}` | Update policy |
+| DELETE | `/api/v1/policies/{id}` | Delete policy |
+| **Alerts** | | |
+| GET | `/api/v1/alerts/` | List alerts |
+| PATCH | `/api/v1/alerts/{id}` | Update alert status |
+| **Dashboard** | | |
+| GET | `/api/v1/dashboard/overview` | Overview statistics |
+| GET | `/api/v1/dashboard/timeline` | Event timeline |
+| **Analytics** | | |
+| GET | `/api/v1/analytics/events` | Event analytics |
+| GET | `/api/v1/analytics/top-violators` | Top violators |
+| **Google Drive** | | |
+| POST | `/api/v1/google-drive/connect` | Start OAuth |
+| GET | `/api/v1/google-drive/connections` | List connections |
+| POST | `/api/v1/google-drive/poll` | Trigger poll |
+| **OneDrive** | | |
+| POST | `/api/v1/onedrive/connect` | Start OAuth |
+| GET | `/api/v1/onedrive/connections` | List connections |
+| POST | `/api/v1/onedrive/poll` | Trigger poll |
+| **Export** | | |
+| POST | `/api/v1/export/events/csv` | Export events CSV |
+| POST | `/api/v1/export/events/pdf` | Export events PDF |
+| **SIEM** | | |
+| GET | `/api/v1/siem/status` | SIEM connection status |
+| POST | `/api/v1/siem/send-events` | Forward events to SIEM |
+| **Health** | | |
+| GET | `/health` | Liveness check |
+| GET | `/ready` | Readiness check (DB connectivity) |
+| GET | `/metrics` | Prometheus metrics |
+
+---
+
+## Environment Variables
+
+All configuration is through the `.env` file. The installer generates one automatically with random secrets.
+
+### Required
+
+| Variable | Description | Example |
+|---|---|---|
+| `SECRET_KEY` | JWT signing key (32+ chars) | Auto-generated |
+| `POSTGRES_PASSWORD` | PostgreSQL password | Auto-generated |
+| `MONGODB_PASSWORD` | MongoDB password | Auto-generated |
+| `REDIS_PASSWORD` | Redis password | Auto-generated |
+
+### Network
+
+| Variable | Description | Default |
+|---|---|---|
+| `HOST_IP` | Server's LAN IP | Auto-detected |
+| `VITE_API_URL` | Dashboard → API URL | `http://<ip>:55000/api/v1` |
+| `CORS_ORIGINS` | Allowed dashboard origins (JSON list or CSV) | `["http://localhost:3000"]` |
+| `ALLOWED_HOSTS` | Trusted hosts | `["localhost","127.0.0.1"]` |
+
+### Application
+
+| Variable | Description | Default |
+|---|---|---|
+| `ENVIRONMENT` | `production` or `development` | `production` |
+| `DEBUG` | Enable debug mode | `False` |
+| `PORT` | API server port | `55000` |
+| `LOG_LEVEL` | Logging level | `INFO` |
+
+### Databases
+
+| Variable | Default | Notes |
+|---|---|---|
+| `POSTGRES_HOST` | `postgres` | Docker service name |
+| `POSTGRES_PORT` | `5432` | |
+| `MONGODB_HOST` | `mongodb` | Docker service name |
+| `MONGODB_PORT` | `27017` | |
+| `REDIS_HOST` | `redis` | Docker service name |
+| `REDIS_PORT` | `6379` | |
+| `OPENSEARCH_HOST` | `opensearch` | Docker service name |
+| `OPENSEARCH_PORT` | `9200` | |
+
+### Optional Integrations
+
+| Variable | Description | Default |
+|---|---|---|
+| `SMTP_ENABLED` | Enable email alerts | `false` |
+| `SMTP_HOST` | SMTP server | `smtp.gmail.com` |
+| `SMTP_PORT` | SMTP port | `587` |
+| `SMTP_USER` | SMTP username | |
+| `SMTP_PASSWORD` | SMTP password | |
+| `ONEDRIVE_CLIENT_ID` | Azure AD app client ID | |
+| `ONEDRIVE_CLIENT_SECRET` | Azure AD app secret | |
+| `ONEDRIVE_TENANT_ID` | Azure AD tenant | `common` |
+| `COMPLIANCE_MODE` | Active frameworks | `GDPR,HIPAA,PCI-DSS` |
+| `DATA_RETENTION_DAYS` | Event retention period | `90` |
+| `QUARANTINE_ENABLED` | Enable file quarantine | `true` |
+
+---
+
+## Management & Operations
+
+### Service Management
+
 ```bash
-POST /api/v1/auth/login
-POST /api/v1/auth/logout
-POST /api/v1/auth/refresh
+cd cybersentinel-dlp   # or wherever you installed
+
+# Status
+docker compose ps
+
+# Logs (all services)
+docker compose logs -f
+
+# Logs (specific service)
+docker compose logs -f manager
+docker compose logs -f dashboard
+docker compose logs -f celery-worker
+
+# Stop
+docker compose down
+
+# Start
+docker compose up -d
+
+# Restart a single service
+docker compose restart manager
+
+# Update to latest images
+docker compose pull && docker compose up -d
 ```
 
-#### Agent Management
+### Backup
+
 ```bash
-POST   /api/v1/agents/register      # Agent auto-enrollment
-GET    /api/v1/agents               # List all agents
-GET    /api/v1/agents/{id}          # Get agent details
-DELETE /api/v1/agents/{id}          # Remove agent
-POST   /api/v1/agents/{id}/heartbeat # Agent heartbeat
+# Backup PostgreSQL
+docker compose exec postgres pg_dumpall -U dlp_user > backup_postgres_$(date +%Y%m%d).sql
+
+# Backup MongoDB
+docker compose exec mongodb mongodump --archive > backup_mongo_$(date +%Y%m%d).archive
+
+# Backup .env (contains secrets)
+cp .env .env.backup
 ```
 
-#### Event Management
-```bash
-POST /api/v1/events                 # Submit event
-POST /api/v1/events/batch           # Submit multiple events
-GET  /api/v1/events                 # Query events
-GET  /api/v1/events/{id}            # Get event details
-```
-
-#### Policy Management
-```bash
-POST   /api/v1/policies             # Create policy
-GET    /api/v1/policies             # List policies
-PUT    /api/v1/policies/{id}        # Update policy
-DELETE /api/v1/policies/{id}        # Delete policy
-```
-
-#### Google Drive Integration
-```bash
-POST   /api/v1/google-drive/connect                    # Initiate OAuth flow
-GET    /api/v1/google-drive/connections                # List connections
-GET    /api/v1/google-drive/connections/{id}/folders   # List folders
-POST   /api/v1/google-drive/connections/{id}/baseline  # Reset baseline
-POST   /api/v1/google-drive/poll                       # Manual refresh
-```
-
-#### OneDrive Integration
-```bash
-POST   /api/v1/onedrive/connect                        # Initiate OAuth flow
-GET    /api/v1/onedrive/connections                    # List connections
-GET    /api/v1/onedrive/connections/{id}/folders       # List folders
-POST   /api/v1/onedrive/connections/{id}/baseline      # Reset baseline
-POST   /api/v1/onedrive/poll                           # Manual refresh
-```
-
-#### Analytics & Reporting
-```bash
-GET /api/v1/analytics/trends        # Incident trends
-GET /api/v1/analytics/top-violators # Top violators
-GET /api/v1/analytics/summary       # Summary statistics
-GET /api/v1/export/incidents/pdf    # Export to PDF
-GET /api/v1/export/incidents/csv    # Export to CSV
-```
-
-#### SIEM Integration
-```bash
-POST /api/v1/siem/connectors        # Register SIEM connector
-GET  /api/v1/siem/connectors        # List connectors
-POST /api/v1/siem/forward-event     # Forward event to SIEM
-POST /api/v1/siem/forward-batch     # Forward batch to SIEM
-```
-
-### Example: Submit Event
+### Restore
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/events" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_id": "agent-123",
-    "event_type": "file",
-    "severity": "high",
-    "classification_type": "credit_card",
-    "confidence": 0.95,
-    "content": "Credit card detected: 4532-****-****-1234",
-    "file_path": "/home/user/Documents/payment.txt",
-    "action": "file_created"
-  }'
+# Restore PostgreSQL
+cat backup_postgres_20260302.sql | docker compose exec -T postgres psql -U dlp_user
+
+# Restore MongoDB
+cat backup_mongo_20260302.archive | docker compose exec -T mongodb mongorestore --archive
 ```
 
 ---
 
 ## Troubleshooting
 
-### Server Issues
+### Server Won't Start
 
-**Problem: Server won't start**
 ```bash
-# Check Docker logs
-docker-compose logs server
+# Check container logs
+docker compose logs manager
 
-# Check database connection
-docker-compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c "\dt"
+# Common fixes:
+# 1. OpenSearch needs more virtual memory
+sudo sysctl -w vm.max_map_count=262144
+# Make permanent:
+echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
 
-# Verify environment variables
-docker-compose exec server env | grep DATABASE_URL
+# 2. Port already in use
+sudo lsof -i :55000
+sudo lsof -i :3000
 ```
 
-**Problem: Authentication errors**
-```bash
-# Recreate admin user
-docker-compose exec server python init_db.py
+### Agent Not Connecting
 
-# Check JWT secret is set
-docker-compose exec server env | grep SECRET_KEY
+```bash
+# 1. Test server is reachable from agent machine
+curl http://<SERVER-IP>:55000/health
+
+# 2. Check agent_config.json has correct server_url
+cat /etc/cybersentinel/agent_config.json   # Linux
+# or
+Get-Content C:\ProgramData\CyberSentinel\agent_config.json   # Windows
+
+# 3. Check agent logs
+tail -f /var/log/cybersentinel_agent.log   # Linux
+Get-Content C:\ProgramData\CyberSentinel\cybersentinel_agent.log -Tail 50   # Windows
+
+# 4. Ensure firewall allows port 55000
+sudo ufw allow 55000   # Ubuntu
 ```
 
-**Problem: High memory usage**
+### Dashboard Shows No Data
+
 ```bash
-# Check service resource usage
+# 1. Check API is healthy
+curl http://localhost:55000/ready
+
+# 2. Check database has events
+docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c "SELECT COUNT(*) FROM events;"
+
+# 3. Check OpenSearch
+curl http://localhost:9200/_cat/indices
+```
+
+### High Memory Usage
+
+```bash
+# Check resource usage
 docker stats
 
-# Reduce OpenSearch memory
-# Edit docker-compose.yml:
-environment:
-  - OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx256m
+# Reduce OpenSearch heap (edit docker-compose.yml)
+# Change: OPENSEARCH_JAVA_OPTS=-Xms256m -Xmx256m
+# Then: docker compose down && docker compose up -d
 ```
 
-### Agent Issues
-
-**Windows Agent Problems:**
-
-```powershell
-# Check agent is running
-Get-Process python | Where-Object {$_.Path -like "*cybersentinel*"}
-
-# Check logs
-Get-Content "C:\ProgramData\CyberSentinel\agent.log" -Tail 50
-
-# Test connectivity to server
-Test-NetConnection -ComputerName your-server.com -Port 8000
-
-# Restart agent service
-Restart-Service CyberSentinelAgent
-
-# Check service status
-Get-Service CyberSentinelAgent
-```
-
-**Linux Agent Problems:**
+### Reset Admin Password
 
 ```bash
-# Check agent is running
-ps aux | grep cybersentinel
-
-# Check logs
-sudo journalctl -u cybersentinel-agent -n 100
-
-# Test connectivity
-curl -v http://your-server.com:8000/api/v1/health
-
-# Restart agent
-sudo systemctl restart cybersentinel-agent
-
-# Check status
-sudo systemctl status cybersentinel-agent
-```
-
-**Problem: Agent not sending events**
-
-```bash
-# Check agent configuration
-cat /etc/cybersentinel/agent_config.json  # Linux
-# or
-Get-Content "C:\ProgramData\CyberSentinel\agent_config.json"  # Windows
-
-# Verify manager_url is correct
-# Verify agent has registered (agent_id should be populated)
-
-# Check network connectivity
-curl http://your-server.com:8000/api/v1/health
-
-# Re-register agent
-rm /etc/cybersentinel/agent_config.json  # Remove config
-# Restart agent to trigger auto-registration
-```
-
-### Performance Issues
-
-**Slow event processing:**
-```json
-{
-  "performance": {
-    "batch_size": 50,
-    "max_events_per_minute": 200
-  }
-}
-```
-
-**High CPU usage:**
-```yaml
-# Reduce monitoring frequency
-monitoring:
-  file_system:
-    enabled: true
-    # Reduce paths being monitored
-    paths:
-      - /home/user/Documents  # Only critical paths
-```
-
-### Database Issues
-
-**Reset database:**
-```bash
-# Stop services
-docker-compose down
-
-# Remove database volume
-docker volume rm cybersentinel-dlp_postgres_data
-
-# Start fresh
-docker-compose up -d
-docker-compose exec server python init_db.py
-```
-
-**Check database size:**
-```bash
-docker-compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c "
-  SELECT pg_size_pretty(pg_database_size('cybersentinel_dlp'));
+docker compose exec manager python -c "
+from app.core.security import get_password_hash
+print(get_password_hash('NewPassword123!'))
 "
+# Use the hash to update directly:
+docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c \
+  "UPDATE users SET hashed_password='<hash>' WHERE email='admin@cybersentinel.local';"
 ```
 
 ---
@@ -653,101 +892,71 @@ docker-compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c "
 ## Technology Stack
 
 ### Backend
-- **FastAPI 0.104.1** - Modern async Python web framework
-- **SQLAlchemy 2.0** - Database ORM with async support
-- **PostgreSQL 15** - Primary data store
-- **Redis 7** - Caching and message broker
-- **OpenSearch 2.x** - Full-text search and analytics
+| Technology | Version | Purpose |
+|---|---|---|
+| FastAPI | 0.104.1 | Async REST API framework |
+| Uvicorn | 0.24.0 | ASGI server |
+| SQLAlchemy | 2.0.23 | Async ORM (PostgreSQL) |
+| Motor | 3.3.2 | Async MongoDB driver |
+| Celery | 5.3.4 | Distributed task queue |
+| Pydantic | 2.5.0 | Data validation |
+| python-jose | 3.3.0 | JWT authentication |
+| OpenSearch-py | 2.4.2 | Event search & analytics |
+| Prometheus | 0.19.0 | Metrics collection |
 
-### Machine Learning
-- **TensorFlow 2.15** - Deep learning models
-- **PyTorch 2.1.2** - Neural networks
-- **Transformers 4.36** - NLP models (BERT)
-- **spaCy 3.7** - NLP processing
-- **scikit-learn 1.3** - ML utilities
+### Frontend
+| Technology | Version | Purpose |
+|---|---|---|
+| React | 18.2.0 | UI framework |
+| TypeScript | 5.3.3 | Type safety |
+| Vite | 5.0.8 | Build tool |
+| TanStack Query | 5.14.2 | Server state management |
+| Zustand | 4.4.7 | Client state |
+| Recharts | 2.10.3 | Data visualization |
+| Tailwind CSS | 3.3.6 | Styling |
+| Axios | 1.6.2 | HTTP client |
 
-### Security
-- **JWT** - Token-based authentication
-- **bcrypt** - Password hashing
-- **python-jose** - JWT implementation
-- **bleach** - XSS prevention
-
-### Monitoring
-- **Prometheus** - Metrics collection
-- **Grafana** - Visualization (optional)
-- **structlog** - Structured logging
-
-### Agents
-- **Python 3.8+** - Cross-platform agent runtime
-- **asyncio** - Async event processing
-- **aiohttp** - HTTP client
-- **watchdog** - File system monitoring (Linux)
-- **pywin32** - Windows API access (Windows)
-
----
-
-## Performance Metrics
-
-From comprehensive benchmarking (`server/tests/performance/test_benchmarks.py`):
-
-```
-Detection Latency:
-  Mean:    35ms
-  p95:     85ms  ✅ (target: <100ms)
-  p99:     120ms
-
-Throughput:
-  Events/sec: 150+  ✅ (target: >100)
-
-Detection Accuracy:
-  Credit Cards: 96.2%  ✅ (target: >95%)
-  SSN:          97.1%  ✅ (target: >95%)
-  Emails:       98.5%  ✅
-
-False Positive Rate: 1.4%  ✅ (target: <2%)
-
-Test Coverage: 87%
-```
+### Infrastructure
+| Technology | Version | Purpose |
+|---|---|---|
+| PostgreSQL | 15 | Users, policies, alerts |
+| MongoDB | 7 | Event documents |
+| Redis | 7 | Cache, sessions, broker |
+| OpenSearch | 2.11 | Full-text search, analytics |
+| Nginx | Alpine | Dashboard reverse proxy |
+| Docker Compose | v2 | Container orchestration |
 
 ---
 
-## Support & Contributing
+## Contributing
 
-### Getting Help
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-- **Documentation**: https://github.com/cybersentinel-06/Data-Loss-Prevention
-- **Issues**: https://github.com/cybersentinel-06/Data-Loss-Prevention/issues
-- **Discussions**: https://github.com/cybersentinel-06/Data-Loss-Prevention/discussions
+```bash
+# Clone the repo
+git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
+cd Data-Loss-Prevention
 
-### Contributing
+# Install development dependencies
+make install-dev
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+# Run tests
+make test
+
+# Lint and format
+make lint
+make format
+
+# Run all CI checks locally
+make ci-test
+```
 
 ---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## Acknowledgments
-
-- Built with ❤️ using FastAPI, TensorFlow, and modern Python
-- Inspired by enterprise DLP solutions (Symantec, Forcepoint, McAfee)
-- ML models based on BERT and transformer architectures
-- Compliance frameworks: NIST, GDPR, HIPAA, PCI-DSS
-
----
-
-**⚠️ Security Notice**: This is DLP (Data Loss Prevention) software. It monitors file access, clipboard operations, and USB devices. Ensure you have proper authorization before deploying in any environment.
-
-**🚀 Production Ready**: All 72 Python files reviewed, 1 critical bug fixed, 87% test coverage achieved.
-
----
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+**Security Notice:** This is DLP (Data Loss Prevention) software. It monitors file access, clipboard operations, and USB devices. Ensure you have proper authorization before deploying in any environment.

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/lib/store/auth'
 import { changePassword } from '@/lib/api'
-import { Shield, Mail, Lock, AlertCircle, CheckCircle, KeyRound } from 'lucide-react'
+import { Shield, Mail, Lock, AlertCircle, CheckCircle, KeyRound, Eye, EyeOff } from 'lucide-react'
 
 export default function LoginForm() {
   const navigate = useNavigate()
@@ -15,6 +15,9 @@ export default function LoginForm() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [mode, setMode] = useState<'login' | 'changePassword'>('login')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showNewPassword, setShowNewPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   const resetForm = () => {
     setPassword('')
@@ -22,6 +25,9 @@ export default function LoginForm() {
     setConfirmPassword('')
     setError('')
     setSuccess('')
+    setShowPassword(false)
+    setShowNewPassword(false)
+    setShowConfirmPassword(false)
   }
 
   const switchMode = (newMode: 'login' | 'changePassword') => {
@@ -70,6 +76,8 @@ export default function LoginForm() {
   }
 
   const isChangePassword = mode === 'changePassword'
+
+  const eyeButtonClass = "absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-gray-400 hover:text-gray-200 transition-colors"
 
   return (
     <div className="w-full max-w-md">
@@ -148,14 +156,22 @@ export default function LoginForm() {
               </div>
               <input
                 id="password"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="block w-full pl-10 pr-3 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
+                className="block w-full pl-10 pr-10 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
                 placeholder={isChangePassword ? 'Enter current password' : 'Enter your password'}
                 disabled={loading}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className={eyeButtonClass}
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+              </button>
             </div>
           </div>
 
@@ -172,14 +188,22 @@ export default function LoginForm() {
                   </div>
                   <input
                     id="newPassword"
-                    type="password"
+                    type={showNewPassword ? 'text' : 'password'}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     required
-                    className="block w-full pl-10 pr-3 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
+                    className="block w-full pl-10 pr-10 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
                     placeholder="Enter new password"
                     disabled={loading}
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className={eyeButtonClass}
+                    tabIndex={-1}
+                  >
+                    {showNewPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  </button>
                 </div>
               </div>
 
@@ -193,14 +217,22 @@ export default function LoginForm() {
                   </div>
                   <input
                     id="confirmPassword"
-                    type="password"
+                    type={showConfirmPassword ? 'text' : 'password'}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     required
-                    className="block w-full pl-10 pr-3 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
+                    className="block w-full pl-10 pr-10 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
                     placeholder="Confirm new password"
                     disabled={loading}
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className={eyeButtonClass}
+                    tabIndex={-1}
+                  >
+                    {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  </button>
                 </div>
               </div>
 

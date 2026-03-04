@@ -109,7 +109,7 @@ export const getAlerts = async () => {
 }
 
 export const searchEvents = async (params?: any) => {
-  const { data } = await apiClient.get('/events', { params })
+  const { data } = await apiClient.get('/events/', { params })
   return data
 }
 
@@ -397,7 +397,7 @@ export const refreshPolicyBundles = async () => {
 
 // Events helper used by dashboard pages
 export const getEvents = async (params?: any) => {
-  const { data } = await apiClient.get('/events', { params })
+  const { data } = await apiClient.get('/events/', { params })
   // The backend returns a paginated envelope; the dashboard expects a flat list.
   return data.events || []
 }
@@ -409,7 +409,7 @@ export const getCurrentUser = async () => {
 }
 
 export const getUsers = async (params?: any) => {
-  const { data } = await apiClient.get('/users', { params })
+  const { data } = await apiClient.get('/users/', { params })
   return data
 }
 

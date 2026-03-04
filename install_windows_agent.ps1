@@ -5,7 +5,7 @@
 .DESCRIPTION
     Downloads the agent executable and CA certificate from GitHub, creates
     configuration, installs the CA certificate, and sets up a scheduled task
-    for auto-start — all in one command.
+    for auto-start - all in one command.
 
 .PARAMETER ServerUrl
     Manager API URL (e.g., http://192.168.1.100:55000/api/v1)
@@ -14,7 +14,7 @@
     Installation directory (default: C:\Program Files\CyberSentinel)
 
 .PARAMETER NoStart
-    Install and configure only — do not start the agent
+    Install and configure only - do not start the agent
 
 .PARAMETER Force
     Overwrite existing installation
@@ -23,7 +23,6 @@
     .\install_windows_agent.ps1 -ServerUrl "http://192.168.1.100:55000/api/v1"
 
 .EXAMPLE
-    # One-liner (download and run):
     irm https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_windows_agent.ps1 -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1 -ServerUrl "http://<SERVER-IP>:55000/api/v1"
 #>
 
@@ -38,9 +37,9 @@ param(
     [switch]$Force
 )
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Configuration
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 $REPO_OWNER = "cybersentinel-06"
 $REPO_NAME  = "Data-Loss-Prevention"
@@ -58,22 +57,22 @@ $AGENT_FILES = @(
     @{ Remote = "agents/endpoint/windows/ca.cer"; Local = $CERT_NAME }
 )
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Helper functions
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 function Write-Banner {
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║   CyberSentinel DLP - Windows Agent Installer    ║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "  ======================================================" -ForegroundColor Cyan
+    Write-Host "    CyberSentinel DLP - Windows Agent Installer          " -ForegroundColor Cyan
+    Write-Host "  ======================================================" -ForegroundColor Cyan
     Write-Host ""
 }
 
-function Write-Info    { param([string]$Msg) Write-Host "  [INFO]  $Msg" -ForegroundColor Cyan }
-function Write-Ok      { param([string]$Msg) Write-Host "  [ OK ]  $Msg" -ForegroundColor Green }
-function Write-Warn    { param([string]$Msg) Write-Host "  [WARN]  $Msg" -ForegroundColor Yellow }
-function Write-Err     { param([string]$Msg) Write-Host "  [FAIL]  $Msg" -ForegroundColor Red }
+function Write-Info  { param([string]$Msg) Write-Host "  [INFO]  $Msg" -ForegroundColor Cyan }
+function Write-Ok    { param([string]$Msg) Write-Host "  [ OK ]  $Msg" -ForegroundColor Green }
+function Write-Warn  { param([string]$Msg) Write-Host "  [WARN]  $Msg" -ForegroundColor Yellow }
+function Write-Err   { param([string]$Msg) Write-Host "  [FAIL]  $Msg" -ForegroundColor Red }
 
 function Test-Administrator {
     $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -81,12 +80,14 @@ function Test-Administrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Step 1: Prerequisites
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 function Step-Prerequisites {
-    Write-Host "`n  [1/5] Checking prerequisites`n" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [1/5] Checking prerequisites" -ForegroundColor White
+    Write-Host ""
 
     # Admin check
     if (-not (Test-Administrator)) {
@@ -104,18 +105,21 @@ function Step-Prerequisites {
     try {
         $null = [System.Net.Dns]::GetHostEntry("github.com")
         Write-Ok "Network connectivity OK"
-    } catch {
-        Write-Err "Cannot resolve github.com — check network connectivity"
+    }
+    catch {
+        Write-Err "Cannot resolve github.com - check network connectivity"
         exit 1
     }
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Step 2: Download agent files
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 function Step-DownloadFiles {
-    Write-Host "`n  [2/5] Downloading agent files`n" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [2/5] Downloading agent files" -ForegroundColor White
+    Write-Host ""
 
     if (-not (Test-Path $InstallDir)) {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -126,7 +130,7 @@ function Step-DownloadFiles {
         $url  = "$RAW_BASE/$($file.Remote)"
         $dest = Join-Path $InstallDir $file.Local
 
-        if ((Test-Path $dest) -and -not $Force) {
+        if ((Test-Path $dest) -and (-not $Force)) {
             Write-Warn "$($file.Local) already exists (use -Force to overwrite)"
             continue
         }
@@ -136,7 +140,8 @@ function Step-DownloadFiles {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
             Write-Ok "$($file.Local) downloaded"
-        } catch {
+        }
+        catch {
             Write-Err "Failed to download $($file.Local): $_"
             exit 1
         }
@@ -145,17 +150,19 @@ function Step-DownloadFiles {
     Write-Ok "Agent files saved to $InstallDir"
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Step 3: Install CA Certificate
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 function Step-InstallCertificate {
-    Write-Host "`n  [3/5] Installing CA certificate`n" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [3/5] Installing CA certificate" -ForegroundColor White
+    Write-Host ""
 
     $certPath = Join-Path $InstallDir $CERT_NAME
 
     if (-not (Test-Path $certPath)) {
-        Write-Warn "CA certificate not found at $certPath — skipping"
+        Write-Warn "CA certificate not found at $certPath - skipping"
         return
     }
 
@@ -169,26 +176,29 @@ function Step-InstallCertificate {
         $store.Add($cert)
         $store.Close()
         Write-Ok "CA certificate installed to Trusted Root store"
-    } catch {
+    }
+    catch {
         Write-Warn "Failed to install CA certificate: $_"
         Write-Warn "HTTPS connections to the server may fail"
     }
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Step 4: Generate configuration
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 function Step-GenerateConfig {
-    Write-Host "`n  [4/5] Generating agent configuration`n" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [4/5] Generating agent configuration" -ForegroundColor White
+    Write-Host ""
 
     $configPath = Join-Path $InstallDir $CONFIG_NAME
 
-    # Normalize server URL — strip trailing slash
+    # Normalize server URL - strip trailing slash
     $normalizedUrl = $ServerUrl.TrimEnd("/")
 
-    if ((Test-Path $configPath) -and -not $Force) {
-        Write-Info "Existing config found — updating server_url only"
+    if ((Test-Path $configPath) -and (-not $Force)) {
+        Write-Info "Existing config found - updating server_url only"
         try {
             $config = Get-Content $configPath -Raw | ConvertFrom-Json
             $config.server_url = $normalizedUrl
@@ -196,8 +206,9 @@ function Step-GenerateConfig {
             Write-Ok "Config updated: $configPath"
             Write-Ok "Agent ID: $($config.agent_id)"
             return
-        } catch {
-            Write-Warn "Could not update existing config: $_ — creating new one"
+        }
+        catch {
+            Write-Warn "Could not update existing config - creating new one"
         }
     }
 
@@ -220,12 +231,14 @@ function Step-GenerateConfig {
     Write-Ok "Server URL:     $normalizedUrl"
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Step 5: Create Scheduled Task (auto-start)
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 function Step-CreateScheduledTask {
-    Write-Host "`n  [5/5] Setting up scheduled task`n" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [5/5] Setting up scheduled task" -ForegroundColor White
+    Write-Host ""
 
     $exePath = Join-Path $InstallDir $EXE_NAME
 
@@ -235,7 +248,8 @@ function Step-CreateScheduledTask {
         if ($Force) {
             Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
             Write-Info "Removed existing scheduled task"
-        } else {
+        }
+        else {
             Write-Warn "Scheduled task '$TASK_NAME' already exists (use -Force to recreate)"
             if (-not $NoStart) {
                 Write-Info "Starting agent..."
@@ -247,24 +261,15 @@ function Step-CreateScheduledTask {
     }
 
     # Create scheduled task that runs at system startup with SYSTEM privileges
-    $action  = New-ScheduledTaskAction -Execute $exePath -WorkingDirectory $InstallDir
-    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $action    = New-ScheduledTaskAction -Execute $exePath -WorkingDirectory $InstallDir
+    $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable `
-        -RestartCount 3 `
-        -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit (New-TimeSpan -Days 365)
 
-    Register-ScheduledTask `
-        -TaskName $TASK_NAME `
-        -Action $action `
-        -Trigger $trigger `
-        -Principal $principal `
-        -Settings $settings `
-        -Description "CyberSentinel DLP Endpoint Agent" | Out-Null
+    $restartInterval = New-TimeSpan -Minutes 1
+    $execTimeLimit   = New-TimeSpan -Days 365
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval $restartInterval -ExecutionTimeLimit $execTimeLimit
+
+    Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "CyberSentinel DLP Endpoint Agent" | Out-Null
 
     Write-Ok "Scheduled task '$TASK_NAME' created (runs at startup as SYSTEM)"
 
@@ -277,32 +282,40 @@ function Step-CreateScheduledTask {
         $proc = Get-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
         if ($proc) {
             Write-Ok "Agent is running (PID: $($proc.Id))"
-        } else {
-            Write-Warn "Agent may not have started — check logs in $InstallDir"
         }
-    } else {
+        else {
+            Write-Warn "Agent may not have started - check logs in $InstallDir"
+        }
+    }
+    else {
         Write-Info "Task created but agent not started (-NoStart)"
     }
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Summary
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 function Write-Summary {
     $normalizedUrl = $ServerUrl.TrimEnd("/")
     $started = -not $NoStart
 
     Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    Write-Host "  ║          Installation Complete                    ║" -ForegroundColor Cyan
-    Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "  ======================================================" -ForegroundColor Cyan
+    Write-Host "            Installation Complete                        " -ForegroundColor Cyan
+    Write-Host "  ======================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Server URL:    $normalizedUrl" -ForegroundColor White
     Write-Host "  Install path:  $InstallDir" -ForegroundColor White
-    Write-Host "  Config:        $(Join-Path $InstallDir $CONFIG_NAME)" -ForegroundColor White
+    $cfgPath = Join-Path $InstallDir $CONFIG_NAME
+    Write-Host "  Config:        $cfgPath" -ForegroundColor White
     Write-Host "  Task name:     $TASK_NAME" -ForegroundColor White
-    Write-Host "  Status:        $(if ($started) { 'Running' } else { 'Not started' })" -ForegroundColor White
+    if ($started) {
+        Write-Host "  Status:        Running" -ForegroundColor White
+    }
+    else {
+        Write-Host "  Status:        Not started" -ForegroundColor White
+    }
     Write-Host ""
     Write-Host "  Useful Commands:" -ForegroundColor White
     Write-Host "    Get-ScheduledTask -TaskName $TASK_NAME        # Check task status"
@@ -317,9 +330,9 @@ function Write-Summary {
     Write-Host ""
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # Main
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 Write-Banner
 

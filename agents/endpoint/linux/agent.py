@@ -82,7 +82,7 @@ class AgentConfig:
                 # Global quarantine toggle for this agent
                 "enabled": True,
                 # Default quarantine folder on Linux endpoints
-                "folder": "/home/vansh/quarantine"
+                "folder": "/opt/cybersentinel/quarantine"
             },
             "classification": {
                 "enabled": True,

@@ -30,7 +30,7 @@
   },
   "quarantine": {
     "enabled": true,
-    "folder": "/home/vansh/quarantine"
+    "folder": "/opt/cybersentinel/quarantine"
   },
   "classification": {
     "enabled": true,

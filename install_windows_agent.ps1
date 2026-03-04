@@ -105,8 +105,7 @@ function Step-Prerequisites {
     try {
         $null = [System.Net.Dns]::GetHostEntry("github.com")
         Write-Ok "Network connectivity OK"
-    }
-    catch {
+    } catch {
         Write-Err "Cannot resolve github.com - check network connectivity"
         exit 1
     }
@@ -140,8 +139,7 @@ function Step-DownloadFiles {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -ErrorAction Stop
             Write-Ok "$($file.Local) downloaded"
-        }
-        catch {
+        } catch {
             Write-Err "Failed to download $($file.Local): $_"
             exit 1
         }
@@ -176,8 +174,7 @@ function Step-InstallCertificate {
         $store.Add($cert)
         $store.Close()
         Write-Ok "CA certificate installed to Trusted Root store"
-    }
-    catch {
+    } catch {
         Write-Warn "Failed to install CA certificate: $_"
         Write-Warn "HTTPS connections to the server may fail"
     }
@@ -206,8 +203,7 @@ function Step-GenerateConfig {
             Write-Ok "Config updated: $configPath"
             Write-Ok "Agent ID: $($config.agent_id)"
             return
-        }
-        catch {
+        } catch {
             Write-Warn "Could not update existing config - creating new one"
         }
     }
@@ -248,8 +244,7 @@ function Step-CreateScheduledTask {
         if ($Force) {
             Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
             Write-Info "Removed existing scheduled task"
-        }
-        else {
+        } else {
             Write-Warn "Scheduled task '$TASK_NAME' already exists (use -Force to recreate)"
             if (-not $NoStart) {
                 Write-Info "Starting agent..."
@@ -282,12 +277,10 @@ function Step-CreateScheduledTask {
         $proc = Get-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
         if ($proc) {
             Write-Ok "Agent is running (PID: $($proc.Id))"
-        }
-        else {
+        } else {
             Write-Warn "Agent may not have started - check logs in $InstallDir"
         }
-    }
-    else {
+    } else {
         Write-Info "Task created but agent not started (-NoStart)"
     }
 }
@@ -312,8 +305,7 @@ function Write-Summary {
     Write-Host "  Task name:     $TASK_NAME" -ForegroundColor White
     if ($started) {
         Write-Host "  Status:        Running" -ForegroundColor White
-    }
-    else {
+    } else {
         Write-Host "  Status:        Not started" -ForegroundColor White
     }
     Write-Host ""

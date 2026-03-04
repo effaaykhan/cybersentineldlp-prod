@@ -4,7 +4,7 @@ Query, filter, and manage DLP events
 """
 
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from pydantic import BaseModel, Field
@@ -41,20 +41,20 @@ class EventCreate(BaseModel):
 
 
 class DLPEvent(BaseModel):
-    id: str
-    timestamp: datetime
-    event_type: str
+    id: str = ""
+    timestamp: Optional[datetime] = None
+    event_type: str = "unknown"
     event_subtype: Optional[str] = None
     description: Optional[str] = None
-    source: str
-    agent_id: str  # Agent ID that generated the event
-    user_email: str
-    classification_score: float
-    classification_labels: List[str]
-    policy_id: Optional[str]
-    action_taken: str
-    severity: str
-    file_path: Optional[str]
+    source: str = "unknown"
+    agent_id: str = "unknown"
+    user_email: str = "agent@system"
+    classification_score: float = 0.0
+    classification_labels: List[str] = Field(default_factory=list)
+    policy_id: Optional[str] = None
+    action_taken: str = "logged"
+    severity: str = "medium"
+    file_path: Optional[str] = None
     file_name: Optional[str] = None
     file_id: Optional[str] = None
     mime_type: Optional[str] = None
@@ -62,9 +62,9 @@ class DLPEvent(BaseModel):
     folder_name: Optional[str] = None
     folder_path: Optional[str] = None
     source_path: Optional[str] = None
-    destination: Optional[str]
+    destination: Optional[str] = None
     destination_type: Optional[str] = None
-    blocked: bool
+    blocked: bool = False
     content: Optional[str] = None
     clipboard_content: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
@@ -328,40 +328,56 @@ async def get_events(
     # Convert MongoDB documents to match DLPEvent model
     events = []
     for event_doc in events_raw:
-        # Remove MongoDB _id field and ensure all required fields exist
-        event_dict = {k: v for k, v in event_doc.items() if k != "_id"}
+        try:
+            # Remove MongoDB _id field and ensure all required fields exist
+            event_dict = {k: v for k, v in event_doc.items() if k != "_id"}
 
-        # Ensure required fields have defaults if missing
-        if "agent_id" not in event_dict:
-            event_dict["agent_id"] = event_dict.get("agent_id") or "unknown"
-        if "classification_score" not in event_dict:
-            event_dict["classification_score"] = 0.0
-        if "classification_labels" not in event_dict:
-            event_dict["classification_labels"] = []
-        if "policy_id" not in event_dict:
-            event_dict["policy_id"] = None
-        if "file_path" not in event_dict:
-            event_dict["file_path"] = None
-        if "source_path" not in event_dict:
-            event_dict["source_path"] = event_dict.get("file_path")
-        if "destination" not in event_dict:
-            event_dict["destination"] = None
-        if "destination_type" not in event_dict:
-            event_dict["destination_type"] = event_dict.get("destination_type", None)
-        if "source" not in event_dict:
-            event_dict["source"] = event_dict.get("source_type", "unknown")
-        if "user_email" not in event_dict or event_dict["user_email"] is None:
-            event_dict["user_email"] = "agent@system"
-        if "action_taken" not in event_dict or event_dict["action_taken"] is None:
-            event_dict["action_taken"] = "logged"
-        if "blocked" not in event_dict or event_dict["blocked"] is None:
-            event_dict["blocked"] = False
-        if "content" not in event_dict:
-            event_dict["content"] = None
-        if "policy_version" not in event_dict:
-            event_dict["policy_version"] = None
+            # Ensure required fields have defaults if missing
+            if "id" not in event_dict:
+                event_dict["id"] = event_dict.get("event_id", "")
+            if "event_type" not in event_dict:
+                event_dict["event_type"] = "unknown"
+            if "severity" not in event_dict or event_dict["severity"] is None:
+                event_dict["severity"] = "medium"
+            if "agent_id" not in event_dict:
+                event_dict["agent_id"] = "unknown"
+            if "classification_score" not in event_dict:
+                event_dict["classification_score"] = 0.0
+            if "classification_labels" not in event_dict:
+                event_dict["classification_labels"] = []
+            if "policy_id" not in event_dict:
+                event_dict["policy_id"] = None
+            if "file_path" not in event_dict:
+                event_dict["file_path"] = None
+            if "source_path" not in event_dict:
+                event_dict["source_path"] = event_dict.get("file_path")
+            if "destination" not in event_dict:
+                event_dict["destination"] = None
+            if "destination_type" not in event_dict:
+                event_dict["destination_type"] = None
+            if "source" not in event_dict:
+                event_dict["source"] = event_dict.get("source_type", "unknown")
+            if "user_email" not in event_dict or event_dict["user_email"] is None:
+                event_dict["user_email"] = "agent@system"
+            if "action_taken" not in event_dict or event_dict["action_taken"] is None:
+                event_dict["action_taken"] = "logged"
+            if "blocked" not in event_dict or event_dict["blocked"] is None:
+                event_dict["blocked"] = False
+            if "content" not in event_dict:
+                event_dict["content"] = None
+            if "policy_version" not in event_dict:
+                event_dict["policy_version"] = None
 
-        events.append(event_dict)
+            # Normalize timestamp to timezone-aware UTC
+            if "timestamp" in event_dict and isinstance(event_dict["timestamp"], datetime):
+                if event_dict["timestamp"].tzinfo is None:
+                    event_dict["timestamp"] = event_dict["timestamp"].replace(tzinfo=timezone.utc)
+            elif "timestamp" not in event_dict or event_dict["timestamp"] is None:
+                event_dict["timestamp"] = datetime.now(timezone.utc)
+
+            events.append(event_dict)
+        except Exception as e:
+            logger.warning("Skipping malformed event document", error=str(e))
 
     # Get total count for pagination
     total = await db.dlp_events.count_documents(query_filter)

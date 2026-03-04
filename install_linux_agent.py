@@ -112,50 +112,8 @@ def check_prerequisites():
         err(f"Python >= 3.8 required (found {platform.python_version()})")
         all_ok = False
 
-    # Check python3-venv / ensurepip is available — auto-install if missing
-    venv_ok = False
-    try:
-        import ensurepip  # noqa: F401
-        venv_ok = True
-    except ImportError:
-        pass
-
-    if not venv_ok:
-        warn("Python venv/ensurepip module not found — installing python3-venv...")
-        pkg = f"python3.{sys.version_info.minor}-venv"
-        pkg_fallback = "python3-venv"
-        installed = False
-        if shutil.which("apt-get"):
-            subprocess.run(["apt-get", "update", "-qq"], capture_output=True)
-            for p in [pkg, pkg_fallback]:
-                r = subprocess.run(
-                    ["apt-get", "install", "-y", "-qq", p],
-                    capture_output=True, text=True
-                )
-                if r.returncode == 0:
-                    installed = True
-                    break
-        elif shutil.which("dnf"):
-            r = subprocess.run(
-                ["dnf", "install", "-y", "-q", "python3-libs"],
-                capture_output=True, text=True
-            )
-            installed = r.returncode == 0
-        elif shutil.which("yum"):
-            r = subprocess.run(
-                ["yum", "install", "-y", "-q", "python3-libs"],
-                capture_output=True, text=True
-            )
-            installed = r.returncode == 0
-
-        if installed:
-            ok("python3-venv installed")
-        else:
-            err("Could not install python3-venv automatically")
-            info("Install it manually:  sudo apt-get install python3-venv")
-            all_ok = False
-    else:
-        ok("Python venv module available")
+    # Check python3 venv basics — ensurepip is optional, we can bootstrap pip later
+    ok("Python venv module available")
 
     # systemd
     if shutil.which("systemctl"):
@@ -213,6 +171,35 @@ def download_agent_files(install_dir, branch):
 # Python virtualenv and dependencies
 # ──────────────────────────────────────────────
 
+def _install_venv_package():
+    """Try to install python3-venv via the system package manager."""
+    pkg = f"python3.{sys.version_info.minor}-venv"
+    pkg_fallback = "python3-venv"
+    if shutil.which("apt-get"):
+        subprocess.run(["apt-get", "update", "-qq"], capture_output=True)
+        for p in [pkg, pkg_fallback]:
+            r = subprocess.run(
+                ["apt-get", "install", "-y", "-qq", p],
+                capture_output=True, text=True
+            )
+            if r.returncode == 0:
+                return True
+    elif shutil.which("dnf"):
+        r = subprocess.run(
+            ["dnf", "install", "-y", "-q", "python3-libs"],
+            capture_output=True, text=True
+        )
+        if r.returncode == 0:
+            return True
+    elif shutil.which("yum"):
+        r = subprocess.run(
+            ["yum", "install", "-y", "-q", "python3-libs"],
+            capture_output=True, text=True
+        )
+        if r.returncode == 0:
+            return True
+    return False
+
 def setup_virtualenv(install_dir, force):
     """Create virtualenv and install dependencies."""
     print(f"\n{Color.BOLD}[3/5] Setting up Python environment{Color.RESET}\n")
@@ -221,78 +208,87 @@ def setup_virtualenv(install_dir, force):
     venv_python = os.path.join(venv_dir, "bin", "python")
     requirements = os.path.join(install_dir, "requirements.txt")
 
-    if force and os.path.exists(venv_dir):
-        warn("Force mode: removing existing virtualenv")
-        shutil.rmtree(venv_dir)
-
-    # Validate existing venv — if pip is missing it's broken, recreate it
-    if os.path.exists(venv_dir):
+    # Always remove existing venv if pip is missing (broken from previous run)
+    if os.path.exists(venv_dir) and not force:
         check = subprocess.run(
             [venv_python, "-m", "pip", "--version"],
             capture_output=True, text=True
         )
         if check.returncode != 0:
-            warn("Existing virtualenv is broken (no pip) — recreating...")
+            warn("Existing virtualenv is broken (no pip) — removing...")
             shutil.rmtree(venv_dir)
 
-    if not os.path.exists(venv_dir):
+    if force and os.path.exists(venv_dir):
+        warn("Force mode: removing existing virtualenv")
+        shutil.rmtree(venv_dir)
+
+    need_create = not os.path.exists(venv_dir)
+
+    if need_create:
         info("Creating virtual environment...")
+
+        # First try: normal venv (includes pip via ensurepip)
         result = subprocess.run(
             [sys.executable, "-m", "venv", venv_dir],
             capture_output=True, text=True
         )
+
         if result.returncode != 0:
-            # Auto-install python3-venv and retry
-            warn("venv creation failed — attempting to install python3-venv...")
-            pkg = f"python3.{sys.version_info.minor}-venv"
-            pkg_fallback = "python3-venv"
-            fixed = False
-            if shutil.which("apt-get"):
-                subprocess.run(["apt-get", "update", "-qq"], capture_output=True)
-                for p in [pkg, pkg_fallback]:
-                    r = subprocess.run(
-                        ["apt-get", "install", "-y", "-qq", p],
-                        capture_output=True, text=True
-                    )
-                    if r.returncode == 0:
-                        fixed = True
-                        break
-            elif shutil.which("dnf"):
-                r = subprocess.run(
-                    ["dnf", "install", "-y", "-q", "python3-libs"],
-                    capture_output=True, text=True
-                )
-                fixed = r.returncode == 0
-            elif shutil.which("yum"):
-                r = subprocess.run(
-                    ["yum", "install", "-y", "-q", "python3-libs"],
-                    capture_output=True, text=True
-                )
-                fixed = r.returncode == 0
+            # Try installing python3-venv package and retry
+            warn("venv creation failed — installing python3-venv...")
+            _install_venv_package()
+            if os.path.exists(venv_dir):
+                shutil.rmtree(venv_dir)
+            result = subprocess.run(
+                [sys.executable, "-m", "venv", venv_dir],
+                capture_output=True, text=True
+            )
 
-            if fixed:
-                # Retry venv creation
-                if os.path.exists(venv_dir):
-                    shutil.rmtree(venv_dir)
-                result = subprocess.run(
-                    [sys.executable, "-m", "venv", venv_dir],
-                    capture_output=True, text=True
-                )
-
+        if result.returncode != 0:
+            # Last resort: create venv without pip, then bootstrap pip manually
+            warn("Standard venv failed — creating without pip and bootstrapping...")
+            if os.path.exists(venv_dir):
+                shutil.rmtree(venv_dir)
+            result = subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", venv_dir],
+                capture_output=True, text=True
+            )
             if result.returncode != 0:
                 err(f"Failed to create venv: {result.stderr}")
-                info("Install manually: sudo apt-get install python3-venv")
                 sys.exit(1)
+
         ok("Virtual environment created")
+
     else:
         ok("Virtual environment already exists")
 
-    # Upgrade pip
-    info("Upgrading pip...")
-    subprocess.run(
-        [venv_python, "-m", "pip", "install", "--upgrade", "pip"],
+    # Ensure pip is available — bootstrap with get-pip.py if missing
+    pip_check = subprocess.run(
+        [venv_python, "-m", "pip", "--version"],
         capture_output=True, text=True
     )
+    if pip_check.returncode != 0:
+        info("pip not found in venv — bootstrapping with get-pip.py...")
+        get_pip_path = os.path.join(install_dir, "get-pip.py")
+        if not download_file("https://bootstrap.pypa.io/get-pip.py", get_pip_path):
+            err("Failed to download get-pip.py")
+            sys.exit(1)
+        result = subprocess.run(
+            [venv_python, get_pip_path],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            err(f"Failed to bootstrap pip: {result.stderr}")
+            sys.exit(1)
+        os.remove(get_pip_path)
+        ok("pip bootstrapped successfully")
+    else:
+        # Upgrade pip
+        info("Upgrading pip...")
+        subprocess.run(
+            [venv_python, "-m", "pip", "install", "--upgrade", "pip"],
+            capture_output=True, text=True
+        )
 
     # Install dependencies
     info("Installing dependencies...")

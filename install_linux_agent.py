@@ -225,6 +225,16 @@ def setup_virtualenv(install_dir, force):
         warn("Force mode: removing existing virtualenv")
         shutil.rmtree(venv_dir)
 
+    # Validate existing venv — if pip is missing it's broken, recreate it
+    if os.path.exists(venv_dir):
+        check = subprocess.run(
+            [venv_python, "-m", "pip", "--version"],
+            capture_output=True, text=True
+        )
+        if check.returncode != 0:
+            warn("Existing virtualenv is broken (no pip) — recreating...")
+            shutil.rmtree(venv_dir)
+
     if not os.path.exists(venv_dir):
         info("Creating virtual environment...")
         result = subprocess.run(

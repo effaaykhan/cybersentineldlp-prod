@@ -139,7 +139,7 @@ export default function Settings() {
                 required
               />
               <p className="mt-1 text-xs text-gray-500">
-                Must be at least 12 characters with uppercase, lowercase, digit, and special character.
+                Must be at least 7 characters with uppercase, lowercase, digit, and special character.
               </p>
             </div>
 

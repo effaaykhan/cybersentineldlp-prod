@@ -205,7 +205,7 @@ export default function LoginForm() {
               </div>
 
               <p className="text-xs text-gray-400">
-                Password must be at least 12 characters with uppercase, lowercase, digit, and special character.
+                Password must be at least 7 characters with uppercase, lowercase, digit, and special character.
               </p>
             </>
           )}

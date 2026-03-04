@@ -2,7 +2,7 @@
 
 **Enterprise-Grade Data Loss Prevention Platform**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104.1-009688.svg)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18.2-61DAFB.svg)](https://react.dev)
@@ -400,45 +400,57 @@ Test-NetConnection -ComputerName <SERVER-IP> -Port 55000
 
 ### 5. Linux Agent Installation
 
-#### Option A: Automated Installer (Recommended)
+#### Option A: One-Command Install (Recommended)
+
+Run this on any Linux machine with **Python 3.8+**:
 
 ```bash
-git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
-cd Data-Loss-Prevention/agents/endpoint/linux
-
-# Edit config FIRST — set server_url
-nano agent_config.json
-# Set: "server_url": "http://<SERVER-IP>:55000/api/v1"
-
-# Run the installer (requires root)
-sudo chmod +x install.sh
-sudo ./install.sh
+curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
 ```
 
-The installer will:
-1. Install Python 3 and pip
-2. Install dependencies from `requirements.txt`
-3. Copy `agent.py` to `/opt/cybersentinel/`
-4. Copy `agent_config.json` to `/etc/cybersentinel/`
-5. Install and enable the `cybersentinel-agent` systemd service
+Replace `<SERVER-IP>` with the IP address of your DLP server.
+
+The installer will automatically:
+1. Check prerequisites (root, Python 3.8+, systemd)
+2. Download the agent from GitHub (no git clone needed)
+3. Create a Python virtual environment at `/opt/cybersentinel/agent/.venv`
+4. Install dependencies (`requests`, `watchdog`, `python-dateutil`)
+5. Generate `/etc/cybersentinel/agent_config.json` with your server URL, hostname, and a unique agent ID
+6. Create and enable the `cybersentinel-agent` systemd service
+7. Start the agent — it registers with the server immediately
+
+**Additional options:**
+
+```bash
+# Install without starting (configure first)
+sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1 --no-start
+
+# Custom install directory
+sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1 --install-dir /opt/myagent
+
+# Force reinstall (overwrite existing config and venv)
+sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1 --force
+```
 
 #### Option B: Manual Installation
 
 ```bash
+# 1. Clone the repo and navigate to the agent
+git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
 cd Data-Loss-Prevention/agents/endpoint/linux
 
-# 1. Create virtual environment and install dependencies
+# 2. Create virtual environment and install dependencies
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Copy and configure
+# 3. Copy and configure
 sudo mkdir -p /etc/cybersentinel
 sudo cp agent_config.json /etc/cybersentinel/agent_config.json
 sudo nano /etc/cybersentinel/agent_config.json
 # Set: "server_url": "http://<SERVER-IP>:55000/api/v1"
 
-# 3. Run the agent
+# 4. Run the agent
 python3 agent.py
 ```
 
@@ -459,11 +471,22 @@ sudo systemctl status cybersentinel-agent
 
 # View logs
 sudo journalctl -u cybersentinel-agent -f
-# or
-tail -f /var/log/cybersentinel_agent.log
 
-# Test connectivity
+# Test connectivity to server
 curl http://<SERVER-IP>:55000/health
+```
+
+The agent should appear in **Dashboard > Agents** within 30 seconds.
+
+#### Uninstall Linux Agent
+
+```bash
+sudo systemctl stop cybersentinel-agent
+sudo systemctl disable cybersentinel-agent
+sudo rm /etc/systemd/system/cybersentinel-agent.service
+sudo rm -rf /opt/cybersentinel/agent
+sudo rm -rf /etc/cybersentinel
+sudo systemctl daemon-reload
 ```
 
 **Linux Agent Capabilities:**
@@ -472,8 +495,10 @@ curl http://<SERVER-IP>:55000/health
 |---|---|
 | File System Monitoring | Watches configured paths for create/modify/move/delete |
 | File Transfer Monitoring | Blocks or quarantines copies from protected paths |
-| Clipboard Monitoring | Not implemented |
-| USB Monitoring | Not implemented |
+| Content Classification | Detects PAN, SSN, emails, API keys, private keys |
+| Policy Sync | Fetches policy updates from server every 60 seconds |
+| Clipboard Monitoring | Not available on Linux |
+| USB Monitoring | Not available on Linux |
 
 ---
 
@@ -955,7 +980,7 @@ make ci-test
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is proprietary software. See the [LICENSE](LICENSE) file for details. Unauthorized use, reproduction, or distribution is prohibited.
 
 ---
 

@@ -94,7 +94,7 @@ The agent registers with the server immediately and appears in **Dashboard > Age
 Run this in an **elevated PowerShell** (Run as Administrator) on any Windows 10/11 or Server 2016+ endpoint:
 
 ```powershell
-irm https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_windows_agent.ps1 -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1 -ServerUrl "http://<SERVER-IP>:55000/api/v1"
+iex (irm https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/refs/heads/main/agents/endpoint/newWindowsAgent/Install-CyberSentinelAgent.ps1 )
 ```
 
 Replace `<SERVER-IP>` with the IP address of your DLP server.

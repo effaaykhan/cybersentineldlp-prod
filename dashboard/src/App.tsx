@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Agents from './pages/Agents'
 import Events from './pages/Events'
 import Alerts from './pages/Alerts'
+import Rules from './pages/Rules'
 import Policies from './app/dashboard/policies/page'
 import Settings from './pages/Settings'
 
@@ -23,6 +24,7 @@ function App() {
           <Route path="agents" element={<Agents />} />
           <Route path="events" element={<Events />} />
           <Route path="alerts" element={<Alerts />} />
+          <Route path="rules" element={<Rules />} />
           <Route path="policies" element={<Policies />} />
           <Route path="settings" element={<Settings />} />
         </Route>

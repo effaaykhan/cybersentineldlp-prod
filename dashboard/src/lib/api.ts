@@ -97,6 +97,11 @@ export const getAgents = async (params?: any) => {
   return data
 }
 
+export const getAllAgents = async () => {
+  const { data } = await apiClient.get('/agents/all')
+  return data
+}
+
 export const deleteAgent = async (agentId: string) => {
   const { data } = await apiClient.delete(`/agents/${agentId}`)
   return data
@@ -185,6 +190,8 @@ export type Agent = {
   hostname?: string
   os_version?: string
   capabilities?: Record<string, boolean>
+  is_active?: boolean
+  status_label?: 'active' | 'disconnected'
 }
 
 export type Event = {
@@ -426,6 +433,16 @@ export const getUserStats = async () => {
 // Alerts functions
 export const acknowledgeAlert = async (alertId: string) => {
   const { data } = await apiClient.post(`/alerts/${alertId}/acknowledge`)
+  return data
+}
+
+export const resolveAlert = async (alertId: string) => {
+  const { data } = await apiClient.post(`/alerts/${alertId}/resolve`)
+  return data
+}
+
+export const getAlert = async (alertId: string) => {
+  const { data } = await apiClient.get(`/alerts/${alertId}`)
   return data
 }
 

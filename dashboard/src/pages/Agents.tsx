@@ -1,40 +1,31 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Server, Trash2, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
+import { Server, RefreshCw } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
-import { getAgents, deleteAgent, type Agent } from '@/lib/api'
+import { getAllAgents, type Agent } from '@/lib/api'
 import { formatRelativeTime, formatDate } from '@/lib/utils'
 
-export default function Agents() {
-  const queryClient = useQueryClient()
+type FilterType = 'all' | 'active' | 'disconnected'
 
-  // Fetch agents with more frequent refresh for real-time updates
+export default function Agents() {
+  const [filter, setFilter] = useState<FilterType>('all')
+  const navigate = useNavigate()
+
+  // Fetch all agents (including disconnected ones) with more frequent refresh
   const {
     data: agents,
     isLoading,
     error,
     refetch,
   } = useQuery({
-    queryKey: ['agents'],
-    queryFn: getAgents,
+    queryKey: ['allAgents'],
+    queryFn: getAllAgents,
     refetchInterval: 10000, // Refresh every 10s for real-time updates
     staleTime: 0, // Always consider data stale to prevent caching
     cacheTime: 0, // Don't cache data to ensure fresh results
   })
-
-  // Delete agent mutation
-  const deleteMutation = useMutation({
-    mutationFn: deleteAgent,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-    },
-  })
-
-  const handleDelete = (agentId: string) => {
-    if (confirm('Are you sure you want to delete this agent?')) {
-      deleteMutation.mutate(agentId)
-    }
-  }
 
   if (isLoading) {
     return <LoadingSpinner size="lg" />
@@ -49,7 +40,22 @@ export default function Agents() {
     )
   }
 
-  // All agents shown are active (backend filters out dead agents automatically)
+  // Calculate active and disconnected counts
+  const activeCount = agents?.filter((a: Agent) => a.is_active)?.length || 0
+  const disconnectedCount = agents?.filter((a: Agent) => !a.is_active)?.length || 0
+  const totalCount = agents?.length || 0
+
+  // Filter agents based on selected filter
+  const filteredAgents = agents?.filter((agent: Agent) => {
+    if (filter === 'active') return agent.is_active
+    if (filter === 'disconnected') return !agent.is_active
+    return true // 'all'
+  }) || []
+
+  // Handle agent click - navigate to events page filtered by agent
+  const handleAgentClick = (agentId: string) => {
+    navigate(`/events?agent=${agentId}`)
+  }
 
   return (
     <div className="space-y-6">
@@ -58,7 +64,7 @@ export default function Agents() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Manage and monitor DLP agents
+            Manage and monitor DLP agents (includes agent history)
           </p>
         </div>
         <button
@@ -72,19 +78,60 @@ export default function Agents() {
       </div>
 
       {/* Stats Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="card">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div
+          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'all' ? 'ring-2 ring-blue-500' : ''}`}
+          onClick={() => setFilter('all')}
+        >
           <div className="flex items-center gap-3">
             <div className="p-2 bg-blue-100 rounded-lg">
               <Server className="h-5 w-5 text-blue-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Active Agents</p>
+              <p className="text-sm text-gray-600">Total Agents</p>
               <p className="text-2xl font-bold text-gray-900">
-                {agents?.length || 0}
+                {totalCount}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Agents that have sent heartbeat within the last 5 minutes
+                All registered agents
+              </p>
+            </div>
+          </div>
+        </div>
+        <div
+          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'active' ? 'ring-2 ring-green-500' : ''}`}
+          onClick={() => setFilter('active')}
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-green-100 rounded-lg">
+              <Server className="h-5 w-5 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Active Agents</p>
+              <p className="text-2xl font-bold text-green-600">
+                {activeCount}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                Heartbeat within last 5 minutes
+              </p>
+            </div>
+          </div>
+        </div>
+        <div
+          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'disconnected' ? 'ring-2 ring-red-500' : ''}`}
+          onClick={() => setFilter('disconnected')}
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-red-100 rounded-lg">
+              <Server className="h-5 w-5 text-red-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Disconnected Agents</p>
+              <p className="text-2xl font-bold text-red-600">
+                {disconnectedCount}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                No recent heartbeat (&gt;5 minutes)
               </p>
             </div>
           </div>
@@ -97,29 +144,51 @@ export default function Agents() {
           <table className="table">
             <thead>
               <tr>
+                <th>Status</th>
                 <th>Agent ID</th>
                 <th>Name</th>
                 <th>OS</th>
                 <th>IP Address</th>
-                <th>Last Seen</th>
                 <th>Registered</th>
-                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {agents?.length === 0 ? (
+              {filteredAgents.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12">
+                  <td colSpan={6} className="text-center py-12">
                     <Server className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                    <p className="text-gray-600 font-medium">No active agents</p>
+                    <p className="text-gray-600 font-medium">
+                      {filter === 'all' ? 'No agents registered' : `No ${filter} agents`}
+                    </p>
                     <p className="text-sm text-gray-500 mt-1">
-                      Agents will appear here once they register and send heartbeat
+                      {filter === 'all'
+                        ? 'Agents will appear here once they register with the server'
+                        : `Click "Total Agents" to see all agents`
+                      }
                     </p>
                   </td>
                 </tr>
               ) : (
-                agents?.map((agent) => (
-                  <tr key={agent.agent_id}>
+                filteredAgents.map((agent) => (
+                  <tr
+                    key={agent.agent_id}
+                    onClick={() => handleAgentClick(agent.agent_id)}
+                    className="cursor-pointer hover:bg-gray-50 transition-colors"
+                    title="Click to view logs and alerts for this agent"
+                  >
+                    <td>
+                      {agent.is_active ? (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          <span className="w-2 h-2 bg-green-600 rounded-full mr-1.5"></span>
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                          <span className="w-2 h-2 bg-red-600 rounded-full mr-1.5"></span>
+                          Disconnected
+                        </span>
+                      )}
+                    </td>
                     <td>
                       <code className="text-xs bg-gray-100 px-2 py-1 rounded">
                         {agent.agent_id}
@@ -151,26 +220,9 @@ export default function Agents() {
                       <code className="text-xs">{agent.ip_address}</code>
                     </td>
                     <td>
-                      <span 
-                        className="text-sm text-gray-600 cursor-help"
-                        title={formatDate(agent.last_seen, 'PPpp')}
-                      >
-                        {formatRelativeTime(agent.last_seen)}
-                      </span>
-                    </td>
-                    <td>
                       <span className="text-sm text-gray-600">
                         {formatRelativeTime(agent.created_at)}
                       </span>
-                    </td>
-                    <td>
-                      <button
-                        onClick={() => handleDelete(agent.agent_id)}
-                        className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
-                        title="Delete agent entry"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
                     </td>
                   </tr>
                 ))

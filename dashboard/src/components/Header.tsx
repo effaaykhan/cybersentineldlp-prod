@@ -1,10 +1,9 @@
-import { Bell, Search, User, LogOut, Settings as SettingsIcon, ChevronDown } from 'lucide-react'
+import { User, LogOut, Settings as SettingsIcon, ChevronDown } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../lib/store/auth'
 
 export default function Header() {
-  const [searchQuery, setSearchQuery] = useState('')
   const [showUserMenu, setShowUserMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
@@ -28,29 +27,9 @@ export default function Header() {
   }
 
   return (
-    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm">
-      {/* Search */}
-      <div className="flex-1 max-w-2xl">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search agents, events, alerts... (Use KQL)"
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-      </div>
-
+    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-end px-6 shadow-sm">
       {/* Right Section */}
-      <div className="flex items-center gap-4 ml-6">
-        {/* Notifications */}
-        <button className="relative p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-all hover:scale-105">
-          <Bell className="h-5 w-5" />
-          <span className="absolute top-1 right-1 h-2 w-2 bg-red-500 rounded-full animate-pulse"></span>
-        </button>
-
+      <div className="flex items-center gap-4">
         {/* User Menu */}
         <div className="relative" ref={menuRef}>
           <button

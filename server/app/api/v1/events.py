@@ -282,6 +282,7 @@ async def get_events(
     limit: int = Query(100, ge=1, le=1000),
     severity: Optional[str] = None,
     source: Optional[str] = None,
+    search: Optional[str] = Query(None, description="Search keyword for filtering events"),
     start_time: Optional[datetime] = Query(
         None,
         description="Filter events with timestamp >= this ISO datetime (UTC)",
@@ -298,6 +299,7 @@ async def get_events(
     Supports:
     - severity filter
     - source filter
+    - search keyword (searches in event_type, description, file_path, destination, etc.)
     - time range via start_time / end_time
     """
     db = get_mongodb()
@@ -308,6 +310,23 @@ async def get_events(
         query_filter["severity"] = severity
     if source:
         query_filter["source"] = source
+    if search:
+        # Perform case-insensitive text search across multiple fields
+        search_pattern = {"$regex": search, "$options": "i"}
+        query_filter["$or"] = [
+            {"event_type": search_pattern},
+            {"description": search_pattern},
+            {"file_path": search_pattern},
+            {"source_path": search_pattern},
+            {"destination": search_pattern},
+            {"action_taken": search_pattern},
+            {"clipboard_content": search_pattern},
+            {"event_subtype": search_pattern},
+            {"source_type": search_pattern},
+            {"destination_type": search_pattern},
+            {"agent_id": search_pattern},
+            {"user_email": search_pattern},
+        ]
     if start_time or end_time:
         time_filter: Dict[str, Any] = {}
         if start_time:

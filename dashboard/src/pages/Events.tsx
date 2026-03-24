@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -569,11 +570,23 @@ function EventDetailModal({
 }
 
 export default function Events() {
+  const [searchParams] = useSearchParams()
+  const agentParam = searchParams.get('agent')
+
   const [kqlQuery, setKqlQuery] = useState('')
-  const [activeQuery, setActiveQuery] = useState('')
+  const [activeQuery, setActiveQuery] = useState(agentParam || '')
   const [showFilters, setShowFilters] = useState(false)
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
+
+  // Update activeQuery when agent parameter changes
+  useEffect(() => {
+    if (agentParam) {
+      // Just use the raw agent_id for search
+      setActiveQuery(agentParam)
+      setKqlQuery(agentParam)
+    }
+  }, [agentParam])
 
   // Fetch agents to map agent_id to agent name
   const { data: agentsData } = useQuery({
@@ -685,7 +698,7 @@ export default function Events() {
     queryKey: ['events', activeQuery],
     queryFn: () =>
       activeQuery
-        ? searchEvents({ query: activeQuery, limit: 100 })
+        ? searchEvents({ search: activeQuery, limit: 100 })
         : searchEvents({ limit: 100 }),
     refetchInterval: 15000, // Refresh every 15s
   })
@@ -857,7 +870,7 @@ export default function Events() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Events</h1>
         <p className="mt-1 text-sm text-gray-600">
-          Search and analyze DLP events using KQL (Kibana Query Language)
+          Search and analyze DLP events by keyword
         </p>
       </div>
 
@@ -868,7 +881,7 @@ export default function Events() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
             <input
               type="text"
-              placeholder='Search with KQL (e.g., event.type:"file" AND event.severity:"high")'
+              placeholder='Search events (e.g., usb, clipboard, google drive, block, etc.)'
               className="input pl-10"
               value={kqlQuery}
               onChange={(e) => setKqlQuery(e.target.value)}

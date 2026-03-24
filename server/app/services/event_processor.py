@@ -12,6 +12,8 @@ import hashlib
 from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 from app.actions.action_executor import ActionExecutor
 from app.actions.action_types import ExecutionSummary
+from app.services.classification_engine import ClassificationEngine
+from app.core.database import postgres_session_factory
 
 logger = structlog.get_logger()
 
@@ -284,18 +286,16 @@ class EventProcessor:
 
     async def classify_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Classify event content for sensitive data
+        Classify event content for sensitive data using dynamic rule-based classification.
 
-        Uses pattern matching to detect:
+        Uses the ClassificationEngine with database rules for:
         - Credit card numbers (PAN)
         - Social Security Numbers (SSN)
         - Email addresses
         - Phone numbers
         - API keys
-        - etc.
+        - And many more patterns based on configured rules
         """
-        classifications = []
-
         # Get content to classify
         content = event.get("content") or event.get("content_redacted")
 
@@ -305,6 +305,112 @@ class EventProcessor:
 
         if not isinstance(content, str):
             content = str(content)
+
+        # Try to use ClassificationEngine with database rules
+        try:
+            if postgres_session_factory:
+                async with postgres_session_factory() as session:
+                    classification_engine = ClassificationEngine(session)
+
+                    # Build context from event
+                    context = {
+                        "event_type": event.get("event", {}).get("type"),
+                        "event_id": event.get("event_id"),
+                        "agent_id": event.get("agent", {}).get("id"),
+                        "file_extension": event.get("file", {}).get("extension"),
+                        "source_type": event.get("source_type"),
+                    }
+
+                    # Classify content using database rules
+                    result = await classification_engine.classify_content(content, context)
+
+                    # Convert ClassificationEngine result to event format
+                    if result.matched_rules:
+                        classifications = []
+
+                        for matched_rule in result.matched_rules:
+                            classification = {
+                                "type": matched_rule["rule_type"],
+                                "label": matched_rule["rule_name"],
+                                "confidence": result.confidence_score,
+                                "patterns_matched": [matched_rule["rule_id"]],
+                                "sensitive_data": {
+                                    "type": matched_rule["rule_type"],
+                                    "count": matched_rule["match_count"],
+                                    "severity": matched_rule["severity"],
+                                    "category": matched_rule["category"],
+                                    "redacted": False
+                                }
+                            }
+                            classifications.append(classification)
+
+                            # Add classification tag
+                            tag = f"contains_{matched_rule['rule_type']}"
+                            if tag not in event.get("tags", []):
+                                event.setdefault("tags", []).append(tag)
+
+                            # Add category tag if available
+                            if matched_rule["category"]:
+                                category_tag = f"category_{matched_rule['category'].lower().replace(' ', '_')}"
+                                if category_tag not in event.get("tags", []):
+                                    event.setdefault("tags", []).append(category_tag)
+
+                            # Increase severity based on classification level
+                            if result.classification == "Restricted":
+                                event["event"]["severity"] = "critical"
+                            elif result.classification == "Confidential" and event["event"]["severity"] not in ["critical"]:
+                                event["event"]["severity"] = "high"
+                            elif result.classification == "Internal" and event["event"]["severity"] not in ["critical", "high"]:
+                                event["event"]["severity"] = "medium"
+
+                        # Add classifications to event
+                        event["classification"] = classifications
+
+                        # Add classification metadata
+                        event["classification_metadata"] = {
+                            "classification_level": result.classification,
+                            "confidence_score": result.confidence_score,
+                            "total_matches": result.total_matches,
+                            "matched_rules_count": len(result.matched_rules),
+                            "engine": "rule_based"
+                        }
+
+                        # Redact content if sensitive data found (Confidential or above)
+                        if result.classification in ["Confidential", "Restricted"]:
+                            event["content_redacted"] = "[REDACTED - Sensitive content detected]"
+                            event.pop("content", None)
+
+                            if event.get("event", {}).get("type") == "clipboard":
+                                event.setdefault("clipboard_content", content)
+
+                        logger.info(
+                            "Content classified using rule engine",
+                            event_id=event.get("event_id"),
+                            classification=result.classification,
+                            confidence=result.confidence_score,
+                            matched_rules=len(result.matched_rules)
+                        )
+
+                        logger.debug("Event classified", event_id=event.get("event_id"), classifications_count=len(classifications))
+                        return event
+                    else:
+                        # No rules matched
+                        logger.debug("No rules matched for event", event_id=event.get("event_id"))
+                        return event
+            else:
+                logger.warning("PostgreSQL session factory not available, skipping classification")
+                return event
+
+        except Exception as e:
+            logger.error(
+                "Failed to classify using rule engine, falling back to legacy patterns",
+                event_id=event.get("event_id"),
+                error=str(e)
+            )
+            # Fall through to legacy classification below
+
+        # Legacy fallback: Use hardcoded patterns if rule engine fails
+        classifications = []
 
         # Pattern-based classification
         patterns = {

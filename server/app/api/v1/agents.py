@@ -130,6 +130,64 @@ async def list_agents(
     return agents
 
 
+@router.get("/all")
+async def list_all_agents(
+    current_user: dict = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    """
+    List ALL agents including disconnected ones, with connection status
+
+    Returns agents with additional fields:
+    - is_active: True if agent sent heartbeat within timeout period
+    - status_label: "active" or "disconnected"
+    """
+    db = get_mongodb()
+    agents_collection = db["agents"]
+
+    # Calculate cutoff time for active agents
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+    cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+
+    # Get all agents
+    agents_cursor = agents_collection.find({}).sort("last_seen", -1)
+    agents = []
+
+    async for agent_doc in agents_cursor:
+        # Remove MongoDB _id field
+        if "_id" in agent_doc:
+            del agent_doc["_id"]
+        if "capabilities" not in agent_doc:
+            agent_doc["capabilities"] = {}
+
+        # Determine if agent is active
+        last_seen = agent_doc.get("last_seen")
+        is_active = False
+        if last_seen:
+            if isinstance(last_seen, datetime):
+                # Handle both timezone-aware and naive datetimes
+                if last_seen.tzinfo is None:
+                    is_active = last_seen >= cutoff_naive
+                else:
+                    is_active = last_seen >= cutoff_time
+
+        # Add status fields
+        agent_doc["is_active"] = is_active
+        agent_doc["status_label"] = "active" if is_active else "disconnected"
+
+        # Normalize datetime fields to ISO format
+        for dt_field in ("last_seen", "created_at", "last_heartbeat"):
+            if dt_field in agent_doc and isinstance(agent_doc[dt_field], datetime):
+                dt_val = agent_doc[dt_field]
+                if dt_val.tzinfo is None:
+                    dt_val = dt_val.replace(tzinfo=timezone.utc)
+                agent_doc[dt_field] = dt_val.isoformat()
+
+        agents.append(agent_doc)
+
+    logger.info("Listed all agents", count=len(agents))
+    return agents
+
+
 @router.post("/", response_model=Agent, status_code=status.HTTP_201_CREATED)
 async def register_agent(
     request: Request,

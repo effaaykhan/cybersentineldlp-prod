@@ -147,6 +147,17 @@ class DatabasePolicyEvaluator:
             return False
 
         try:
+            # Numeric comparison operators (for confidence scores, counts, etc.)
+            if operator in [">=", "greater_than_or_equal"]:
+                return float(event_value) >= float(value)
+            if operator in ["<=", "less_than_or_equal"]:
+                return float(event_value) <= float(value)
+            if operator in [">", "greater_than"]:
+                return float(event_value) > float(value)
+            if operator in ["<", "less_than"]:
+                return float(event_value) < float(value)
+
+            # String/pattern operators
             if operator == "matches_regex":
                 pattern = self._get_regex(str(value))
                 return bool(pattern.search(str(event_value)))
@@ -190,6 +201,12 @@ class DatabasePolicyEvaluator:
             "source": ["source", "event.source"],
             "connection_id": ["connection_id", "metadata.connection_id"],
             "folder_id": ["folder_id", "metadata.folder_id"],
+            # Classification fields
+            "classification_level": ["classification_metadata.classification_level", "classification_level"],
+            "confidence_score": ["classification_metadata.confidence_score", "confidence_score"],
+            "matched_rules_count": ["classification_metadata.matched_rules_count", "matched_rules_count"],
+            "total_matches": ["classification_metadata.total_matches", "total_matches"],
+            "classification_engine": ["classification_metadata.engine", "classification_engine"],
         }
 
         candidate_paths = field_mappings.get(field, [field])

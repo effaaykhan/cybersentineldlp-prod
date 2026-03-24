@@ -122,8 +122,17 @@ async def get_alerts(
                     title = "Sensitive Data Copied to Clipboard"
                     description = description_text or "Sensitive data detected in clipboard content"
                 elif event_type == "usb":
-                    title = "USB Device Connected"
-                    description = description_text or f"USB device connected: {event_doc.get('details', {}).get('device_name', 'Unknown')}"
+                    # Use event_subtype to determine connect vs disconnect
+                    event_subtype = event_doc.get('event_subtype', 'usb_connect')
+                    device_name = event_doc.get('device_name', 'Unknown Device')
+                    device_id = event_doc.get('device_id', 'Unknown ID')
+
+                    if event_subtype == 'usb_disconnect':
+                        title = "USB Device Disconnected"
+                        description = f"USB device {device_name} (ID: {device_id}) has been disconnected from this system"
+                    else:
+                        title = "USB Device Connected"
+                        description = f"USB device {device_name} (ID: {device_id}) has been connected to this system"
                 else:
                     title = "DLP Event Detected"
                     description = description_text or f"{event_type} event detected"
@@ -168,11 +177,148 @@ async def acknowledge_alert(
 ):
     """
     Acknowledge an alert
+    Updates the alert status to 'acknowledged' in the database
     """
+    db = get_mongodb()
+    alerts_collection = db.get_collection("alerts")
+
+    # Try to update the alert in database
+    result = await alerts_collection.update_one(
+        {"id": alert_id},
+        {
+            "$set": {
+                "status": "acknowledged",
+                "acknowledged_at": datetime.now(timezone.utc),
+                "acknowledged_by": getattr(current_user, "email", "unknown")
+            }
+        }
+    )
+
     logger.info(
         "Alert acknowledged",
         alert_id=alert_id,
         user=getattr(current_user, "email", "unknown"),
+        updated=result.modified_count > 0,
     )
 
-    return {"message": "Alert acknowledged"}
+    return {
+        "message": "Alert acknowledged",
+        "alert_id": alert_id,
+        "status": "acknowledged"
+    }
+
+
+@router.post("/{alert_id}/resolve")
+async def resolve_alert(
+    alert_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Resolve an alert
+    Updates the alert status to 'resolved' in the database
+    """
+    db = get_mongodb()
+    alerts_collection = db.get_collection("alerts")
+
+    # Try to update the alert in database
+    result = await alerts_collection.update_one(
+        {"id": alert_id},
+        {
+            "$set": {
+                "status": "resolved",
+                "resolved_at": datetime.now(timezone.utc),
+                "resolved_by": getattr(current_user, "email", "unknown")
+            }
+        }
+    )
+
+    logger.info(
+        "Alert resolved",
+        alert_id=alert_id,
+        user=getattr(current_user, "email", "unknown"),
+        updated=result.modified_count > 0,
+    )
+
+    return {
+        "message": "Alert resolved",
+        "alert_id": alert_id,
+        "status": "resolved"
+    }
+
+
+@router.get("/{alert_id}")
+async def get_alert(
+    alert_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get a specific alert by ID
+    """
+    db = get_mongodb()
+    alerts_collection = db.get_collection("alerts")
+
+    # Try to find alert in database
+    alert_doc = await alerts_collection.find_one({"id": alert_id})
+
+    if alert_doc:
+        alert_dict = {k: v for k, v in alert_doc.items() if k != "_id"}
+        # Normalize datetime fields
+        for dt_field in ("timestamp", "created_at", "acknowledged_at", "resolved_at"):
+            if dt_field in alert_dict and isinstance(alert_dict[dt_field], datetime):
+                dt_val = alert_dict[dt_field]
+                if dt_val.tzinfo is None:
+                    dt_val = dt_val.replace(tzinfo=timezone.utc)
+                alert_dict[dt_field] = dt_val.isoformat()
+
+        logger.info("Alert retrieved", alert_id=alert_id)
+        return alert_dict
+
+    # If not found in alerts collection, try events
+    events_collection = db.dlp_events
+    event_doc = await events_collection.find_one({"$or": [{"id": alert_id}, {"event_id": alert_id}]})
+
+    if event_doc:
+        # Create alert from event
+        event_type = event_doc.get("event_type", "unknown")
+        file_path = event_doc.get("file_path", "")
+        description_text = event_doc.get("description", "")
+
+        if event_type == "file" and file_path:
+            title = "Sensitive Data Detected in File"
+            description = f"File: {file_path}\n{description_text}"
+        elif event_type == "clipboard":
+            title = "Sensitive Data Copied to Clipboard"
+            description = description_text or "Sensitive data detected in clipboard content"
+        elif event_type == "usb":
+            # Use event_subtype to determine connect vs disconnect
+            event_subtype = event_doc.get('event_subtype', 'usb_connect')
+            device_name = event_doc.get('device_name', 'Unknown Device')
+            device_id = event_doc.get('device_id', 'Unknown ID')
+
+            if event_subtype == 'usb_disconnect':
+                title = "USB Device Disconnected"
+                description = f"USB device {device_name} (ID: {device_id}) has been disconnected from this system"
+            else:
+                title = "USB Device Connected"
+                description = f"USB device {device_name} (ID: {device_id}) has been connected to this system"
+        else:
+            title = "DLP Event Detected"
+            description = description_text or f"{event_type} event detected"
+
+        ts = event_doc.get("timestamp", datetime.now(timezone.utc))
+        if isinstance(ts, datetime) and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+
+        return {
+            "id": alert_id,
+            "timestamp": ts.isoformat(),
+            "title": title,
+            "description": description,
+            "severity": event_doc.get("severity", "medium"),
+            "status": "new",
+            "event_id": alert_id,
+            "agent_id": event_doc.get("agent_id"),
+            "created_at": ts.isoformat(),
+        }
+
+    return {"error": "Alert not found"}

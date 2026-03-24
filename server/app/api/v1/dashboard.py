@@ -25,16 +25,27 @@ async def get_dashboard_overview(
     Get dashboard overview statistics
     Returns real data from database populated by agents
     """
+    from datetime import datetime, timedelta, timezone
+
     db = get_mongodb()
 
     # Query agents from MongoDB
     agents_collection = db["agents"]
-    
+
     # Total agents
     total_agents = await agents_collection.count_documents({})
-    
-    # Active agents (status = "online")
-    active_agents = await agents_collection.count_documents({"status": "online"})
+
+    # Active agents (agents with heartbeat within last 5 minutes)
+    AGENT_TIMEOUT_MINUTES = 5
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+    cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+
+    active_agents = await agents_collection.count_documents({
+        "$or": [
+            {"last_seen": {"$gte": cutoff_time}},
+            {"last_seen": {"$gte": cutoff_naive}},
+        ]
+    })
 
     # Query events from MongoDB (using correct collection name)
     events_collection = db.dlp_events
@@ -107,20 +118,53 @@ async def get_agents_stats(
 ) -> Dict[str, Any]:
     """
     Get agent statistics
+
+    Returns counts for:
+    - total: All agents ever registered
+    - active: Agents with heartbeat within last 5 minutes
+    - disconnected: Agents that haven't sent heartbeat in over 5 minutes
     """
+    from datetime import datetime, timedelta, timezone
+
     db = get_mongodb()
     agents_collection = db["agents"]
 
+    # Agent is considered active if heartbeat within 5 minutes
+    AGENT_TIMEOUT_MINUTES = 5
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+    cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+
+    # Total agents
     total = await agents_collection.count_documents({})
-    online = await agents_collection.count_documents({"status": "online"})
-    offline = await agents_collection.count_documents({"status": "offline"})
-    warning = await agents_collection.count_documents({"status": "warning"})
+
+    # Active agents (recent heartbeat - handle both timezone-aware and naive datetimes)
+    active = await agents_collection.count_documents({
+        "$or": [
+            {"last_seen": {"$gte": cutoff_time}},
+            {"last_seen": {"$gte": cutoff_naive}},
+        ]
+    })
+
+    # Disconnected agents (old heartbeat or no heartbeat)
+    disconnected = await agents_collection.count_documents({
+        "$and": [
+            {"last_seen": {"$exists": True}},
+            {
+                "$and": [
+                    {"last_seen": {"$lt": cutoff_time}},
+                    {"last_seen": {"$lt": cutoff_naive}},
+                ]
+            }
+        ]
+    })
 
     return {
         "total": total,
-        "online": online,
-        "offline": offline,
-        "warning": warning,
+        "active": active,
+        "online": active,  # Keep for backwards compatibility
+        "disconnected": disconnected,
+        "offline": disconnected,  # Keep for backwards compatibility
+        "warning": 0,  # Deprecated field
     }
 
 

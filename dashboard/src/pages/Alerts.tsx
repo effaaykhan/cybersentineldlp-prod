@@ -1,16 +1,30 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle, Clock } from 'lucide-react'
+import { AlertCircle, AlertTriangle, ShieldAlert, Search } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
+import AlertDetailsModal from '@/components/alerts/AlertDetailsModal'
 import { getAlerts } from '@/lib/api'
 import { formatRelativeTime, getSeverityColor, cn } from '@/lib/utils'
 
+type FilterType = 'all' | 'high' | 'critical'
+
 export default function Alerts() {
+  const [selectedAlert, setSelectedAlert] = useState<any>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [filter, setFilter] = useState<FilterType>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+
   const { data: alertsData, isLoading, error, refetch } = useQuery({
     queryKey: ['alerts'],
     queryFn: getAlerts,
     refetchInterval: 10000,
   })
+
+  const handleAlertClick = (alert: any) => {
+    setSelectedAlert(alert)
+    setIsModalOpen(true)
+  }
 
   if (isLoading) {
     return <LoadingSpinner size="lg" />
@@ -45,10 +59,31 @@ export default function Alerts() {
     alerts = []
   }
   
-  // Use API counts if available, otherwise fall back to calculating from array
-  const newAlertsCount = typeof counts.new === 'number' ? counts.new : alerts.filter((a) => a && a.status === 'new').length
-  const acknowledgedAlertsCount = typeof counts.acknowledged === 'number' ? counts.acknowledged : alerts.filter((a) => a && a.status === 'acknowledged').length
-  const resolvedAlertsCount = typeof counts.resolved === 'number' ? counts.resolved : alerts.filter((a) => a && a.status === 'resolved').length
+  // Calculate alert counts by type
+  const totalAlertsCount = typeof counts.total === 'number' ? counts.total : alerts.length
+  const highAlertsCount = alerts.filter((a) => a && a.severity === 'high').length
+  const criticalAlertsCount = alerts.filter((a) => a && a.severity === 'critical').length
+
+  // Filter and search alerts
+  const filteredAlerts = alerts.filter((alert) => {
+    // Apply severity filter
+    if (filter === 'high' && alert.severity !== 'high') return false
+    if (filter === 'critical' && alert.severity !== 'critical') return false
+
+    // Apply search filter
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase()
+      return (
+        alert.title?.toLowerCase().includes(query) ||
+        alert.description?.toLowerCase().includes(query) ||
+        alert.agent_id?.toLowerCase().includes(query) ||
+        alert.event_id?.toLowerCase().includes(query) ||
+        alert.severity?.toLowerCase().includes(query)
+      )
+    }
+
+    return true
+  })
 
   return (
     <div className="space-y-6">
@@ -62,92 +97,103 @@ export default function Alerts() {
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="card">
+        <div
+          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'all' ? 'ring-2 ring-blue-500' : ''}`}
+          onClick={() => setFilter('all')}
+        >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-red-100 rounded-lg">
-              <AlertCircle className="h-5 w-5 text-red-600" />
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <ShieldAlert className="h-5 w-5 text-blue-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">New Alerts</p>
-              <p className="text-2xl font-bold text-red-600">{newAlertsCount}</p>
+              <p className="text-sm text-gray-600">Total Alerts</p>
+              <p className="text-2xl font-bold text-blue-600">{totalAlertsCount}</p>
             </div>
           </div>
         </div>
 
-        <div className="card">
+        <div
+          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'high' ? 'ring-2 ring-orange-500' : ''}`}
+          onClick={() => setFilter('high')}
+        >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-yellow-100 rounded-lg">
-              <Clock className="h-5 w-5 text-yellow-600" />
+            <div className="p-2 bg-orange-100 rounded-lg">
+              <AlertTriangle className="h-5 w-5 text-orange-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Acknowledged</p>
-              <p className="text-2xl font-bold text-yellow-600">
-                {acknowledgedAlertsCount}
+              <p className="text-sm text-gray-600">High Alerts</p>
+              <p className="text-2xl font-bold text-orange-600">
+                {highAlertsCount}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="card">
+        <div
+          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'critical' ? 'ring-2 ring-red-500' : ''}`}
+          onClick={() => setFilter('critical')}
+        >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-green-100 rounded-lg">
-              <CheckCircle className="h-5 w-5 text-green-600" />
+            <div className="p-2 bg-red-100 rounded-lg">
+              <AlertCircle className="h-5 w-5 text-red-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Resolved</p>
-              <p className="text-2xl font-bold text-green-600">
-                {resolvedAlertsCount}
+              <p className="text-sm text-gray-600">Critical Alerts</p>
+              <p className="text-2xl font-bold text-red-600">
+                {criticalAlertsCount}
               </p>
             </div>
           </div>
         </div>
       </div>
 
+      {/* Search Bar */}
+      <div className="card">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search alerts by title, description, agent ID, severity..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+      </div>
+
       {/* Alerts List */}
       <div className="card p-0">
         <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="font-semibold text-gray-900">Recent Alerts</h3>
+          <h3 className="font-semibold text-gray-900">
+            {filter === 'all' ? 'All Alerts' : filter === 'high' ? 'High Severity Alerts' : 'Critical Severity Alerts'}
+            {searchQuery && ` - Search: "${searchQuery}"`}
+          </h3>
         </div>
 
         <div className="divide-y divide-gray-200">
-          {!alerts || alerts.length === 0 ? (
+          {!filteredAlerts || filteredAlerts.length === 0 ? (
             <div className="p-12 text-center">
               <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-              <p className="text-gray-600 font-medium">No alerts</p>
+              <p className="text-gray-600 font-medium">
+                {searchQuery ? 'No alerts found' : filter === 'all' ? 'No alerts' : `No ${filter} severity alerts`}
+              </p>
               <p className="text-sm text-gray-500 mt-1">
-                Alerts will appear here when policies trigger
+                {searchQuery
+                  ? 'Try adjusting your search query'
+                  : filter === 'all'
+                  ? 'Alerts will appear here when policies trigger'
+                  : 'Click "Total Alerts" to see all alerts'
+                }
               </p>
             </div>
           ) : (
-            alerts?.map((alert) => (
-              <div key={alert.id} className="p-4">
+            filteredAlerts.map((alert) => (
+              <div
+                key={alert.id}
+                className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                onClick={() => handleAlertClick(alert)}
+              >
                 <div className="flex items-start gap-4">
-                  <div
-                    className={cn(
-                      'p-2 rounded-lg',
-                      alert.severity === 'critical'
-                        ? 'bg-red-100'
-                        : alert.severity === 'high'
-                        ? 'bg-orange-100'
-                        : alert.severity === 'medium'
-                        ? 'bg-yellow-100'
-                        : 'bg-blue-100'
-                    )}
-                  >
-                    <AlertCircle
-                      className={cn(
-                        'h-5 w-5',
-                        alert.severity === 'critical'
-                          ? 'text-red-600'
-                          : alert.severity === 'high'
-                          ? 'text-orange-600'
-                          : alert.severity === 'medium'
-                          ? 'text-yellow-600'
-                          : 'text-blue-600'
-                      )}
-                    />
-                  </div>
-
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <span
@@ -181,25 +227,22 @@ export default function Alerts() {
                       </code>
                     </div>
                   </div>
-
-                  <div className="flex gap-2">
-                    {alert.status === 'new' && (
-                      <button className="px-3 py-1 text-sm bg-yellow-100 text-yellow-800 rounded-lg hover:bg-yellow-200">
-                        Acknowledge
-                      </button>
-                    )}
-                    {alert.status !== 'resolved' && (
-                      <button className="px-3 py-1 text-sm bg-green-100 text-green-800 rounded-lg hover:bg-green-200">
-                        Resolve
-                      </button>
-                    )}
-                  </div>
                 </div>
               </div>
             ))
           )}
         </div>
       </div>
+
+      {/* Alert Details Modal */}
+      <AlertDetailsModal
+        alert={selectedAlert}
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false)
+          setSelectedAlert(null)
+        }}
+      />
     </div>
   )
 }

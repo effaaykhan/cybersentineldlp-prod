@@ -33,33 +33,17 @@ ENV VITE_APP_VERSION=${VITE_APP_VERSION}
 # Build application
 RUN npm run build
 
-# Production image
-FROM node:18-slim AS runner
-WORKDIR /app
+# Production image with nginx
+FROM nginx:alpine AS runner
 
-ENV NODE_ENV production
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Create non-root user
-RUN groupadd --system --gid 1001 nodejs && \
-    useradd --system --uid 1001 --gid nodejs nodejs
-
-# Copy built files and node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-
-# Install curl for healthcheck (Debian-based image uses apt-get)
-# Must be done before switching to non-root user
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-
-# Set proper permissions
-RUN chown -R nodejs:nodejs /app
-
-# Switch to non-root user
-USER nodejs
+# Copy built files
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Expose port
-EXPOSE 3000
+EXPOSE 4000
 
-# Run vite preview server
-CMD ["npx", "vite", "preview", "--host", "0.0.0.0", "--port", "3000"]
+# Run nginx
+CMD ["nginx", "-g", "daemon off;"]

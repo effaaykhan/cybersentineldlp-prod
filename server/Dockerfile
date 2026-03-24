@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     g++ \
     libpq-dev \
     wget \
+    pkg-config \
+    libhdf5-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and constraints

@@ -97,9 +97,7 @@ services:
 
   # Manager API
   manager:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
+    image: ghcr.io/effaaykhan/dlp-manager:latest
     container_name: cybersentinel-manager
     environment:
       # Server
@@ -165,20 +163,110 @@ services:
 
   # Dashboard
   dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile.prod
-      args:
-        - VITE_API_URL=
+    image: ghcr.io/effaaykhan/dlp-dashboard:latest
     container_name: cybersentinel-dashboard
     ports:
-      - "3000:80"
+      - "4000:4000"
     depends_on:
       - manager
     networks:
       - cybersentinel
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Celery Worker
+  celery-worker:
+    image: ghcr.io/effaaykhan/dlp-manager:latest
+    container_name: cybersentinel-celery-worker
+    command: celery -A app.celery.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      # OpenSearch
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_USE_SSL=true
+      - OPENSEARCH_VERIFY_CERTS=false
+
+      # MongoDB
+      - MONGODB_HOST=mongodb
+      - MONGODB_PORT=27017
+      - MONGODB_USER=admin
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-CyberSentinel2025!}
+      - MONGODB_DATABASE=cybersentinel
+
+      # PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=cybersentinel
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CyberSentinel2025!}
+      - POSTGRES_DB=cybersentinel
+
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-CyberSentinel2025!}
+
+      # JWT
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-key-in-production}
+    volumes:
+      - ./server/logs:/var/log/cybersentinel
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      manager:
+        condition: service_healthy
+    networks:
+      - cybersentinel
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Celery Beat (Scheduler)
+  celery-beat:
+    image: ghcr.io/effaaykhan/dlp-manager:latest
+    container_name: cybersentinel-celery-beat
+    command: celery -A app.celery.celery_app beat --loglevel=info
+    environment:
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-CyberSentinel2025!}
+
+      # PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=cybersentinel
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CyberSentinel2025!}
+      - POSTGRES_DB=cybersentinel
+
+      # MongoDB
+      - MONGODB_HOST=mongodb
+      - MONGODB_PORT=27017
+      - MONGODB_USER=admin
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-CyberSentinel2025!}
+      - MONGODB_DATABASE=cybersentinel
+
+      # JWT
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-key-in-production}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - cybersentinel
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid"]
       interval: 30s
       timeout: 10s
       retries: 3

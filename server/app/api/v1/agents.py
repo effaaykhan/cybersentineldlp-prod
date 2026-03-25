@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import get_current_user
 from app.core.database import get_mongodb, get_db
 from app.services.policy_service import PolicyService
+from app.services.classification_engine import ClassificationEngine
 from app.policies.agent_policy_transformer import AgentPolicyTransformer
+from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 from app.core.cache import get_cache, CacheService
 
 logger = structlog.get_logger()
@@ -542,3 +544,185 @@ async def sync_agent_policies(
         policy_count=bundle.get("policy_count", 0),
         policies=bundle.get("policies", {}),
     )
+
+
+class PolicyEvaluationRequest(BaseModel):
+    """Request model for real-time policy evaluation"""
+    file_name: str = Field(..., description="Name of the file being transferred")
+    file_content: str = Field(..., description="Content of the file to classify")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    event_type: str = Field(..., description="Event type (e.g., 'usb_file_transfer', 'clipboard')")
+    destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
+    source_path: Optional[str] = Field(None, description="Source file path")
+    destination_path: Optional[str] = Field(None, description="Destination path")
+
+
+class ClassificationDetails(BaseModel):
+    """Classification result details"""
+    level: str = Field(..., description="Classification level (Public/Internal/Confidential/Restricted)")
+    confidence: float = Field(..., description="Confidence score (0.0 - 1.0)")
+    matched_rules: List[Dict[str, Any]] = Field(default_factory=list, description="List of matched classification rules")
+    total_matches: int = Field(0, description="Total number of pattern matches")
+
+
+class PolicyEvaluationResponse(BaseModel):
+    """Response model for real-time policy evaluation"""
+    action: str = Field(..., description="Action to take: 'allow' or 'block'")
+    reason: str = Field(..., description="Reason for the decision")
+    classification: ClassificationDetails = Field(..., description="Content classification details")
+    policies_triggered: List[Dict[str, Any]] = Field(default_factory=list, description="Policies that matched")
+    should_log: bool = Field(True, description="Whether to log this event")
+    alert_severity: Optional[str] = Field(None, description="Alert severity if applicable")
+
+
+@router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
+async def evaluate_policy_realtime(
+    agent_id: str,
+    request: PolicyEvaluationRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Real-time policy evaluation for agent-side enforcement.
+
+    Agent calls this BEFORE allowing a file transfer or action.
+    Server classifies content and evaluates policies, then returns
+    a decision (allow/block) with full classification details.
+
+    This enables content-aware blocking based on sensitive data detection.
+    """
+    try:
+        # 1. Classify the file content using ClassificationEngine
+        classification_engine = ClassificationEngine(db)
+        classification_result = await classification_engine.classify_content(
+            request.file_content,
+            context={
+                "event_type": request.event_type,
+                "file_name": request.file_name,
+                "source_path": request.source_path,
+            }
+        )
+
+        logger.info(
+            "Content classified",
+            agent_id=agent_id,
+            file_name=request.file_name,
+            classification=classification_result.classification,
+            confidence=classification_result.confidence_score,
+            matched_rules_count=len(classification_result.matched_rules),
+        )
+
+        # 2. Build event data structure for policy evaluation
+        event_data = {
+            "classification_level": classification_result.classification,
+            "confidence_score": classification_result.confidence_score,
+            "classification_labels": [
+                label
+                for rule in classification_result.matched_rules
+                for label in rule.get("classification_labels", [])
+            ],
+            "event_type": request.event_type,
+            "destination_type": request.destination_type,
+            "source_path": request.source_path,
+            "destination_path": request.destination_path,
+            "file_name": request.file_name,
+            "file_size": request.file_size,
+            "agent_id": agent_id,
+        }
+
+        # 3. Evaluate classification-aware policies
+        policy_evaluator = DatabasePolicyEvaluator()
+        policy_matches = await policy_evaluator.evaluate_event(event_data)
+
+        # 4. Determine action based on matched policies
+        should_block = False
+        should_alert = False
+        alert_severity = None
+        triggered_policies = []
+
+        for match in policy_matches:
+            triggered_policies.append({
+                "policy_id": match.policy_id,
+                "policy_name": match.policy_name,
+                "severity": match.severity,
+                "priority": match.priority,
+            })
+
+            # Check actions
+            for action in match.actions:
+                action_type = action.get("type") or action.get("action")
+                if action_type == "block":
+                    should_block = True
+                elif action_type == "alert":
+                    should_alert = True
+                    # Get highest severity
+                    action_severity = action.get("parameters", {}).get("severity") or match.severity
+                    if action_severity:
+                        if alert_severity is None or _severity_rank(action_severity) > _severity_rank(alert_severity):
+                            alert_severity = action_severity
+
+        # 5. Build response
+        action = "block" if should_block else "allow"
+
+        # Build detailed reason
+        if classification_result.matched_rules:
+            rule_names = [r["rule_name"] for r in classification_result.matched_rules[:5]]
+            reason = f"Classification: {classification_result.classification} (confidence {classification_result.confidence_score:.2%}). "
+            reason += f"Detected: {', '.join(rule_names)}"
+            if len(classification_result.matched_rules) > 5:
+                reason += f" and {len(classification_result.matched_rules) - 5} more"
+        else:
+            reason = f"Classification: {classification_result.classification} - no sensitive data detected"
+
+        if should_block:
+            reason = f"BLOCKED - {reason}"
+
+        logger.info(
+            "Policy evaluation complete",
+            agent_id=agent_id,
+            file_name=request.file_name,
+            action=action,
+            policies_triggered=len(triggered_policies),
+            should_block=should_block,
+        )
+
+        return PolicyEvaluationResponse(
+            action=action,
+            reason=reason,
+            classification=ClassificationDetails(
+                level=classification_result.classification,
+                confidence=classification_result.confidence_score,
+                matched_rules=classification_result.matched_rules,
+                total_matches=classification_result.total_matches,
+            ),
+            policies_triggered=triggered_policies,
+            should_log=True,
+            alert_severity=alert_severity,
+        )
+
+    except Exception as e:
+        logger.error(
+            "Policy evaluation failed",
+            agent_id=agent_id,
+            file_name=request.file_name,
+            error=str(e),
+        )
+        # Fail-safe: allow on error (configurable)
+        return PolicyEvaluationResponse(
+            action="allow",
+            reason=f"Policy evaluation error: {str(e)}",
+            classification=ClassificationDetails(
+                level="Public",
+                confidence=0.0,
+                matched_rules=[],
+                total_matches=0,
+            ),
+            policies_triggered=[],
+            should_log=True,
+            alert_severity=None,
+        )
+
+
+def _severity_rank(severity: str) -> int:
+    """Convert severity to numeric rank for comparison"""
+    ranks = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+    return ranks.get(severity.lower(), 0)

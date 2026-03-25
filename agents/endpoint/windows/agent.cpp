@@ -1599,8 +1599,16 @@ if (shouldBlock && usbBlockingActive.load()) {
     // Treat as alert instead
     HandleUsbEvent(betterDeviceName, deviceId, "connect");
     return;
-} }
-     
+}
+
+// NORMAL CASE: Not blocking (alert/log policy)
+// Always send connect event for monitoring
+if (!shouldBlock) {
+    logger.Info("USB device connected (non-blocking policy): " + betterDeviceName);
+    HandleUsbEvent(betterDeviceName, deviceId, "connect");
+}
+     }
+
      bool BlockUSBStorageViaRegistry(bool block) {
         HKEY hKey;
         LONG result;
@@ -5143,6 +5151,192 @@ if (shouldMonitor) {
         }
     }
 
+    // Real-time classification evaluation result
+    struct PolicyEvaluationResult {
+        bool shouldBlock;
+        std::string action;  // "allow" or "block"
+        std::string reason;
+        std::string classificationLevel;  // "Public", "Internal", "Confidential", "Restricted"
+        double confidenceScore;
+        std::vector<std::string> matchedRules;
+        int totalMatches;
+        bool evaluationSucceeded;
+    };
+
+    // Call server-side real-time policy evaluation
+    PolicyEvaluationResult EvaluatePolicyRealtime(
+        const std::string& fileName,
+        const std::string& filePath,
+        const std::string& destinationPath,
+        const std::string& eventType = "usb_file_transfer"
+    ) {
+        PolicyEvaluationResult result;
+        result.shouldBlock = false;
+        result.action = "allow";
+        result.evaluationSucceeded = false;
+        result.confidenceScore = 0.0;
+        result.totalMatches = 0;
+        result.classificationLevel = "Public";
+
+        try {
+            // Read file content (limit to 10MB to avoid memory issues)
+            const size_t MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+            if (!fs::exists(filePath)) {
+                logger.Warning("File not found for classification: " + filePath);
+                result.reason = "File not found";
+                return result;
+            }
+
+            size_t fileSize = fs::file_size(filePath);
+            if (fileSize > MAX_FILE_SIZE) {
+                logger.Warning("File too large for classification: " + std::to_string(fileSize) + " bytes");
+                result.reason = "File too large (>10MB)";
+                // For large files, fail-open (allow) but log
+                result.evaluationSucceeded = true;
+                return result;
+            }
+
+            // Read file content
+            std::ifstream file(filePath, std::ios::binary);
+            if (!file.is_open()) {
+                logger.Warning("Cannot open file for classification: " + filePath);
+                result.reason = "Cannot read file";
+                return result;
+            }
+
+            std::string fileContent((std::istreambuf_iterator<char>(file)),
+                                   std::istreambuf_iterator<char>());
+            file.close();
+
+            // Escape the file content for JSON (basic escaping)
+            std::string escapedContent;
+            escapedContent.reserve(fileContent.size());
+            for (char c : fileContent) {
+                switch (c) {
+                    case '"': escapedContent += "\\\""; break;
+                    case '\\': escapedContent += "\\\\"; break;
+                    case '\n': escapedContent += "\\n"; break;
+                    case '\r': escapedContent += "\\r"; break;
+                    case '\t': escapedContent += "\\t"; break;
+                    default:
+                        if (c >= 32 && c < 127) {
+                            escapedContent += c;
+                        } else {
+                            // Skip non-printable characters
+                            escapedContent += ' ';
+                        }
+                }
+            }
+
+            // Build JSON request using JsonBuilder
+            JsonBuilder json;
+            json.AddString("file_name", fileName);
+            json.AddString("file_content", escapedContent);
+            json.AddInt("file_size", static_cast<int>(fileSize));
+            json.AddString("event_type", eventType);
+            json.AddString("destination_type", "removable_drive");
+            json.AddString("source_path", filePath);
+            json.AddString("destination_path", destinationPath);
+
+            std::string requestBody = json.Build();
+
+            // Call API endpoint
+            std::string apiPath = "/api/v1/agents/" + config.agentId + "/policy/evaluate";
+
+            logger.Info("🔍 Calling real-time classification API for: " + fileName);
+
+            auto [statusCode, responseBody] = httpClient->Post(apiPath, requestBody);
+
+            if (statusCode != 200) {
+                logger.Warning("Classification API returned status " + std::to_string(statusCode));
+                logger.Debug("Response: " + responseBody);
+                result.reason = "API error: " + std::to_string(statusCode);
+                // Fail-open: allow on API error
+                result.evaluationSucceeded = true;
+                return result;
+            }
+
+            // Parse response
+            result.action = config.ExtractJsonValue(responseBody, "action");
+            result.reason = config.ExtractJsonValue(responseBody, "reason");
+
+            // Extract classification details (nested in "classification" object)
+            // Find the "classification" object in the response
+            size_t classPos = responseBody.find("\"classification\"");
+            if (classPos != std::string::npos) {
+                size_t classObjStart = responseBody.find("{", classPos);
+                if (classObjStart != std::string::npos) {
+                    size_t classObjEnd = FindMatchingBracket(responseBody, classObjStart, '{', '}');
+                    if (classObjEnd != std::string::npos) {
+                        std::string classificationObj = responseBody.substr(classObjStart, classObjEnd - classObjStart + 1);
+
+                        result.classificationLevel = config.ExtractJsonValue(classificationObj, "level");
+                        std::string confStr = config.ExtractJsonValue(classificationObj, "confidence");
+                        if (!confStr.empty()) {
+                            result.confidenceScore = std::stod(confStr);
+                        }
+
+                        std::string totalMatchesStr = config.ExtractJsonValue(classificationObj, "total_matches");
+                        if (!totalMatchesStr.empty()) {
+                            result.totalMatches = std::stoi(totalMatchesStr);
+                        }
+
+                        // Extract matched_rules array (simplified - just get rule names)
+                        size_t rulesPos = classificationObj.find("\"matched_rules\"");
+                        if (rulesPos != std::string::npos) {
+                            size_t arrayStart = classificationObj.find("[", rulesPos);
+                            size_t arrayEnd = classificationObj.find("]", arrayStart);
+                            if (arrayStart != std::string::npos && arrayEnd != std::string::npos) {
+                                std::string rulesArray = classificationObj.substr(arrayStart + 1, arrayEnd - arrayStart - 1);
+
+                                // Simple extraction of "rule_name" values
+                                size_t pos = 0;
+                                while ((pos = rulesArray.find("\"rule_name\"", pos)) != std::string::npos) {
+                                    size_t colonPos = rulesArray.find(":", pos);
+                                    size_t valueStart = rulesArray.find("\"", colonPos + 1);
+                                    size_t valueEnd = rulesArray.find("\"", valueStart + 1);
+                                    if (valueStart != std::string::npos && valueEnd != std::string::npos) {
+                                        std::string ruleName = rulesArray.substr(valueStart + 1, valueEnd - valueStart - 1);
+                                        result.matchedRules.push_back(ruleName);
+                                    }
+                                    pos = valueEnd;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            result.shouldBlock = (result.action == "block");
+            result.evaluationSucceeded = true;
+
+            // Log classification result
+            logger.Info("📊 Classification Result:");
+            logger.Info("   File: " + fileName);
+            logger.Info("   Level: " + result.classificationLevel);
+            logger.Info("   Confidence: " + std::to_string(static_cast<int>(result.confidenceScore * 100)) + "%");
+            logger.Info("   Decision: " + result.action);
+            if (!result.matchedRules.empty()) {
+                logger.Info("   Detected sensitive data types:");
+                for (size_t i = 0; i < result.matchedRules.size() && i < 5; i++) {
+                    logger.Info("      - " + result.matchedRules[i]);
+                }
+                if (result.matchedRules.size() > 5) {
+                    logger.Info("      ... and " + std::to_string(result.matchedRules.size() - 5) + " more");
+                }
+            }
+
+            return result;
+
+        } catch (const std::exception& e) {
+            logger.Error("Error in real-time evaluation: " + std::string(e.what()));
+            result.reason = "Evaluation error: " + std::string(e.what());
+            result.evaluationSucceeded = true;  // Fail-open
+            return result;
+        }
+    }
+
 void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
     try {
         // CRITICAL FIX: Check if drive is actually accessible before scanning
@@ -5223,19 +5417,81 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                     }
                     
                     if (!isFromMonitoredPath) continue;
-                    
-                    // Execute policy action
-                    if (policy.action == "block") {
-                        HandleUSBFileTransferBlockNoTimestamp(fileName, meta.relativePath, drivePath,
-                                                  matchedMonitoredPath, policy);
-                    } else if (policy.action == "quarantine") {
-                        HandleUSBFileTransferQuarantineNoTimestamp(fileName, meta.relativePath, drivePath,
-                                                       matchedMonitoredPath, policy);
-                    } else if (policy.action == "alert") {
-                        HandleUSBFileTransferAlertNoTimestamp(fileName, meta.relativePath, drivePath,
-                                                  matchedMonitoredPath, policy);
+
+                    // REAL-TIME CLASSIFICATION-AWARE BLOCKING
+                    // Call server to classify content and evaluate classification-aware policies
+                    std::string usbFile = drivePath + "\\" + fileName;
+                    std::string sourceFile = matchedMonitoredPath + "\\" + meta.relativePath;
+
+                    logger.Info("🔍 Evaluating file transfer with real-time classification:");
+                    logger.Info("   File: " + fileName);
+                    logger.Info("   Source: " + sourceFile);
+                    logger.Info("   Destination: " + usbFile);
+                    logger.Info("   Traditional Policy: " + policy.name + " (action: " + policy.action + ")");
+
+                    // Try source file first, fallback to USB file
+                    std::string fileToClassify = fs::exists(sourceFile) ? sourceFile : usbFile;
+
+                    if (!fs::exists(fileToClassify)) {
+                        logger.Warning("File not found for classification, skipping: " + fileToClassify);
+                        break;
                     }
-                    
+
+                    PolicyEvaluationResult evalResult = EvaluatePolicyRealtime(
+                        fileName,
+                        fileToClassify,
+                        usbFile,
+                        "usb_file_transfer"
+                    );
+
+                    if (!evalResult.evaluationSucceeded) {
+                        logger.Warning("⚠️ Classification evaluation failed: " + evalResult.reason);
+                        logger.Warning("⚠️ Falling back to traditional path-based policy action");
+
+                        // Fallback to traditional policy action on evaluation failure
+                        if (policy.action == "block") {
+                            HandleUSBFileTransferBlockNoTimestamp(fileName, meta.relativePath, drivePath,
+                                                      matchedMonitoredPath, policy);
+                        } else if (policy.action == "quarantine") {
+                            HandleUSBFileTransferQuarantineNoTimestamp(fileName, meta.relativePath, drivePath,
+                                                           matchedMonitoredPath, policy);
+                        } else if (policy.action == "alert") {
+                            HandleUSBFileTransferAlertNoTimestamp(fileName, meta.relativePath, drivePath,
+                                                      matchedMonitoredPath, policy);
+                        }
+                    } else {
+                        // Use classification-aware decision
+                        if (evalResult.shouldBlock) {
+                            logger.Warning("============================================================");
+                            logger.Warning("  🚫 CONTENT-AWARE BLOCKING TRIGGERED!");
+                            logger.Warning("============================================================");
+                            logger.Warning("  File: " + fileName);
+                            logger.Warning("  Classification: " + evalResult.classificationLevel);
+                            logger.Warning("  Confidence: " + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%");
+                            logger.Warning("  Reason: " + evalResult.reason);
+
+                            if (!evalResult.matchedRules.empty()) {
+                                logger.Warning("  Sensitive data detected:");
+                                for (size_t i = 0; i < evalResult.matchedRules.size() && i < 10; i++) {
+                                    logger.Warning("    • " + evalResult.matchedRules[i]);
+                                }
+                            }
+                            logger.Warning("============================================================");
+
+                            // Execute block action
+                            HandleUSBFileTransferBlockNoTimestamp(fileName, meta.relativePath, drivePath,
+                                                      matchedMonitoredPath, policy);
+                        } else {
+                            logger.Info("✅ File ALLOWED - Classification: " + evalResult.classificationLevel +
+                                       " (" + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "% confidence)");
+                            logger.Info("   No sensitive data detected, allowing transfer");
+
+                            // Create an informational event for allowed transfers
+                            SendUSBTransferEvent(meta.relativePath, usbFile, matchedMonitoredPath, "allowed",
+                                                "info", policy.policyId, policy.name, true);
+                        }
+                    }
+
                     break; // Process only once per file
                 }
             }

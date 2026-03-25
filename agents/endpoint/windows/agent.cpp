@@ -229,7 +229,13 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          oss << "\"" << key << "\":" << (value ? "true" : "false");
          firstItem = false;
      }
-     
+
+     void AddDouble(const std::string& key, double value) {
+         if (!firstItem) oss << ",";
+         oss << "\"" << key << "\":" << value;
+         firstItem = false;
+     }
+
      void AddArray(const std::string& key, const std::vector<std::string>& values) {
          if (!firstItem) oss << ",";
          oss << "\"" << key << "\":[";
@@ -2145,17 +2151,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
         // Add classification data if provided
         if (!classificationLevel.empty()) {
             json.AddString("classification_level", classificationLevel);
-            json.AddNumber("classification_score", confidenceScore);
+            json.AddDouble("classification_score", confidenceScore);
 
             // Add classification labels array
             if (!classificationLabels.empty()) {
-                std::string labelsJson = "[";
-                for (size_t i = 0; i < classificationLabels.size(); i++) {
-                    if (i > 0) labelsJson += ",";
-                    labelsJson += "\"" + classificationLabels[i] + "\"";
-                }
-                labelsJson += "]";
-                json.AddRawJson("classification_labels", labelsJson);
+                json.AddArray("classification_labels", classificationLabels);
             }
         }
 

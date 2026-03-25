@@ -697,7 +697,8 @@ void Log(const std::string& level, const std::string& message) {
                 return false;
             }
         }
-        
+
+    public:
         std::string ExtractJsonValue(const std::string& json, const std::string& key) {
             size_t keyPos = json.find("\"" + key + "\"");
             if (keyPos == std::string::npos) return "";

@@ -2088,12 +2088,15 @@ void HandleUSBFileTransferAlert(const std::string& fileName, const std::string& 
 void SendUSBTransferEvent(const std::string& relativePath, const std::string& usbFile,
                          const std::string& monitoredPath, const std::string& action,
                          const std::string& severity, const std::string& policyId,
-                         const std::string& policyName, bool success) {
+                         const std::string& policyName, bool success,
+                         const std::string& classificationLevel = "",
+                         double confidenceScore = 0.0,
+                         const std::vector<std::string>& classificationLabels = {}) {
     try {
         std::string fileName = fs::path(relativePath).filename().string();
         size_t fileSize = 0;
         std::string fileHash = "";
-        
+
         // Try to get file info from monitored directory first
         std::string sourceFile = monitoredPath + "\\" + relativePath;
         if (fs::exists(sourceFile)) {
@@ -2108,14 +2111,14 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                 fileHash = CalculateFileHash(usbFile);
             } catch (...) {}
         }
-        
+
         std::string description = "USB File Transfer " + action;
         description += "\nFile: " + fileName;
         description += "\nSource: " + monitoredPath;
         description += "\nDestination: " + usbFile;
         description += "\nPolicy: " + policyName;
         description += "\nSize: " + std::to_string(fileSize) + " bytes";
-        
+
         JsonBuilder json;
         json.AddString("event_id", GenerateUUID());
         json.AddString("event_type", "usb");
@@ -2134,15 +2137,32 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
         json.AddString("policy_id", policyId);
         json.AddString("policy_name", policyName);
         json.AddBool("success", success);
-        
+
         if (!fileHash.empty()) {
             json.AddString("file_hash", fileHash);
         }
-        
+
+        // Add classification data if provided
+        if (!classificationLevel.empty()) {
+            json.AddString("classification_level", classificationLevel);
+            json.AddNumber("classification_score", confidenceScore);
+
+            // Add classification labels array
+            if (!classificationLabels.empty()) {
+                std::string labelsJson = "[";
+                for (size_t i = 0; i < classificationLabels.size(); i++) {
+                    if (i > 0) labelsJson += ",";
+                    labelsJson += "\"" + classificationLabels[i] + "\"";
+                }
+                labelsJson += "]";
+                json.AddRawJson("classification_labels", labelsJson);
+            }
+        }
+
         json.AddString("timestamp", GetCurrentTimestampISO());
-        
+
         SendEvent(json.Build());
-        
+
         logger.Info("✅ Event sent to server: " + action + " - " + fileName);
     } catch (const std::exception& e) {
         logger.Error("Failed to send USB transfer event: " + std::string(e.what()));
@@ -5479,17 +5499,23 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                             }
                             logger.Warning("============================================================");
 
-                            // Execute block action
+                            // Execute block action with classification data
                             HandleUSBFileTransferBlockNoTimestamp(fileName, meta.relativePath, drivePath,
-                                                      matchedMonitoredPath, policy);
+                                                      matchedMonitoredPath, policy,
+                                                      evalResult.classificationLevel,
+                                                      evalResult.confidenceScore,
+                                                      evalResult.matchedRules);
                         } else {
                             logger.Info("✅ File ALLOWED - Classification: " + evalResult.classificationLevel +
                                        " (" + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "% confidence)");
                             logger.Info("   No sensitive data detected, allowing transfer");
 
-                            // Create an informational event for allowed transfers
+                            // Create an informational event for allowed transfers with classification data
                             SendUSBTransferEvent(meta.relativePath, usbFile, matchedMonitoredPath, "allowed",
-                                                "info", policy.policyId, policy.name, true);
+                                                "info", policy.policyId, policy.name, true,
+                                                evalResult.classificationLevel,
+                                                evalResult.confidenceScore,
+                                                evalResult.matchedRules);
                         }
                     }
 
@@ -5848,24 +5874,27 @@ void MonitorUSBTransferDirectories() {
 }
 void HandleUSBFileTransferBlockNoTimestamp(const std::string& fileName, const std::string& relativePath,
                                 const std::string& usbPath, const std::string& monitoredPath,
-                                const USBFileTransferPolicy& policy) {
+                                const USBFileTransferPolicy& policy,
+                                const std::string& classificationLevel = "",
+                                double confidenceScore = 0.0,
+                                const std::vector<std::string>& classificationLabels = {}) {
     std::string usbFile = usbPath + "\\" + fileName;
     std::string monitoredFile = monitoredPath + "\\" + relativePath;
-    
+
     bool existsInMonitored = fs::exists(monitoredFile);
     bool fileOnUSB = fs::exists(usbFile);
-    
+
     if (!fileOnUSB) return;
-    
+
     logger.Warning("============================================================");
     logger.Warning("  🚫 USB FILE TRANSFER BLOCKED!");
     logger.Warning("============================================================");
     logger.Warning("  File: " + relativePath);
     logger.Warning("  Policy: " + policy.name);
     logger.Warning("  Severity: " + policy.severity);
-    
+
     // DO NOT SET TIMESTAMP HERE - already set in CheckUSBDriveForMonitoredFiles
-    
+
     try {
         std::string transferType;
         if (existsInMonitored) {
@@ -5878,21 +5907,21 @@ void HandleUSBFileTransferBlockNoTimestamp(const std::string& fileName, const st
             // File was MOVED - restore from USB to monitored directory
             transferType = "move";
             logger.Warning("  Transfer Type: MOVE");
-            
+
             // Create parent directories if needed
             size_t pos = relativePath.find_last_of("\\/");
             if (pos != std::string::npos) {
                 std::string dirPath = monitoredPath + "\\" + relativePath.substr(0, pos);
                 fs::create_directories(dirPath);
             }
-            
+
             // Copy from USB back to monitored, then delete from USB
             fs::copy_file(usbFile, monitoredFile, fs::copy_options::overwrite_existing);
             logger.Warning("  ✅ Restored to monitored directory");
-            
+
             fs::remove(usbFile);
             logger.Warning("  ✅ Deleted from USB");
-            
+
             // Update shadow entry
             std::string key = monitoredPath + ":" + relativePath;
             ShadowEntry shadow;
@@ -5911,15 +5940,17 @@ void HandleUSBFileTransferBlockNoTimestamp(const std::string& fileName, const st
             shadow.lastModified = ft;
             shadowCopies[key] = shadow;
         }
-        
-        SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "blocked_" + transferType, 
-                            policy.severity, policy.policyId, policy.name, true);
-        
+
+        SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "blocked_" + transferType,
+                            policy.severity, policy.policyId, policy.name, true,
+                            classificationLevel, confidenceScore, classificationLabels);
+
         logger.Warning("============================================================\n");
     } catch (const std::exception& e) {
         logger.Error("Failed to block USB transfer: " + std::string(e.what()));
-        SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "block_failed", 
-                            policy.severity, policy.policyId, policy.name, false);
+        SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "block_failed",
+                            policy.severity, policy.policyId, policy.name, false,
+                            classificationLevel, confidenceScore, classificationLabels);
         logger.Warning("============================================================\n");
     }
 }

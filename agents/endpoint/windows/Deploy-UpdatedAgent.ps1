@@ -161,7 +161,6 @@ Write-Host ""
 
 Write-Host "Rollback (if needed):" -ForegroundColor Cyan
 Write-Host "  Stop-Service $serviceName -Force" -ForegroundColor Gray
-Write-Host "  Copy-Item '$backupPath' ``" -ForegroundColor Gray
-Write-Host "            'C:\Program Files\CyberSentinel\cybersentinel_agent.exe' -Force" -ForegroundColor Gray
+Write-Host "  Copy-Item '$backupPath' 'C:\Program Files\CyberSentinel\cybersentinel_agent.exe' -Force" -ForegroundColor Gray
 Write-Host "  Start-Service $serviceName" -ForegroundColor Gray
 Write-Host ""

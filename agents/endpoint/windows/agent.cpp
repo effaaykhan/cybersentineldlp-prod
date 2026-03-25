@@ -5243,7 +5243,7 @@ if (shouldMonitor) {
             std::string requestBody = json.Build();
 
             // Call API endpoint
-            std::string apiPath = "/api/v1/agents/" + config.agentId + "/policy/evaluate";
+            std::string apiPath = "/agents/" + config.agentId + "/policy/evaluate";
 
             logger.Info("🔍 Calling real-time classification API for: " + fileName);
 

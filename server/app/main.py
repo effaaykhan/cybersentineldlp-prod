@@ -93,6 +93,74 @@ async def _auto_init_schema_and_admin():
         logger.warning("Auto-init encountered an error (likely harmless race condition)", error=str(e))
 
 
+async def _seed_default_rules():
+    """Import default classification rules on first boot if the rules table is empty."""
+    import json
+    from pathlib import Path
+    from sqlalchemy import text
+
+    try:
+        async with _db.postgres_session_factory() as session:
+            result = await session.execute(text("SELECT COUNT(*) FROM rules"))
+            rule_count = result.scalar()
+
+            if rule_count > 0:
+                logger.info("Rules table already populated, skipping default rules seed", count=rule_count)
+                return
+
+            # Load default rules from JSON
+            rules_file = Path(__file__).parent.parent / "data" / "default_rules.json"
+            if not rules_file.exists():
+                logger.warning("Default rules file not found", path=str(rules_file))
+                return
+
+            rules_data = json.loads(rules_file.read_text())
+
+            # Get admin user ID for created_by field
+            result = await session.execute(text("SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1"))
+            admin_row = result.first()
+            if not admin_row:
+                logger.warning("No admin user found, skipping default rules seed")
+                return
+            admin_id = admin_row[0]
+
+            for rule in rules_data:
+                await session.execute(
+                    text(
+                        "INSERT INTO rules (id, name, description, enabled, type, pattern, regex_flags, "
+                        "keywords, case_sensitive, threshold, weight, classification_labels, severity, "
+                        "category, tags, created_by, created_at, updated_at, match_count) "
+                        "VALUES (gen_random_uuid(), :name, :description, :enabled, :type, :pattern, "
+                        ":regex_flags, :keywords, :case_sensitive, :threshold, :weight, "
+                        ":classification_labels, :severity, :category, :tags, :created_by, NOW(), NOW(), 0) "
+                        "ON CONFLICT (name) DO NOTHING"
+                    ),
+                    {
+                        "name": rule["name"],
+                        "description": rule.get("description"),
+                        "enabled": rule.get("enabled", True),
+                        "type": rule["type"],
+                        "pattern": rule.get("pattern"),
+                        "regex_flags": json.dumps(rule["regex_flags"]) if rule.get("regex_flags") else None,
+                        "keywords": json.dumps(rule["keywords"]) if rule.get("keywords") else None,
+                        "case_sensitive": rule.get("case_sensitive", False),
+                        "threshold": rule.get("threshold", 1),
+                        "weight": rule.get("weight", 0.5),
+                        "classification_labels": json.dumps(rule["classification_labels"]) if rule.get("classification_labels") else None,
+                        "severity": rule.get("severity", "medium"),
+                        "category": rule.get("category"),
+                        "tags": json.dumps(rule["tags"]) if rule.get("tags") else None,
+                        "created_by": admin_id,
+                    },
+                )
+
+            await session.commit()
+            logger.info("Default classification rules seeded", count=len(rules_data))
+
+    except Exception as e:
+        logger.warning("Default rules seed encountered an error", error=str(e))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """
@@ -108,6 +176,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
         # Auto-create tables and seed default admin user on first boot
         await _auto_init_schema_and_admin()
+
+        # Seed default classification rules on first boot
+        await _seed_default_rules()
 
         # Initialize cache
         await init_cache()

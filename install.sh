@@ -44,7 +44,7 @@ cd "${INSTALL_DIR}"
 
 # Download docker-compose file
 echo -e "${YELLOW}Downloading docker-compose.prod.yml...${NC}"
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/docker-compose.prod.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/docker-compose.prod.yml -o docker-compose.yml
 
 # Create .env file if it doesn't exist
 if [ ! -f .env ]; then
@@ -127,7 +127,7 @@ echo "  Start services:  cd ${INSTALL_DIR} && docker compose up -d"
 echo "  Update:          cd ${INSTALL_DIR} && docker compose pull && docker compose up -d"
 echo ""
 echo -e "${YELLOW}Documentation:${NC}"
-echo "  GitHub: https://github.com/effaaykhan/Data-Loss-Prevention"
+echo "  GitHub: https://github.com/cybersentinel-06/Data-Loss-Prevention"
 echo ""
 echo -e "${GREEN}Installation directory: ${INSTALL_DIR}${NC}"
 echo ""

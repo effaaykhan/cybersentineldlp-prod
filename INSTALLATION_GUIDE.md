@@ -50,7 +50,7 @@ Complete installation guide for CyberSentinel DLP Dashboard, Linux Agents, and W
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/effaaykhan/Data-Loss-Prevention.git
+git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
 cd Data-Loss-Prevention
 ```
 
@@ -468,7 +468,7 @@ curl http://YOUR_SERVER_IP:55000/api/v1/events?limit=10 \
   ```
   notepad windows-agent_installer.py
   ```
-- Paste the [content](https://github.com/effaaykhan/Data-Loss-Prevention/blob/main/windows-agent_installer.py) in this file:
+- Paste the [content](https://github.com/cybersentinel-06/Data-Loss-Prevention/blob/main/windows-agent_installer.py) in this file:
 - Add the details prompted on the screen.
 
 ### Step 1: Copy Agent Files to Windows
@@ -489,7 +489,7 @@ Or clone directly on Windows:
 
 ```powershell
 # From Windows PowerShell
-git clone https://github.com/effaaykhan/Data-Loss-Prevention.git
+git clone https://github.com/cybersentinel-06/Data-Loss-Prevention.git
 cd Data-Loss-Prevention\agents\endpoint\windows
 ```
 
@@ -1561,7 +1561,7 @@ docker-compose restart manager
 For issues or questions:
 1. Check logs: `docker-compose logs`
 2. Review troubleshooting section above
-3. Check GitHub issues: https://github.com/effaaykhan/Data-Loss-Prevention/issues
+3. Check GitHub issues: https://github.com/cybersentinel-06/Data-Loss-Prevention/issues
 
 ---
 

@@ -4,7 +4,7 @@
 
 All code has been successfully pushed to GitHub with GHCR-based deployment ready!
 
-**Repository**: https://github.com/effaaykhan/Data-Loss-Prevention
+**Repository**: https://github.com/cybersentinel-06/Data-Loss-Prevention
 
 ---
 
@@ -25,8 +25,8 @@ All code has been successfully pushed to GitHub with GHCR-based deployment ready
 - ✅ Image caching for fast builds
 
 **Images that will be built:**
-- `ghcr.io/effaaykhan/dlp-manager:latest`
-- `ghcr.io/effaaykhan/dlp-dashboard:latest`
+- `ghcr.io/cybersentinel-06/dlp-manager:latest`
+- `ghcr.io/cybersentinel-06/dlp-dashboard:latest`
 
 ### 3. **One-Liner Installation Ready** ✅
 - ✅ Installation script created (`install.sh`)
@@ -48,7 +48,7 @@ All code has been successfully pushed to GitHub with GHCR-based deployment ready
 ### For Anyone to Deploy CyberSentinel DLP:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install.sh)
 ```
 
 **That's it!** No git clone, no building, no complex setup.
@@ -70,7 +70,7 @@ The workflow automatically:
 
 The workflow will run automatically on the next push or you can manually trigger it:
 
-1. Go to: https://github.com/effaaykhan/Data-Loss-Prevention/actions
+1. Go to: https://github.com/cybersentinel-06/Data-Loss-Prevention/actions
 2. Click on "Build and Push Docker Images"
 3. Click "Run workflow"
 4. Select branch: `main`
@@ -78,7 +78,7 @@ The workflow will run automatically on the next push or you can manually trigger
 
 ### Monitor Build Progress
 
-1. Go to: https://github.com/effaaykhan/Data-Loss-Prevention/actions
+1. Go to: https://github.com/cybersentinel-06/Data-Loss-Prevention/actions
 2. Click on the latest workflow run
 3. Watch the build progress
 4. Images will be pushed to GHCR when complete
@@ -90,8 +90,8 @@ The workflow will run automatically on the next push or you can manually trigger
 Once the workflow completes, images will be available at:
 
 ```
-ghcr.io/effaaykhan/dlp-manager:latest
-ghcr.io/effaaykhan/dlp-dashboard:latest
+ghcr.io/cybersentinel-06/dlp-manager:latest
+ghcr.io/cybersentinel-06/dlp-dashboard:latest
 ```
 
 ### Image Tags
@@ -137,7 +137,7 @@ The workflow creates these tags:
 ### 1. Trigger First Build
 
 Go to GitHub Actions and manually trigger the workflow to build the first images:
-https://github.com/effaaykhan/Data-Loss-Prevention/actions
+https://github.com/cybersentinel-06/Data-Loss-Prevention/actions
 
 ### 2. Wait for Build (5-10 minutes)
 
@@ -152,7 +152,7 @@ The workflow will:
 After images are built, test the one-liner installation:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install.sh)
 ```
 
 ### 4. Verify Deployment
@@ -173,12 +173,12 @@ curl http://localhost:55000/api/v1/health
 ## 🔍 Verification Steps
 
 ### Check GitHub Actions
-1. Visit: https://github.com/effaaykhan/Data-Loss-Prevention/actions
+1. Visit: https://github.com/cybersentinel-06/Data-Loss-Prevention/actions
 2. Ensure workflow ran successfully
 3. Check both images were built
 
 ### Check GHCR Packages
-1. Visit: https://github.com/effaaykhan?tab=packages
+1. Visit: https://github.com/cybersentinel-06?tab=packages
 2. Look for:
    - `dlp-manager`
    - `dlp-dashboard`
@@ -187,22 +187,22 @@ curl http://localhost:55000/api/v1/health
 ### Test Image Pull
 ```bash
 # Test pulling images
-docker pull ghcr.io/effaaykhan/dlp-manager:latest
-docker pull ghcr.io/effaaykhan/dlp-dashboard:latest
+docker pull ghcr.io/cybersentinel-06/dlp-manager:latest
+docker pull ghcr.io/cybersentinel-06/dlp-dashboard:latest
 
 # Verify images exist
-docker images | grep ghcr.io/effaaykhan
+docker images | grep ghcr.io/cybersentinel-06
 ```
 
 ---
 
 ## 📚 Documentation Links
 
-- **Main README**: https://github.com/effaaykhan/Data-Loss-Prevention/blob/main/README.md
-- **Classification System**: https://github.com/effaaykhan/Data-Loss-Prevention/blob/main/CLASSIFICATION_SYSTEM.md
-- **Policy Guide**: https://github.com/effaaykhan/Data-Loss-Prevention/blob/main/CLASSIFICATION_POLICIES_GUIDE.md
-- **Deployment Guide**: https://github.com/effaaykhan/Data-Loss-Prevention/blob/main/DEPLOYMENT_COMPLETE.md
-- **Integration Guide**: https://github.com/effaaykhan/Data-Loss-Prevention/blob/main/INTEGRATION_COMPLETE.md
+- **Main README**: https://github.com/cybersentinel-06/Data-Loss-Prevention/blob/main/README.md
+- **Classification System**: https://github.com/cybersentinel-06/Data-Loss-Prevention/blob/main/CLASSIFICATION_SYSTEM.md
+- **Policy Guide**: https://github.com/cybersentinel-06/Data-Loss-Prevention/blob/main/CLASSIFICATION_POLICIES_GUIDE.md
+- **Deployment Guide**: https://github.com/cybersentinel-06/Data-Loss-Prevention/blob/main/DEPLOYMENT_COMPLETE.md
+- **Integration Guide**: https://github.com/cybersentinel-06/Data-Loss-Prevention/blob/main/INTEGRATION_COMPLETE.md
 
 ---
 
@@ -258,7 +258,7 @@ Create a new release to tag a version:
 ```bash
 git tag -a v1.0.0 -m "Release v1.0.0"
 git push origin v1.0.0
-# Creates ghcr.io/effaaykhan/dlp-manager:v1.0.0
+# Creates ghcr.io/cybersentinel-06/dlp-manager:v1.0.0
 ```
 
 ---
@@ -266,7 +266,7 @@ git push origin v1.0.0
 ## 🎊 Success Metrics
 
 ### GitHub
-- ✅ Repository: https://github.com/effaaykhan/Data-Loss-Prevention
+- ✅ Repository: https://github.com/cybersentinel-06/Data-Loss-Prevention
 - ✅ Actions workflow configured
 - ✅ All code pushed successfully
 
@@ -311,7 +311,7 @@ Your DLP platform is now:
 ║                                                               ║
 ║  Install Command:                                             ║
 ║  bash <(curl -fsSL https://raw.githubusercontent.com/         ║
-║         effaaykhan/Data-Loss-Prevention/main/install.sh)     ║
+║         cybersentinel-06/Data-Loss-Prevention/main/install.sh)     ║
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
 ```

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # OpenSearch for event storage
   opensearch:
@@ -97,7 +95,7 @@ services:
 
   # Manager API
   manager:
-    image: ghcr.io/effaaykhan/dlp-manager:latest
+    image: ghcr.io/cybersentinel-06/dlp-manager:latest
     container_name: cybersentinel-manager
     environment:
       # Server
@@ -174,7 +172,7 @@ services:
 
   # Dashboard
   dashboard:
-    image: ghcr.io/effaaykhan/dlp-dashboard:latest
+    image: ghcr.io/cybersentinel-06/dlp-dashboard:latest
     container_name: cybersentinel-dashboard
     ports:
       - "4000:4000"
@@ -191,7 +189,7 @@ services:
 
   # Celery Worker
   celery-worker:
-    image: ghcr.io/effaaykhan/dlp-manager:latest
+    image: ghcr.io/cybersentinel-06/dlp-manager:latest
     container_name: cybersentinel-celery-worker
     command: celery -A app.celery.celery_app worker --loglevel=info --concurrency=4
     environment:
@@ -247,7 +245,7 @@ services:
 
   # Celery Beat (Scheduler)
   celery-beat:
-    image: ghcr.io/effaaykhan/dlp-manager:latest
+    image: ghcr.io/cybersentinel-06/dlp-manager:latest
     container_name: cybersentinel-celery-beat
     command: celery -A app.celery.celery_app beat --loglevel=info
     environment:

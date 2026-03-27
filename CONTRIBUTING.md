@@ -56,7 +56,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ```bash
 # Clone the repository
-git clone https://github.com/effaaykhan/cybersentinel-dlp.git
+git clone https://github.com/cybersentinel-06/cybersentinel-dlp.git
 cd cybersentinel-dlp
 
 # Backend setup

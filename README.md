@@ -57,7 +57,7 @@ Production-ready Data Loss Prevention platform with **dynamic rule-based classif
 Run this single command on your server:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install.sh)
 ```
 
 **That's it!** The script will:
@@ -77,7 +77,7 @@ After installation completes (1-2 minutes), access:
 
 | Service | URL | Default Credentials |
 |---------|-----|-------------------|
-| **Dashboard** | `http://localhost:4000` | `admin@cybersentinel.local` / `admin123` |
+| **Dashboard** | `http://localhost:4000` | `admin` / `admin` |
 | **API** | `http://localhost:55000` | Same as above |
 | **API Docs** | `http://localhost:55000/docs` | Interactive Swagger UI |
 
@@ -92,7 +92,7 @@ After installation completes (1-2 minutes), access:
 #### Option A: One-Liner (Recommended)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install.sh)
 ```
 
 #### Option B: Manual Installation
@@ -102,25 +102,32 @@ bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevent
 mkdir -p ~/cybersentinel-dlp && cd ~/cybersentinel-dlp
 
 # 2. Download docker-compose file
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/docker-compose.prod.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/docker-compose.prod.yml -o docker-compose.yml
 
 # 3. Create .env file
-cat > .env << EOF
-POSTGRES_PASSWORD=YourSecurePassword123!
-MONGODB_PASSWORD=YourSecurePassword123!
-REDIS_PASSWORD=YourSecurePassword123!
-OPENSEARCH_PASSWORD=YourSecurePassword123!
-JWT_SECRET=$(openssl rand -hex 32)
-ENVIRONMENT=production
+cat > .env << 'EOF'
+SECRET_KEY=change-this-to-a-random-secret
+JWT_SECRET=change-this-to-a-random-jwt-secret
+POSTGRES_PASSWORD=CyberSentinel2025!
+MONGODB_PASSWORD=CyberSentinel2025!
+REDIS_PASSWORD=CyberSentinel2025!
+OPENSEARCH_PASSWORD=CyberSentinel2025!
+CORS_ORIGINS=*
 EOF
 
-# 4. Start services
+# 4. Login to GitHub Container Registry (images are private)
+echo "YOUR_GITHUB_PAT" | docker login ghcr.io -u cybersentinel-06 --password-stdin
+
+# 5. Pull pre-built images and start services
 docker compose pull
 docker compose up -d
 
-# 5. Wait for services (30-60 seconds)
+# 6. Wait for services to become healthy (60-90 seconds)
 docker compose logs -f manager
 ```
+
+> **Note:** Replace `YOUR_GITHUB_PAT` with a GitHub Personal Access Token that has `read:packages` scope.
+> Generate one at: **GitHub > Settings > Developer Settings > Personal Access Tokens > Tokens (classic)**
 
 #### Verify Installation
 
@@ -155,7 +162,7 @@ You should see 8 running containers:
 Run in **elevated PowerShell** (Run as Administrator):
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/agents/endpoint/newWindowsAgent/Install-CyberSentinelAgent.ps1)
+iex (irm https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/agents/endpoint/newWindowsAgent/Install-CyberSentinelAgent.ps1)
 ```
 
 When prompted, enter your server URL: `http://<SERVER-IP>:55000/api/v1`
@@ -179,7 +186,7 @@ When prompted, enter your server URL: `http://<SERVER-IP>:55000/api/v1`
 Run on any Linux machine with Python 3.8+:
 
 ```bash
-curl -sLO https://raw.githubusercontent.com/effaaykhan/Data-Loss-Prevention/main/install_linux_agent.py
+curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_linux_agent.py
 sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
 ```
 
@@ -204,7 +211,7 @@ sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
 #### 1. Login and Change Password
 
 1. Navigate to `http://localhost:4000`
-2. Login with `admin@cybersentinel.local` / `admin123`
+2. Login with `admin` / `admin`
 3. Go to **Settings** → **Change Password**
 4. Set a strong password
 
@@ -332,7 +339,7 @@ Full API documentation available at: `http://localhost:55000/docs`
 # Login
 curl -X POST http://localhost:55000/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=admin@cybersentinel.local&password=admin123"
+  -d "username=admin&password=admin"
 
 # Returns: {"access_token": "...", "token_type": "bearer"}
 
@@ -559,8 +566,8 @@ This is Data Loss Prevention software that monitors:
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/effaaykhan/Data-Loss-Prevention/issues)
-- **Documentation**: [Wiki](https://github.com/effaaykhan/Data-Loss-Prevention/wiki)
+- **Issues**: [GitHub Issues](https://github.com/cybersentinel-06/Data-Loss-Prevention/issues)
+- **Documentation**: [Wiki](https://github.com/cybersentinel-06/Data-Loss-Prevention/wiki)
 - **API Docs**: `http://localhost:55000/docs`
 
 ---

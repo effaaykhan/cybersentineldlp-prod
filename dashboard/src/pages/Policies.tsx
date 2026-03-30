@@ -321,7 +321,7 @@ export default function Policies() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Policies</h1>
           <p className="mt-1 text-sm text-gray-600">
-            {policies.length} {policies.length === 1 ? 'policy' : 'policies'} configured
+            {(policies || []).length} {(policies || []).length === 1 ? 'policy' : 'policies'} configured
           </p>
         </div>
         <div className="flex gap-2">
@@ -354,7 +354,9 @@ export default function Policies() {
         {policies.map((policy) => {
           const isExpanded = expandedId === policy.id
           const sevClass = SEVERITY_COLORS[policy.severity || 'medium'] || SEVERITY_COLORS.medium
-          const hasBlock = policy.actions?.some(a => a.type === 'block')
+          const pConditions = policy.conditions || []
+          const pActions = policy.actions || []
+          const hasBlock = pActions.some(a => a.type === 'block')
 
           return (
             <div key={policy.id} className={`bg-white rounded-xl border ${policy.enabled ? 'border-gray-200' : 'border-gray-100 opacity-60'} shadow-sm overflow-hidden`}>
@@ -405,7 +407,7 @@ export default function Policies() {
                   <div>
                     <label className="text-xs text-gray-500 uppercase font-semibold mb-2 block">Conditions (ALL must match)</label>
                     <div className="space-y-1">
-                      {policy.conditions?.map((c, idx) => (
+                      {pConditions.map((c, idx) => (
                         <div key={idx} className="flex items-center gap-2 text-sm">
                           <code className="px-2 py-0.5 bg-white rounded border text-blue-700 font-mono text-xs">{c.field}</code>
                           <span className="text-gray-500 font-medium">{c.operator}</span>
@@ -414,7 +416,7 @@ export default function Policies() {
                           </code>
                         </div>
                       ))}
-                      {(!policy.conditions || policy.conditions.length === 0) && (
+                      {pConditions.length === 0 && (
                         <p className="text-sm text-gray-400 italic">No conditions defined</p>
                       )}
                     </div>
@@ -424,7 +426,7 @@ export default function Policies() {
                   <div>
                     <label className="text-xs text-gray-500 uppercase font-semibold mb-2 block">Actions</label>
                     <div className="flex flex-wrap gap-2">
-                      {policy.actions?.map((a, idx) => {
+                      {pActions.map((a, idx) => {
                         const Icon = ACTION_ICONS[a.type] || Eye
                         return (
                           <span key={idx} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border ${
@@ -447,8 +449,8 @@ export default function Policies() {
                   <div className="flex items-center justify-between pt-2 border-t border-gray-200">
                     <div className="text-xs text-gray-400 space-x-4">
                       {policy.created_at && <span>Created: {new Date(policy.created_at).toLocaleDateString()}</span>}
-                      {policy.agent_ids && policy.agent_ids.length > 0 && (
-                        <span>Scoped to {policy.agent_ids.length} agent(s)</span>
+                      {(policy.agent_ids?.length ?? 0) > 0 && (
+                        <span>Scoped to {policy.agent_ids!.length} agent(s)</span>
                       )}
                     </div>
                     <button

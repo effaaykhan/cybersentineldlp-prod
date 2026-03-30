@@ -161,6 +161,67 @@ async def _seed_default_rules():
         logger.warning("Default rules seed encountered an error", error=str(e))
 
 
+async def _seed_default_policies():
+    """Import default blocking policies on first boot if the policies table is empty."""
+    import json
+    from pathlib import Path
+    from sqlalchemy import text
+
+    try:
+        async with _db.postgres_session_factory() as session:
+            result = await session.execute(text("SELECT COUNT(*) FROM policies"))
+            policy_count = result.scalar()
+
+            if policy_count > 0:
+                logger.info("Policies table already populated, skipping default policies seed", count=policy_count)
+                return
+
+            policies_file = Path(__file__).parent.parent / "data" / "default_policies.json"
+            if not policies_file.exists():
+                logger.warning("Default policies file not found", path=str(policies_file))
+                return
+
+            policies_data = json.loads(policies_file.read_text())
+
+            result = await session.execute(text("SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1"))
+            admin_row = result.first()
+            if not admin_row:
+                logger.warning("No admin user found, skipping default policies seed")
+                return
+            admin_id = admin_row[0]
+
+            for policy in policies_data:
+                await session.execute(
+                    text(
+                        "INSERT INTO policies (id, name, description, enabled, priority, type, severity, "
+                        "config, conditions, actions, compliance_tags, agent_ids, created_by, created_at, updated_at) "
+                        "VALUES (gen_random_uuid(), :name, :description, :enabled, :priority, :type, :severity, "
+                        ":config, :conditions, :actions, :compliance_tags, :agent_ids, :created_by, NOW(), NOW()) "
+                        "ON CONFLICT (name) DO NOTHING"
+                    ),
+                    {
+                        "name": policy["name"],
+                        "description": policy.get("description"),
+                        "enabled": policy.get("enabled", True),
+                        "priority": policy.get("priority", 100),
+                        "type": policy.get("type"),
+                        "severity": policy.get("severity", "medium"),
+                        "config": json.dumps(policy.get("config", {})),
+                        "conditions": json.dumps(policy["conditions"]),
+                        "actions": json.dumps(policy["actions"]),
+                        "compliance_tags": None,
+                        "agent_ids": None,
+                        "created_by": admin_id,
+                    },
+                )
+
+            await session.commit()
+            logger.info("Default blocking policies seeded", count=len(policies_data))
+
+    except Exception as e:
+        logger.warning("Default policies seed encountered an error", error=str(e))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """
@@ -179,6 +240,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
         # Seed default classification rules on first boot
         await _seed_default_rules()
+
+        # Seed default blocking policies on first boot
+        await _seed_default_policies()
 
         # Initialize cache
         await init_cache()

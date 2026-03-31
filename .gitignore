@@ -217,3 +217,7 @@ dump.rdb
 
 # Cursor IDE
 
+
+# Claude Code local settings
+.claude/
+.cursor/

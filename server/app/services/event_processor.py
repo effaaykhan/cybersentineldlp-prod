@@ -13,7 +13,7 @@ from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 from app.actions.action_executor import ActionExecutor
 from app.actions.action_types import ExecutionSummary
 from app.services.classification_engine import ClassificationEngine
-from app.core.database import postgres_session_factory
+import app.core.database as _db
 
 logger = structlog.get_logger()
 
@@ -308,8 +308,8 @@ class EventProcessor:
 
         # Try to use ClassificationEngine with database rules
         try:
-            if postgres_session_factory:
-                async with postgres_session_factory() as session:
+            if _db.postgres_session_factory:
+                async with _db.postgres_session_factory() as session:
                     classification_engine = ClassificationEngine(session)
 
                     # Build context from event

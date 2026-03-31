@@ -6,6 +6,8 @@
     "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b",
     "threshold": 1,
     "weight": 0.9,
+    "priority": 10,
+    "label": "Restricted",
     "classification_labels": [
       "PII",
       "SSN"
@@ -25,6 +27,8 @@
     "pattern": "\\b(?:\\d{4}[\\s-]?){3}\\d{4}\\b",
     "threshold": 1,
     "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
     "classification_labels": [
       "PCI",
       "FINANCIAL",
@@ -45,6 +49,8 @@
     "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b",
     "threshold": 1,
     "weight": 0.3,
+    "priority": 80,
+    "label": "Internal",
     "classification_labels": [
       "CONTACT",
       "EMAIL"
@@ -63,6 +69,8 @@
     "pattern": "\\b(?:\\+?1[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}\\b",
     "threshold": 1,
     "weight": 0.4,
+    "priority": 70,
+    "label": "Internal",
     "classification_labels": [
       "CONTACT",
       "PHONE"
@@ -81,6 +89,8 @@
     "pattern": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b",
     "threshold": 1,
     "weight": 0.9,
+    "priority": 10,
+    "label": "Restricted",
     "classification_labels": [
       "PII",
       "AADHAAR",
@@ -101,6 +111,8 @@
     "pattern": "\\b[A-Z]{5}\\d{4}[A-Z]{1}\\b",
     "threshold": 1,
     "weight": 0.9,
+    "priority": 10,
+    "label": "Restricted",
     "classification_labels": [
       "TAX",
       "PAN",
@@ -121,6 +133,8 @@
     "pattern": "\\b[A-Z]{4}0[A-Z0-9]{6}\\b",
     "threshold": 1,
     "weight": 0.7,
+    "priority": 30,
+    "label": "Confidential",
     "classification_labels": [
       "BANKING",
       "IFSC"
@@ -140,6 +154,8 @@
     "pattern": "\\b(?:\\+91|91|0)?[6-9]\\d{9}\\b",
     "threshold": 1,
     "weight": 0.4,
+    "priority": 70,
+    "label": "Internal",
     "classification_labels": [
       "CONTACT",
       "PHONE"
@@ -162,6 +178,8 @@
     ],
     "threshold": 1,
     "weight": 0.7,
+    "priority": 30,
+    "label": "Confidential",
     "classification_labels": [
       "PAYMENT",
       "UPI"
@@ -182,6 +200,8 @@
     "pattern": "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b",
     "threshold": 1,
     "weight": 0.3,
+    "priority": 90,
+    "label": "Public",
     "classification_labels": [
       "NETWORK",
       "IP_ADDRESS"
@@ -200,6 +220,8 @@
     "pattern": "\\b(AKIA[0-9A-Z]{16})\\b",
     "threshold": 1,
     "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
     "classification_labels": [
       "CREDENTIAL",
       "AWS",
@@ -221,6 +243,8 @@
     "pattern": "\\b(ghp_[A-Za-z0-9]{36})\\b",
     "threshold": 1,
     "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
     "classification_labels": [
       "CREDENTIAL",
       "GITHUB",
@@ -241,6 +265,8 @@
     "pattern": "(?i)(api[_-]?key|apikey|access[_-]?token)[\"']?\\s*[:=]\\s*[\"']?([a-zA-Z0-9_\\-]{32,})[\"']?",
     "threshold": 1,
     "weight": 0.8,
+    "priority": 20,
+    "label": "Restricted",
     "classification_labels": [
       "CREDENTIAL",
       "API_KEY"
@@ -262,6 +288,8 @@
     ],
     "threshold": 1,
     "weight": 0.85,
+    "priority": 15,
+    "label": "Restricted",
     "classification_labels": [
       "CREDENTIAL",
       "DATABASE",
@@ -282,6 +310,8 @@
     "pattern": "-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----",
     "threshold": 1,
     "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
     "classification_labels": [
       "CREDENTIAL",
       "PRIVATE_KEY",
@@ -312,6 +342,8 @@
     "case_sensitive": false,
     "threshold": 1,
     "weight": 0.7,
+    "priority": 25,
+    "label": "Confidential",
     "classification_labels": [
       "DOCUMENT_CLASSIFICATION",
       "CONFIDENTIAL"
@@ -343,6 +375,8 @@
     "case_sensitive": false,
     "threshold": 1,
     "weight": 0.5,
+    "priority": 50,
+    "label": "Internal",
     "classification_labels": [
       "FINANCIAL",
       "BUSINESS"
@@ -374,6 +408,8 @@
     "case_sensitive": false,
     "threshold": 1,
     "weight": 0.6,
+    "priority": 40,
+    "label": "Confidential",
     "classification_labels": [
       "HEALTHCARE",
       "HIPAA",
@@ -405,6 +441,8 @@
     "case_sensitive": false,
     "threshold": 2,
     "weight": 0.6,
+    "priority": 40,
+    "label": "Confidential",
     "classification_labels": [
       "LEGAL",
       "PRIVILEGED"
@@ -437,6 +475,8 @@
     "case_sensitive": true,
     "threshold": 5,
     "weight": 0.4,
+    "priority": 60,
+    "label": "Internal",
     "classification_labels": [
       "SOURCE_CODE",
       "INTELLECTUAL_PROPERTY"

@@ -4,8 +4,9 @@ Represents DLP events detected by agents or collectors
 """
 
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Index
+from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Index, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 import uuid
 
 from app.core.database import Base
@@ -23,6 +24,8 @@ class Event(Base):
 
     # Source information
     agent_id = Column(String(64), nullable=True, index=True)
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True)
+    endpoint_id = Column(UUID(as_uuid=True), ForeignKey("endpoints.id", ondelete="SET NULL"), nullable=True, index=True)
     source_type = Column(String(50), nullable=False)  # agent, collector, connector
     source_id = Column(String(64), nullable=True)
 
@@ -44,6 +47,7 @@ class Event(Base):
 
     # Classification results
     classification = Column(JSON, nullable=True)  # {"labels": ["PAN", "SSN"], "score": 0.95, "method": "regex"}
+    classification_label = Column(UUID(as_uuid=True), ForeignKey("data_labels.id", ondelete="SET NULL"), nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)
 
     # Policy information
@@ -51,9 +55,18 @@ class Event(Base):
     policy_name = Column(String(255), nullable=True)
     policy_violated = Column(String(255), nullable=True)
 
+    # Channel and decision
+    channel = Column(String(50), nullable=True)  # usb, email, cloud, web, network, clipboard
+    decision = Column(String(30), nullable=True)  # allowed, blocked, warned, quarantined
+
     # Destination information
     destination = Column(String(255), nullable=True)  # usb, cloud, email, etc.
     destination_details = Column(JSON, nullable=True)
+
+    # Relationships
+    device = relationship("Device", backref="events", foreign_keys=[device_id])
+    endpoint = relationship("Endpoint", backref="events", foreign_keys=[endpoint_id])
+    label = relationship("DataLabel", backref="events", foreign_keys=[classification_label])
 
     # Network information (for network events)
     source_ip = Column(String(45), nullable=True)

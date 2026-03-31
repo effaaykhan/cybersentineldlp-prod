@@ -10,6 +10,9 @@ import Alerts from './pages/Alerts'
 import Rules from './pages/Rules'
 import Policies from './app/dashboard/policies/page'
 import Settings from './pages/Settings'
+import Incidents from './pages/Incidents'
+import AuditTrail from './pages/AuditTrail'
+import LogExplorer from './pages/LogExplorer'
 
 function App() {
   const { isAuthenticated } = useAuthStore()
@@ -26,6 +29,9 @@ function App() {
           <Route path="alerts" element={<Alerts />} />
           <Route path="rules" element={<Rules />} />
           <Route path="policies" element={<Policies />} />
+          <Route path="incidents" element={<Incidents />} />
+          <Route path="log-explorer" element={<LogExplorer />} />
+          <Route path="audit-trail" element={<AuditTrail />} />
           <Route path="settings" element={<Settings />} />
         </Route>
 

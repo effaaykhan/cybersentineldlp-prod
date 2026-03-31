@@ -93,6 +93,92 @@ async def _auto_init_schema_and_admin():
         logger.warning("Auto-init encountered an error (likely harmless race condition)", error=str(e))
 
 
+async def _seed_default_roles():
+    """Import default RBAC roles on first boot if the roles table is empty."""
+    import json
+    from pathlib import Path
+    from sqlalchemy import text
+
+    try:
+        async with _db.postgres_session_factory() as session:
+            result = await session.execute(text("SELECT COUNT(*) FROM roles"))
+            role_count = result.scalar()
+
+            if role_count > 0:
+                logger.info("Roles table already populated, skipping seed", count=role_count)
+                return
+
+            roles_file = Path(__file__).parent.parent / "data" / "default_roles.json"
+            if not roles_file.exists():
+                logger.warning("Default roles file not found", path=str(roles_file))
+                return
+
+            roles_data = json.loads(roles_file.read_text())
+
+            for role in roles_data:
+                await session.execute(
+                    text(
+                        "INSERT INTO roles (id, name, permissions, created_at) "
+                        "VALUES (gen_random_uuid(), :name, :permissions, NOW()) "
+                        "ON CONFLICT (name) DO NOTHING"
+                    ),
+                    {
+                        "name": role["name"],
+                        "permissions": json.dumps(role["permissions"]),
+                    },
+                )
+
+            await session.commit()
+            logger.info("Default roles seeded", count=len(roles_data))
+
+    except Exception as e:
+        logger.warning("Default roles seed encountered an error", error=str(e))
+
+
+async def _seed_default_labels():
+    """Import default data labels on first boot if the data_labels table is empty."""
+    import json
+    from pathlib import Path
+    from sqlalchemy import text
+
+    try:
+        async with _db.postgres_session_factory() as session:
+            result = await session.execute(text("SELECT COUNT(*) FROM data_labels"))
+            label_count = result.scalar()
+
+            if label_count > 0:
+                logger.info("Data labels table already populated, skipping seed", count=label_count)
+                return
+
+            labels_file = Path(__file__).parent.parent / "data" / "default_labels.json"
+            if not labels_file.exists():
+                logger.warning("Default labels file not found", path=str(labels_file))
+                return
+
+            labels_data = json.loads(labels_file.read_text())
+
+            for label in labels_data:
+                await session.execute(
+                    text(
+                        "INSERT INTO data_labels (id, name, severity, description, color, created_at, updated_at) "
+                        "VALUES (gen_random_uuid(), :name, :severity, :description, :color, NOW(), NOW()) "
+                        "ON CONFLICT (name) DO NOTHING"
+                    ),
+                    {
+                        "name": label["name"],
+                        "severity": label["severity"],
+                        "description": label.get("description"),
+                        "color": label.get("color"),
+                    },
+                )
+
+            await session.commit()
+            logger.info("Default data labels seeded", count=len(labels_data))
+
+    except Exception as e:
+        logger.warning("Default labels seed encountered an error", error=str(e))
+
+
 async def _seed_default_rules():
     """Import default classification rules on first boot if the rules table is empty."""
     import json
@@ -124,14 +210,23 @@ async def _seed_default_rules():
                 return
             admin_id = admin_row[0]
 
+            # Build label name -> id lookup from data_labels table
+            label_rows = await session.execute(text("SELECT id, name FROM data_labels"))
+            label_map = {row[1]: row[0] for row in label_rows.fetchall()}
+
             for rule in rules_data:
+                # Resolve label name to label_id
+                label_name = rule.get("label")
+                label_id = label_map.get(label_name) if label_name else None
+
                 await session.execute(
                     text(
                         "INSERT INTO rules (id, name, description, enabled, type, pattern, regex_flags, "
-                        "keywords, case_sensitive, threshold, weight, classification_labels, severity, "
+                        "keywords, case_sensitive, threshold, weight, priority, label_id, "
+                        "classification_labels, severity, "
                         "category, tags, created_by, created_at, updated_at, match_count) "
                         "VALUES (gen_random_uuid(), :name, :description, :enabled, :type, :pattern, "
-                        ":regex_flags, :keywords, :case_sensitive, :threshold, :weight, "
+                        ":regex_flags, :keywords, :case_sensitive, :threshold, :weight, :priority, :label_id, "
                         ":classification_labels, :severity, :category, :tags, :created_by, NOW(), NOW(), 0) "
                         "ON CONFLICT (name) DO NOTHING"
                     ),
@@ -146,6 +241,8 @@ async def _seed_default_rules():
                         "case_sensitive": rule.get("case_sensitive", False),
                         "threshold": rule.get("threshold", 1),
                         "weight": rule.get("weight", 0.5),
+                        "priority": rule.get("priority", 100),
+                        "label_id": str(label_id) if label_id else None,
                         "classification_labels": json.dumps(rule["classification_labels"]) if rule.get("classification_labels") else None,
                         "severity": rule.get("severity", "medium"),
                         "category": rule.get("category"),
@@ -237,6 +334,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
         # Auto-create tables and seed default admin user on first boot
         await _auto_init_schema_and_admin()
+
+        # Seed default RBAC roles on first boot
+        await _seed_default_roles()
+
+        # Seed default data labels on first boot
+        await _seed_default_labels()
 
         # Seed default classification rules on first boot
         await _seed_default_rules()

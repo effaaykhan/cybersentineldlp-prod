@@ -11,6 +11,9 @@ import {
   ChevronLeft,
   ChevronRight,
   List,
+  AlertTriangle,
+  Search,
+  ClipboardList,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -21,6 +24,9 @@ const navigation = [
   { name: 'Alerts', to: '/alerts', icon: AlertCircle },
   { name: 'Rules', to: '/rules', icon: List },
   { name: 'Policies', to: '/policies', icon: Shield },
+  { name: 'Incidents', to: '/incidents', icon: AlertTriangle },
+  { name: 'Log Explorer', to: '/log-explorer', icon: Search },
+  { name: 'Audit Trail', to: '/audit-trail', icon: ClipboardList },
   { name: 'Settings', to: '/settings', icon: Settings },
 ]
 

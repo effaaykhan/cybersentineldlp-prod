@@ -17,6 +17,7 @@ from app.core.security import get_current_user, require_role
 from app.core.database import get_db, get_mongodb
 from app.core.cache import get_cache, CacheService
 from app.services.policy_service import PolicyService
+from app.services.audit_service import audit_log
 from app.utils.policy_transformer import transform_frontend_config_to_backend
 from app.models.user import User
 from app.models.google_drive import GoogleDriveProtectedFolder, GoogleDriveConnection
@@ -452,6 +453,7 @@ async def create_policy(
             user=current_user.email,
         )
         await invalidate_policy_bundle_cache()
+        await audit_log(current_user.id, "policy.create", {"policy_name": policy.name})
 
         return {
             "id": str(created_policy.id),
@@ -534,6 +536,7 @@ async def update_policy(
             user=current_user.email,
         )
         await invalidate_policy_bundle_cache()
+        await audit_log(current_user.id, "policy.update", {"policy_id": str(policy_id)})
 
         return {
             "id": str(updated_policy.id),
@@ -576,6 +579,7 @@ async def delete_policy(
         user=current_user.email,
     )
     await invalidate_policy_bundle_cache()
+    await audit_log(current_user.id, "policy.delete", {"policy_id": str(policy_id)})
 
     return {"message": "Policy deleted successfully"}
 

@@ -15,7 +15,22 @@
       "Bash(docker inspect:*)",
       "Bash(git config:*)",
       "Bash(git remote set-url:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(docker ps:*)",
+      "Bash(while ! docker ps --format {{.Names}})",
+      "Bash(do sleep:*)",
+      "Bash(done)",
+      "Bash(while ! docker compose ps manager)",
+      "Bash(curl -s -X POST http://localhost:55000/api/v1/classification/classify -H \"Content-Type: application/json\" -d '{\"\"\"\"content\"\"\"\": \"\"\"\"test data 123-45-6789\"\"\"\"}' 2)",
+      "Bash(1 -v)",
+      "Bash(__NEW_LINE_4fb85d48f7407826__ docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c \":*)",
+      "Bash(wc:*)",
+      "Bash(/tmp/dlp_server_analysis.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(npx tsc:*)",
+      "Bash(npx --package typescript tsc --noEmit)",
+      "Bash(node -e \":*)",
+      "Bash(__NEW_LINE_86237181b64cad8b__ python3 -c \":*)"
     ],
     "deny": [],
     "ask": []

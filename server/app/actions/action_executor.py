@@ -794,36 +794,54 @@ class ActionExecutor:
         )
 
     async def execute_create_incident(self, event: Dict, action: Dict) -> ActionResult:
-        """Create incident ticket"""
-        incident_id = f"incident-{uuid.uuid4()}"
+        """Create incident ticket and persist to database"""
+        severity_map = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        severity_str = action.get("severity", "medium")
+        severity_int = severity_map.get(severity_str, 2)
+
         incident_type = action.get("incident_type", "dlp_violation")
-        severity = action.get("severity", "medium")
-        sla_hours = action.get("sla_hours")
+        event_id = event.get("event_id")
+        title = f"DLP Violation: {incident_type}"
+        description = f"Auto-created incident for event {event_id}"
 
-        incident = {
-            "incident_id": incident_id,
-            "event_id": event.get("event_id"),
-            "type": incident_type,
-            "severity": severity,
-            "status": "open",
-            "sla_hours": sla_hours,
-            "created_at": datetime.utcnow().isoformat()
-        }
+        try:
+            from app.core.database import postgres_session_factory
+            if postgres_session_factory:
+                async with postgres_session_factory() as session:
+                    from app.services.incident_service import IncidentService
+                    svc = IncidentService(session)
+                    incident = await svc.create_incident(
+                        event_id=event_id,
+                        severity=severity_int,
+                        title=title,
+                        description=description,
+                    )
+                    await session.commit()
+                    incident_id = str(incident.id)
+                    event["incident_id"] = incident_id
 
-        event["incident_id"] = incident_id
+                    logger.logger.warning(
+                        "incident_created",
+                        incident_id=incident_id,
+                        event_id=event_id,
+                        severity=severity_str
+                    )
 
-        logger.logger.warning(
-            "incident_created",
-            incident_id=incident_id,
-            event_id=event.get("event_id"),
-            type=incident_type,
-            severity=severity
-        )
+                    return ActionResult(
+                        action_type=ActionType.CREATE_INCIDENT,
+                        success=True,
+                        metadata={"incident_id": incident_id, "severity": severity_str}
+                    )
+        except Exception as e:
+            logger.log_error(e, {"action": "create_incident", "event_id": event_id})
 
+        # Fallback if DB not available
+        fallback_id = f"incident-{uuid.uuid4()}"
+        event["incident_id"] = fallback_id
         return ActionResult(
             action_type=ActionType.CREATE_INCIDENT,
             success=True,
-            metadata=incident
+            metadata={"incident_id": fallback_id, "fallback": True}
         )
 
     async def execute_track(self, event: Dict, action: Dict) -> ActionResult:

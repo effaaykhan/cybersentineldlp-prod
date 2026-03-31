@@ -26,6 +26,7 @@ from app.core.database import get_db
 from app.core.cache import get_cache
 from app.services.user_service import UserService
 from app.services.blacklist_service import TokenBlacklistService
+from app.services.audit_service import audit_log
 from app.models.user import User
 
 logger = structlog.get_logger()
@@ -145,6 +146,8 @@ async def login(
     )
 
     logger.info("User logged in", email=user.email, user_id=str(user.id))
+
+    await audit_log(user.id, "auth.login", {"email": user.email})
 
     return {
         "access_token": access_token,
@@ -280,4 +283,7 @@ async def logout(
     expires_in = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     await blacklist_service.add_to_blacklist(token, expires_in)
     logger.info("User logged out", email=current_user.email)
+
+    await audit_log(current_user.id, "auth.logout")
+
     return {"message": "Logged out successfully"}

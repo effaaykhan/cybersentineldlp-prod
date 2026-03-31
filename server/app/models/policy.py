@@ -17,6 +17,7 @@ class Policy(Base):
     name = Column(String(255), nullable=False, unique=True)
     description = Column(Text, nullable=True)
     enabled = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), nullable=False, default="active")  # active, inactive, draft
     priority = Column(Integer, default=100, nullable=False)
     # Frontend format fields (Option B: Extend Database)
     type = Column(String(50), nullable=True)  # 'clipboard_monitoring', 'file_system_monitoring', 'usb_device_monitoring', 'usb_file_transfer_monitoring', 'google_drive_local_monitoring'

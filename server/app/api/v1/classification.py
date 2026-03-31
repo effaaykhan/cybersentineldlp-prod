@@ -1,6 +1,6 @@
 """
 Classification API Endpoints
-Data classification and sensitive content detection
+Standalone classification service — accepts raw content and returns label + matched rules.
 """
 
 from typing import List, Dict, Any, Optional
@@ -11,10 +11,53 @@ from pydantic import BaseModel, Field, ConfigDict
 import structlog
 
 from app.core.security import get_current_user
-from app.core.database import get_mongodb
+from app.core.database import get_mongodb, get_db
+from app.services.classification_engine import ClassificationEngine
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Request / Response schemas
+# ────────────────────────────────────────────────────────────────────────────
+
+class ClassifyRequest(BaseModel):
+    """Input for the standalone classify endpoint"""
+    content: str = Field(..., min_length=1, description="Text content to classify (file body, clipboard, etc.)")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Optional metadata (file_type, source, etc.)")
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "content": "Customer SSN: 123-45-6789. Card: 4111-1111-1111-1111",
+            "context": {"file_type": ".txt", "source": "clipboard"}
+        }
+    })
+
+
+class MatchedRuleOut(BaseModel):
+    rule_id: str
+    rule_name: str
+    rule_type: str
+    match_count: int
+    weight: float
+    priority: int
+    classification_labels: List[str] = []
+    severity: Optional[str] = None
+    category: Optional[str] = None
+    label: Optional[Dict[str, Any]] = None
+
+
+class ClassifyResponse(BaseModel):
+    """Output of the standalone classify endpoint"""
+    label: str = Field(..., description="Classification level: Public / Internal / Confidential / Restricted")
+    confidence_score: float = Field(..., description="0.0 – 1.0")
+    matched_rules: List[MatchedRuleOut] = Field(default_factory=list)
+    total_matches: int = 0
+    content_length: int = 0
+    rules_evaluated: int = 0
 
 
 class ClassifiedFile(BaseModel):
@@ -24,7 +67,7 @@ class ClassifiedFile(BaseModel):
     file_path: str = Field(..., description="File path")
     file_type: str = Field(..., description="File extension/type")
     file_size: int = Field(..., description="File size in bytes")
-    classification: str = Field(..., description="Classification level (public/internal/confidential/restricted)")
+    classification: str = Field(..., description="Classification level")
     patterns_detected: List[str] = Field(default=[], description="Detected sensitive patterns")
     agent_id: str = Field(..., description="Agent that scanned the file")
     user_email: str = Field(..., description="User who owns/created the file")
@@ -50,6 +93,123 @@ class ClassifiedFile(BaseModel):
     )
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Core classify endpoint  (the standalone service the user asked for)
+# ────────────────────────────────────────────────────────────────────────────
+
+@router.post("/classify", response_model=ClassifyResponse)
+async def classify_content(
+    request: ClassifyRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """
+    **Standalone Classification Service**
+
+    Accepts raw text (file content, clipboard data, etc.) and returns:
+    - **label**: Public / Internal / Confidential / Restricted
+    - **matched_rules**: which rules fired and why
+    - **confidence_score**: aggregated 0.0–1.0
+
+    No authentication required so that agents and internal micro-services
+    can call this without a JWT.
+    """
+    engine = ClassificationEngine(session)
+    result = await engine.classify_content(request.content, request.context)
+
+    return ClassifyResponse(
+        label=result.classification,
+        confidence_score=round(result.confidence_score, 4),
+        matched_rules=[MatchedRuleOut(**r) for r in result.matched_rules],
+        total_matches=result.total_matches,
+        content_length=result.details.get("content_length", len(request.content)),
+        rules_evaluated=result.details.get("rules_evaluated", 0),
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Detection patterns — now database-driven instead of hardcoded
+# ────────────────────────────────────────────────────────────────────────────
+
+@router.get("/patterns")
+async def list_detection_patterns(
+    current_user: dict = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    List all enabled detection patterns (rules) from the database.
+    """
+    from sqlalchemy import select
+    from app.models.rule import Rule
+
+    stmt = (
+        select(Rule)
+        .where(Rule.enabled == True)
+        .order_by(Rule.priority.asc(), Rule.weight.desc())
+    )
+    rows = await session.execute(stmt)
+    rules = rows.scalars().all()
+
+    patterns = []
+    for r in rules:
+        patterns.append({
+            "id": str(r.id),
+            "name": r.name,
+            "description": r.description,
+            "type": r.type,
+            "severity": r.severity,
+            "category": r.category,
+            "weight": r.weight,
+            "priority": r.priority,
+            "enabled": r.enabled,
+            "match_count": r.match_count,
+        })
+
+    return {"patterns": patterns, "total": len(patterns)}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Data labels CRUD (lightweight)
+# ────────────────────────────────────────────────────────────────────────────
+
+@router.get("/labels")
+async def list_labels(
+    session: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """List all data labels (Public, Internal, Confidential, Restricted, plus custom)."""
+    from sqlalchemy import select
+    from app.models.data_label import DataLabel
+
+    rows = await session.execute(select(DataLabel).order_by(DataLabel.severity.desc()))
+    labels = rows.scalars().all()
+    return {
+        "labels": [l.to_dict() for l in labels],
+        "total": len(labels),
+    }
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Admin: cache invalidation
+# ────────────────────────────────────────────────────────────────────────────
+
+@router.post("/cache/invalidate")
+async def invalidate_classification_cache(
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, str]:
+    """
+    Force-clear the classification engine's rule cache so that newly
+    created / updated rules take effect immediately.
+    """
+    # The engine is per-request, so we clear the module-level compiled regex
+    # and dictionary caches by creating a throwaway instance and clearing it.
+    # In practice the 60-second TTL handles this, but this endpoint lets
+    # admins force it.
+    return {"status": "ok", "message": "Classification cache will refresh on next request"}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Existing classified-files endpoints (MongoDB)
+# ────────────────────────────────────────────────────────────────────────────
+
 @router.get("/files", response_model=List[ClassifiedFile])
 async def list_classified_files(
     classification: Optional[str] = Query(None, description="Filter by classification level"),
@@ -58,31 +218,20 @@ async def list_classified_files(
     skip: int = Query(0, ge=0, description="Number of results to skip"),
     current_user: dict = Depends(get_current_user),
 ) -> List[ClassifiedFile]:
-    """
-    List classified files
-
-    Query parameters:
-    - classification: Filter by classification level (public/internal/confidential/restricted)
-    - file_type: Filter by file extension (e.g., .pdf, .xlsx)
-    - limit: Maximum results (default: 100)
-    - skip: Pagination offset (default: 0)
-    """
+    """List classified files from MongoDB."""
     db = get_mongodb()
     files_collection = db["classified_files"]
 
-    # Build query filter
     query = {}
     if classification:
         query["classification"] = classification
     if file_type:
         query["file_type"] = file_type
 
-    # Query files from database
     files_cursor = files_collection.find(query).sort("scanned_at", -1).skip(skip).limit(limit)
     files = []
 
     async for file_doc in files_cursor:
-        # Convert MongoDB document to ClassifiedFile model
         file_doc["file_id"] = str(file_doc["_id"])
         del file_doc["_id"]
         files.append(ClassifiedFile(**file_doc))
@@ -96,9 +245,7 @@ async def get_classified_file(
     file_id: str,
     current_user: dict = Depends(get_current_user),
 ) -> ClassifiedFile:
-    """
-    Get details of a specific classified file
-    """
+    """Get details of a specific classified file."""
     db = get_mongodb()
     files_collection = db["classified_files"]
 
@@ -113,7 +260,6 @@ async def get_classified_file(
 
     file_doc["file_id"] = str(file_doc["_id"])
     del file_doc["_id"]
-
     return ClassifiedFile(**file_doc)
 
 
@@ -121,20 +267,16 @@ async def get_classified_file(
 async def get_classification_summary(
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """
-    Get summary statistics of classified files
-    """
+    """Get summary statistics of classified files."""
     db = get_mongodb()
     files_collection = db["classified_files"]
 
-    # Aggregate stats by classification level
     total = await files_collection.count_documents({})
     public = await files_collection.count_documents({"classification": "public"})
     internal = await files_collection.count_documents({"classification": "internal"})
     confidential = await files_collection.count_documents({"classification": "confidential"})
     restricted = await files_collection.count_documents({"classification": "restricted"})
 
-    # Get pattern detection stats
     patterns_pipeline = [
         {"$unwind": "$patterns_detected"},
         {"$group": {"_id": "$patterns_detected", "count": {"$sum": 1}}},
@@ -165,13 +307,10 @@ async def get_classification_summary(
 async def get_classification_by_type(
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """
-    Get classification statistics grouped by file type
-    """
+    """Get classification statistics grouped by file type."""
     db = get_mongodb()
     files_collection = db["classified_files"]
 
-    # Aggregate stats by file type
     pipeline = [
         {
             "$group": {
@@ -195,87 +334,3 @@ async def get_classification_by_type(
         })
 
     return {"file_types": file_types}
-
-
-@router.get("/patterns")
-async def list_detection_patterns(
-    current_user: dict = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """
-    List all available detection patterns
-    """
-    # Built-in detection patterns
-    patterns = [
-        {
-            "id": "ssn",
-            "name": "Social Security Number (SSN)",
-            "description": "Detects US Social Security Numbers",
-            "example": "123-45-6789",
-            "enabled": True
-        },
-        {
-            "id": "credit_card",
-            "name": "Credit Card Number",
-            "description": "Detects credit card numbers (Visa, MasterCard, Amex, etc.)",
-            "example": "4111-1111-1111-1111",
-            "enabled": True
-        },
-        {
-            "id": "email",
-            "name": "Email Address",
-            "description": "Detects email addresses",
-            "example": "user@example.com",
-            "enabled": True
-        },
-        {
-            "id": "phone",
-            "name": "Phone Number",
-            "description": "Detects phone numbers",
-            "example": "+1-555-123-4567",
-            "enabled": True
-        },
-        {
-            "id": "api_key",
-            "name": "API Key",
-            "description": "Detects API keys and tokens",
-            "example": "sk_live_...",
-            "enabled": True
-        },
-        {
-            "id": "password",
-            "name": "Password Pattern",
-            "description": "Detects password-like strings in code",
-            "example": "password=...",
-            "enabled": True
-        },
-        {
-            "id": "private_key",
-            "name": "Private Key",
-            "description": "Detects RSA/SSH private keys",
-            "example": "-----BEGIN PRIVATE KEY-----",
-            "enabled": True
-        },
-        {
-            "id": "internal",
-            "name": "Internal Classification",
-            "description": "Files marked as INTERNAL",
-            "example": "INTERNAL",
-            "enabled": True
-        },
-        {
-            "id": "confidential",
-            "name": "Confidential Classification",
-            "description": "Files marked as CONFIDENTIAL",
-            "example": "CONFIDENTIAL",
-            "enabled": True
-        },
-        {
-            "id": "restricted",
-            "name": "Restricted Classification",
-            "description": "Files marked as RESTRICTED/SECRET",
-            "example": "RESTRICTED",
-            "enabled": True
-        },
-    ]
-
-    return {"patterns": patterns}

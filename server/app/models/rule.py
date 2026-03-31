@@ -4,8 +4,9 @@ Manages detection rules for data classification
 """
 
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, Integer, JSON, Text, Float
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, Boolean, DateTime, Integer, JSON, Text, Float, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.orm import relationship
 import uuid
 
 from app.core.database import Base
@@ -42,13 +43,21 @@ class Rule(Base):
     dictionary_path = Column(String(500), nullable=True)
     dictionary_hash = Column(String(64), nullable=True)  # SHA256 of dictionary file
 
+    # Applicable file types (NULL = all types)
+    file_types = Column(ARRAY(String), nullable=True)  # e.g., ['.xlsx', '.pdf', '.docx']
+
     # Detection configuration
     threshold = Column(Integer, default=1, nullable=False)  # Minimum matches required
     weight = Column(Float, default=0.5, nullable=False)  # Weight for confidence scoring (0.0 - 1.0)
+    priority = Column(Integer, default=100, nullable=False)  # Lower = higher priority
 
     # Classification impact
+    label_id = Column(UUID(as_uuid=True), ForeignKey("data_labels.id", ondelete="SET NULL"), nullable=True, index=True)
     classification_labels = Column(JSON, nullable=True)  # e.g., ['PII', 'FINANCIAL', 'CONFIDENTIAL']
     severity = Column(String(20), nullable=True)  # 'low', 'medium', 'high', 'critical'
+
+    # Relationships
+    label = relationship("DataLabel", backref="rules", foreign_keys=[label_id])
 
     # Metadata
     category = Column(String(100), nullable=True)  # e.g., 'PII', 'Financial', 'Healthcare', 'Source Code'

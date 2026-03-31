@@ -465,4 +465,93 @@ export const changePassword = async (
   return data
 }
 
+// ── Incident Management ──
+export async function getIncidents(params?: { skip?: number; limit?: number; severity?: number; status?: string; assigned_to?: string }) {
+  const { data } = await apiClient.get('/incidents/', { params })
+  return data
+}
+
+export async function getIncident(id: string) {
+  const { data } = await apiClient.get(`/incidents/${id}`)
+  return data
+}
+
+export async function createIncident(payload: { event_id?: string; severity: number; title: string; description?: string }) {
+  const { data } = await apiClient.post('/incidents/', payload)
+  return data
+}
+
+export async function updateIncident(id: string, payload: { status?: string; assigned_to?: string }) {
+  const { data } = await apiClient.patch(`/incidents/${id}`, payload)
+  return data
+}
+
+export async function getIncidentComments(id: string) {
+  const { data } = await apiClient.get(`/incidents/${id}/comments`)
+  return data
+}
+
+export async function addIncidentComment(id: string, comment: string) {
+  const { data } = await apiClient.post(`/incidents/${id}/comments`, { comment })
+  return data
+}
+
+export async function getIncidentStats() {
+  const { data } = await apiClient.get('/incidents/statistics')
+  return data
+}
+
+// ── Audit Logs ──
+export async function getAuditLogs(params?: { skip?: number; limit?: number; user_id?: string; action?: string; start_date?: string; end_date?: string }) {
+  const { data } = await apiClient.get('/audit-logs/', { params })
+  return data
+}
+
+export async function getAuditActions() {
+  const { data } = await apiClient.get('/audit-logs/actions')
+  return data
+}
+
+// ── Fingerprints ──
+export async function getFingerprints(params?: { skip?: number; limit?: number; label_id?: string }) {
+  const { data } = await apiClient.get('/fingerprints/', { params })
+  return data
+}
+
+export async function addFingerprint(payload: { hash: string; file_name?: string; label_id?: string }) {
+  const { data } = await apiClient.post('/fingerprints/', payload)
+  return data
+}
+
+export async function checkFingerprint(hash: string) {
+  const { data } = await apiClient.post('/fingerprints/check', { hash })
+  return data
+}
+
+export async function deleteFingerprint(id: string) {
+  const { data } = await apiClient.delete(`/fingerprints/${id}`)
+  return data
+}
+
+// ── Scan Jobs ──
+export async function getScanJobs(params?: { skip?: number; limit?: number; status?: string }) {
+  const { data } = await apiClient.get('/scans/', { params })
+  return data
+}
+
+export async function createScanJob(target: string) {
+  const { data } = await apiClient.post('/scans/', { target })
+  return data
+}
+
+export async function getScanJob(id: string) {
+  const { data } = await apiClient.get(`/scans/${id}`)
+  return data
+}
+
+export async function getScanResults(jobId: string, params?: { skip?: number; limit?: number }) {
+  const { data } = await apiClient.get(`/scans/${jobId}/results`, { params })
+  return data
+}
+
 export default apiClient

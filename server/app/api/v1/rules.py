@@ -14,6 +14,7 @@ from app.core.security import get_current_user, require_role
 from app.core.database import get_db
 from app.services.rule_service import RuleService
 from app.services.classification_engine import ClassificationEngine
+from app.services.audit_service import audit_log
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger()
@@ -163,6 +164,8 @@ async def create_rule(
             enabled=rule.enabled,
         )
 
+        await audit_log(current_user["sub"], "rule.create", {"rule_name": rule.name})
+
         return RuleResponse(**created_rule.to_dict())
 
     except ValueError as e:
@@ -288,6 +291,8 @@ async def delete_rule(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Rule {rule_id} not found"
         )
+
+    await audit_log(current_user["sub"], "rule.delete", {"rule_id": str(rule_id)})
 
 
 @router.post("/{rule_id}/toggle", response_model=RuleResponse)

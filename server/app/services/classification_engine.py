@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.rule import Rule
+from app.models.data_label import DataLabel
 
 logger = structlog.get_logger()
 
@@ -85,19 +86,39 @@ class ClassificationEngine:
         total_weight = 0.0
         total_matches = 0
 
+        # Check file fingerprints for exact hash match
+        try:
+            fp_match = await self._check_fingerprint(content)
+            if fp_match:
+                matched_rules.append(fp_match)
+                total_weight += 1.0  # Fingerprint match = highest confidence
+                total_matches += 1
+        except Exception as e:
+            logger.warning("Fingerprint check failed", error=str(e))
+
         for rule in rules:
             matches, match_count = await self._evaluate_rule(rule, content, context)
             if matches and match_count >= rule.threshold:
-                matched_rules.append({
+                rule_result = {
                     "rule_id": str(rule.id),
                     "rule_name": rule.name,
                     "rule_type": rule.type,
                     "match_count": match_count,
                     "weight": rule.weight,
+                    "priority": rule.priority,
                     "classification_labels": rule.classification_labels or [],
                     "severity": rule.severity,
                     "category": rule.category,
-                })
+                }
+                # Include linked data_label info if present
+                if rule.label:
+                    rule_result["label"] = {
+                        "id": str(rule.label.id),
+                        "name": rule.label.name,
+                        "severity": rule.label.severity,
+                        "color": rule.label.color,
+                    }
+                matched_rules.append(rule_result)
                 # Accumulate weighted score
                 # Use min to cap contribution at weight (multiple matches don't exceed weight)
                 contribution = min(rule.weight, rule.weight * (match_count / rule.threshold))
@@ -130,13 +151,57 @@ class ClassificationEngine:
             }
         )
 
+    async def _check_fingerprint(self, content: str) -> Optional[Dict[str, Any]]:
+        """Check content hash against known file fingerprints"""
+        import hashlib
+        from app.models.file_fingerprint import FileFingerprint
+        from sqlalchemy.orm import selectinload
+
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        stmt = (
+            select(FileFingerprint)
+            .where(FileFingerprint.hash == content_hash)
+            .options(selectinload(FileFingerprint.label))
+        )
+        result = await self.session.execute(stmt)
+        fp = result.scalar_one_or_none()
+
+        if fp:
+            rule_result = {
+                "rule_id": str(fp.id),
+                "rule_name": f"Fingerprint: {fp.file_name or fp.hash[:16]}",
+                "rule_type": "fingerprint",
+                "match_count": 1,
+                "weight": 1.0,
+                "priority": 0,
+                "classification_labels": [],
+                "severity": "critical",
+                "category": "Fingerprint Match",
+            }
+            if fp.label:
+                rule_result["label"] = {
+                    "id": str(fp.label.id),
+                    "name": fp.label.name,
+                    "severity": fp.label.severity,
+                    "color": fp.label.color,
+                }
+            logger.info("Fingerprint match found", hash=content_hash[:16], file_name=fp.file_name)
+            return rule_result
+        return None
+
     async def _get_cached_rules(self) -> List[Rule]:
-        """Get enabled rules with caching"""
+        """Get enabled rules with caching, ordered by priority (lower = higher priority)"""
         if self._cache_expires_at and self._cache_expires_at > datetime.utcnow() and self._cached_rules:
             return self._cached_rules
 
-        # Fetch enabled rules from database
-        stmt = select(Rule).where(Rule.enabled == True).order_by(Rule.weight.desc())
+        # Fetch enabled rules ordered by priority, then weight descending
+        from sqlalchemy.orm import selectinload
+        stmt = (
+            select(Rule)
+            .where(Rule.enabled == True)
+            .options(selectinload(Rule.label))
+            .order_by(Rule.priority.asc(), Rule.weight.desc())
+        )
         result = await self.session.execute(stmt)
         rules = result.scalars().all()
 

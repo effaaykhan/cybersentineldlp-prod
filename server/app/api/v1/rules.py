@@ -4,10 +4,13 @@ CRUD operations and testing for classification rules
 """
 
 from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
+import uuid as uuid_module
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
 from pydantic import BaseModel, Field, ConfigDict, field_validator
+from sqlalchemy import select
 import structlog
 
 from app.core.security import get_current_user, require_role
@@ -15,6 +18,7 @@ from app.core.database import get_db
 from app.services.rule_service import RuleService
 from app.services.classification_engine import ClassificationEngine
 from app.services.audit_service import audit_log
+from app.models.rule import Rule
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger()
@@ -142,6 +146,30 @@ async def create_rule(
 
     Requires admin role.
     """
+    # Validate regex pattern before saving to database
+    if rule.type == "regex" and rule.pattern:
+        import re as _re
+        try:
+            flags = 0
+            for flag_name in (rule.regex_flags or []):
+                if hasattr(_re, flag_name):
+                    flags |= getattr(_re, flag_name)
+            _re.compile(rule.pattern, flags)
+        except _re.error as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid regex pattern: {e}",
+            )
+
+    # Validate dictionary file exists
+    if rule.type == "dictionary" and rule.dictionary_path:
+        from pathlib import Path as _Path
+        if not _Path(rule.dictionary_path).exists():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Dictionary file not found: {rule.dictionary_path}",
+            )
+
     service = RuleService(session)
 
     try:
@@ -333,12 +361,35 @@ async def test_rules(
     """
     engine = ClassificationEngine(session)
 
-    # If specific rule_ids provided, filter to those rules only
+    # If specific rule_ids provided, filter and test only those rules
     if test_request.rule_ids:
-        # TODO: Filter to specific rules - for now, use all rules
-        pass
+        from app.services.classification_engine import _module_cache, clear_module_cache
+        from sqlalchemy.orm import selectinload
 
-    result = await engine.classify_content(test_request.content)
+        # Load the specific rules
+        stmt = (
+            select(Rule)
+            .where(Rule.id.in_([uuid_module.UUID(rid) for rid in test_request.rule_ids]))
+            .where(Rule.enabled == True)
+            .options(selectinload(Rule.label))
+        )
+        rows = await session.execute(stmt)
+        subset_rules = list(rows.scalars().all())
+
+        # Temporarily override the module cache with only the selected rules
+        old_rules = _module_cache.get("rules", [])
+        old_expires = _module_cache.get("expires_at")
+        _module_cache["rules"] = subset_rules
+        _module_cache["expires_at"] = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+        try:
+            result = await engine.classify_content(test_request.content)
+        finally:
+            # Restore the original cache
+            _module_cache["rules"] = old_rules
+            _module_cache["expires_at"] = old_expires
+    else:
+        result = await engine.classify_content(test_request.content)
 
     return RuleTestResponse(
         classification=result.classification,
@@ -398,3 +449,59 @@ async def bulk_import_rules(
         "created_rules": created_rules,
         "errors": errors,
     }
+
+
+# ─── Regex Validation Endpoint ─────────────────────────────────────────────
+
+
+class RegexValidateRequest(BaseModel):
+    pattern: str = Field(..., description="Regex pattern to validate")
+    test_content: Optional[str] = Field(None, description="Optional content to test against")
+    flags: Optional[List[str]] = Field(None, description="Regex flags (IGNORECASE, MULTILINE, etc.)")
+
+
+@router.post("/validate-regex")
+async def validate_regex(
+    request: RegexValidateRequest,
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Validate a regex pattern and optionally test it against sample content.
+    Returns whether the pattern is valid, any matches found, and performance info.
+    """
+    import re as _re
+    import time
+
+    flags = 0
+    for flag_name in (request.flags or []):
+        if hasattr(_re, flag_name):
+            flags |= getattr(_re, flag_name)
+
+    # Validate compilation
+    try:
+        compiled = _re.compile(request.pattern, flags)
+    except _re.error as e:
+        return {
+            "valid": False,
+            "error": str(e),
+            "matches": [],
+            "match_count": 0,
+        }
+
+    result: Dict[str, Any] = {"valid": True, "error": None, "matches": [], "match_count": 0}
+
+    # Test against content if provided
+    if request.test_content:
+        start = time.monotonic()
+        try:
+            matches = compiled.findall(request.test_content[:100_000])  # cap at 100K
+            elapsed_ms = (time.monotonic() - start) * 1000
+            # Show first 20 matches for preview
+            result["matches"] = [str(m) for m in matches[:20]]
+            result["match_count"] = len(matches)
+            result["elapsed_ms"] = round(elapsed_ms, 2)
+        except Exception as e:
+            result["valid"] = True  # Pattern is valid, execution failed
+            result["error"] = f"Execution error: {e}"
+
+    return result

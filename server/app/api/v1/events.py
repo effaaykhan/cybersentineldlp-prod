@@ -6,7 +6,7 @@ Query, filter, and manage DLP events
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException, status, Request
 from pydantic import BaseModel, Field
 import structlog
 
@@ -104,79 +104,163 @@ class EventQueryParams(BaseModel):
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_event(
     event: EventCreate,
+    request: Request,
+    background_tasks: BackgroundTasks = None,
 ) -> Dict[str, Any]:
     """
-    Create a new DLP event (public endpoint - no auth required for agents)
+    Create a new DLP event.  Requires ``X-Agent-Key`` header from a registered agent.
+
+    Flow:
+      1. Authenticate agent (fast)
+      2. Insert raw event into MongoDB (fast)
+      3. Queue background processing (classify → evaluate → execute)
+
+    The API returns immediately after step 2.  Step 3 runs asynchronously
+    so the agent is not blocked by classification or webhook latency.
     """
+    if background_tasks is None:
+        background_tasks = BackgroundTasks()
+
+    from app.api.v1.agents import verify_agent_key
+    await verify_agent_key(request)
+
     db = get_mongodb()
     events_collection = db["dlp_events"]
 
-    processor = get_event_processor()
-    processed_event = await processor.process_event(_build_processor_payload(event))
-
-    # Build event title
-    event_title = _build_event_title(event, processed_event)
-
-    # Create event document
+    # ── Step 1: Build raw event doc (NO processing yet) ────────────────
     event_doc: Dict[str, Any] = {
         "id": event.event_id,
-        "title": event_title,
-        "timestamp": datetime.utcnow(),
+        "title": None,                 # Populated by background processor
+        "timestamp": datetime.now(timezone.utc),
         "event_type": event.event_type,
-        "severity": processed_event.get("event", {}).get("severity", event.severity),
+        "severity": event.severity,
         "agent_id": event.agent_id,
         "source": event.source_type,
         "source_type": event.source_type,
         "user_email": event.user_email or "agent@system",
         "classification_level": event.classification_level,
-        "classification_score": event.classification_score if hasattr(event, 'classification_score') else 0.0,
-        "classification_labels": event.classification_labels if hasattr(event, 'classification_labels') else [],
+        "classification_score": getattr(event, "classification_score", 0.0) or 0.0,
+        "classification_labels": getattr(event, "classification_labels", []) or [],
         "policy_id": None,
-        "action_taken": processed_event.get("event", {}).get("action", event.action or "logged"),
+        "action_taken": event.action or "logged",
         "file_path": event.file_path,
         "source_path": event.source_path or event.file_path,
         "destination": event.destination,
         "destination_type": event.destination_type,
         "clipboard_content": event.content if event.event_type.lower() == "clipboard" else None,
-        "blocked": processed_event.get("blocked", event.blocked if event.blocked is not None else False),
-        "quarantined": processed_event.get("quarantined", False),
-        "metadata": processed_event.get("metadata", {}),
-        "policy_version": processed_event.get("policy_version", event.policy_version),
+        "blocked": event.blocked if event.blocked is not None else False,
+        "quarantined": False,
+        "metadata": {},
+        "policy_version": event.policy_version,
         "content": event.content,
+        "processing_status": "pending",   # Tracks background processing
     }
-    
-    # Add optional fields if provided
+
     if event.event_subtype:
         event_doc["event_subtype"] = event.event_subtype
     if event.description:
         event_doc["description"] = event.description
 
-    # Merge processed event data
-    _merge_processed_event(event_doc, processed_event)
-
-    # Deduplication: Check if event with same ID already exists
-    existing = await events_collection.find_one({"id": event.event_id})
-    if existing:
-        logger.debug(
-            "Duplicate event detected, skipping insert",
-            event_id=event.event_id,
-            agent_id=event.agent_id
-        )
-        return {"status": "duplicate", "event_id": event.event_id}
-    
-    # Insert into database
-    await events_collection.insert_one(event_doc)
-
-    logger.info(
-        "Event created",
-        event_id=event.event_id,
-        agent_id=event.agent_id,
-        event_type=event.event_type,
-        action_taken=event_doc.get("action_taken"),
-        action_received=event.action,
-        blocked=event_doc.get("blocked")
+    # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
+    result = await events_collection.update_one(
+        {"id": event.event_id},
+        {"$setOnInsert": event_doc},
+        upsert=True,
     )
-    return {"status": "success", "event_id": event.event_id}
+    if result.matched_count > 0:
+        return {"status": "duplicate", "event_id": event.event_id}
+
+    # ── Step 3: Queue background processing ────────────────────────────
+    background_tasks.add_task(
+        _process_event_background,
+        event_id=event.event_id,
+        payload=_build_processor_payload(event),
+    )
+
+    return {"status": "accepted", "event_id": event.event_id}
+
+
+async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> None:
+    """
+    Background worker: classify content, evaluate policies, execute actions.
+    Updates the MongoDB event document with results.
+    Retries up to 3 times on transient failures.
+    """
+    MAX_RETRIES = 3
+    db = get_mongodb()
+    events_collection = db["dlp_events"]
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            processor = get_event_processor()
+            processed = await processor.process_event(payload)
+
+            # Update the raw event doc with processing results
+            update_fields: Dict[str, Any] = {
+                "processing_status": "completed",
+                "processed_at": datetime.now(timezone.utc),
+            }
+
+            # Merge processed results
+            if processed.get("event"):
+                ev = processed["event"]
+                if ev.get("severity"):
+                    update_fields["severity"] = ev["severity"]
+                if ev.get("action"):
+                    update_fields["action_taken"] = ev["action"]
+
+            if processed.get("blocked"):
+                update_fields["blocked"] = True
+            if processed.get("quarantined"):
+                update_fields["quarantined"] = True
+            if processed.get("classification_metadata"):
+                update_fields["classification_metadata"] = processed["classification_metadata"]
+                cm = processed["classification_metadata"]
+                if cm.get("classification_level"):
+                    update_fields["classification_level"] = cm["classification_level"]
+                if cm.get("confidence_score") is not None:
+                    update_fields["classification_score"] = cm["confidence_score"]
+            if processed.get("matched_policies"):
+                update_fields["matched_policies"] = processed["matched_policies"]
+            if processed.get("metadata"):
+                update_fields["metadata"] = processed["metadata"]
+
+            await events_collection.update_one(
+                {"id": event_id},
+                {"$set": update_fields},
+            )
+
+            logger.info("Background event processing complete", event_id=event_id)
+            return
+
+        except Exception as e:
+            logger.warning(
+                "Background event processing failed",
+                event_id=event_id,
+                attempt=attempt,
+                error=str(e),
+            )
+            if attempt < MAX_RETRIES:
+                import asyncio
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                # Mark as failed after all retries
+                try:
+                    await events_collection.update_one(
+                        {"id": event_id},
+                        {"$set": {
+                            "processing_status": "failed",
+                            "processing_error": str(e),
+                            "processed_at": datetime.now(timezone.utc),
+                        }},
+                    )
+                except Exception:
+                    pass
+                logger.error(
+                    "Background event processing exhausted retries",
+                    event_id=event_id,
+                    error=str(e),
+                )
 
 
 def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:

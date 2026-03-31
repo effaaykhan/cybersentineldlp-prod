@@ -3,12 +3,16 @@ ClassifiedFile Database Model (PostgreSQL)
 Represents files that have been scanned and classified by the DLP system
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, Integer, Float, Text, JSON, Index
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
 from app.core.database import Base
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 class ClassifiedFile(Base):
@@ -18,7 +22,7 @@ class ClassifiedFile(Base):
     file_id = Column(String(64), unique=True, nullable=False, index=True)
 
     # File information
-    file_name = Column(String(255), nullable=False)
+    file_name = Column(Text, nullable=False)
     file_path = Column(Text, nullable=False)
     file_size = Column(Integer, nullable=False)
     file_type = Column(String(100), nullable=True)  # pdf, docx, xlsx, txt, etc.
@@ -78,7 +82,7 @@ class ClassifiedFile(Base):
     quarantined = Column(Boolean, default=False, nullable=False)
     quarantine_path = Column(Text, nullable=True)
     quarantine_reason = Column(Text, nullable=True)
-    quarantined_at = Column(DateTime, nullable=True)
+    quarantined_at = Column(DateTime(timezone=True), nullable=True)
 
     # Access control
     access_restricted = Column(Boolean, default=False, nullable=False)
@@ -87,7 +91,7 @@ class ClassifiedFile(Base):
     # Review status
     reviewed = Column(Boolean, default=False, nullable=False)
     reviewed_by = Column(UUID(as_uuid=True), nullable=True)
-    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
     review_notes = Column(Text, nullable=True)
 
     # Additional metadata
@@ -97,13 +101,13 @@ class ClassifiedFile(Base):
     # Processing status
     scan_status = Column(String(20), nullable=False, default="completed")  # pending, scanning, completed, failed, skipped
     scan_duration_ms = Column(Integer, nullable=True)
-    last_scanned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_scanned_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
 
     # Timestamps
-    first_seen = Column(DateTime, nullable=False, default=datetime.utcnow)
-    last_modified = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    first_seen = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    last_modified = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     # Indexes for common queries
     __table_args__ = (

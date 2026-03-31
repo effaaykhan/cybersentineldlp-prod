@@ -3,12 +3,16 @@ Agent Database Model (PostgreSQL)
 Represents DLP agents deployed on endpoints
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Boolean, DateTime, Integer, JSON
 from sqlalchemy.dialects.postgresql import UUID, INET
 import uuid
 
 from app.core.database import Base
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 class Agent(Base):
@@ -18,37 +22,40 @@ class Agent(Base):
     agent_id = Column(String(64), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     hostname = Column(String(255), nullable=False)
-    os = Column(String(50), nullable=False)  # windows, linux, macos
+    os = Column(String(50), nullable=False)
     os_version = Column(String(100), nullable=True)
     ip_address = Column(INET, nullable=False)
     version = Column(String(50), nullable=False, default="1.0.0")
-    status = Column(String(20), nullable=False, default="offline")  # online, offline, warning, error
+    status = Column(String(20), nullable=False, default="offline")
 
     # Agent configuration
     config = Column(JSON, nullable=True)
 
     # Monitoring capabilities
-    capabilities = Column(JSON, nullable=True)  # {"file_monitoring": true, "clipboard": true, "usb": true}
+    capabilities = Column(JSON, nullable=True)
 
     # Statistics
     total_events = Column(Integer, default=0, nullable=False)
     total_violations = Column(Integer, default=0, nullable=False)
 
     # Heartbeat and health
-    last_seen = Column(DateTime, nullable=True)
-    last_heartbeat = Column(DateTime, nullable=True)
-    health_status = Column(JSON, nullable=True)  # CPU, memory, disk usage
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    last_heartbeat = Column(DateTime(timezone=True), nullable=True)
+    health_status = Column(JSON, nullable=True)
+
+    # Soft delete
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
     registered_by = Column(UUID(as_uuid=True), nullable=True)
 
     def __repr__(self):
         return f"<Agent {self.agent_id} - {self.name}>"
 
     def to_dict(self):
-        """Convert agent to dictionary"""
+        from app.core.timezone import format_iso
         return {
             "id": str(self.id),
             "agent_id": self.agent_id,
@@ -63,9 +70,9 @@ class Agent(Base):
             "capabilities": self.capabilities,
             "total_events": self.total_events,
             "total_violations": self.total_violations,
-            "last_seen": self.last_seen.isoformat() if self.last_seen else None,
-            "last_heartbeat": self.last_heartbeat.isoformat() if self.last_heartbeat else None,
+            "last_seen": format_iso(self.last_seen),
+            "last_heartbeat": format_iso(self.last_heartbeat),
             "health_status": self.health_status,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": format_iso(self.created_at),
+            "updated_at": format_iso(self.updated_at),
         }

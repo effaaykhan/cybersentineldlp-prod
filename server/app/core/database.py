@@ -88,6 +88,15 @@ async def init_databases() -> None:
             database=settings.MONGODB_DB,
         )
 
+        # Ensure unique index on event id for deduplication safety
+        try:
+            events_col = mongodb_database["dlp_events"]
+            await events_col.create_index("id", unique=True, background=True, sparse=True)
+            logger.info("MongoDB unique index on dlp_events.id ensured")
+        except Exception as idx_err:
+            # Duplicate key errors on existing data — log but don't crash
+            logger.warning("MongoDB index creation issue (non-fatal)", error=str(idx_err))
+
     except Exception as e:
         logger.error("Failed to connect to MongoDB", error=str(e))
         raise

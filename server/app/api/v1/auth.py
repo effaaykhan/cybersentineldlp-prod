@@ -86,7 +86,7 @@ async def register(
             role="VIEWER",  # Default role for new users
         )
 
-        logger.info("User registered", email=user.email, user_id=str(user.id))
+        logger.info("User registered", user_id=str(user.id))
 
         return {
             "message": "User registered successfully",
@@ -129,6 +129,14 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Check if password change is required
+    if getattr(user, "must_change_password", False):
+        logger.info("Login requires password change", email=user.email)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required. Use /api/v1/auth/change-password to set a new password before logging in.",
+        )
+
     # Create tokens
     access_token = create_access_token(
         data={
@@ -145,9 +153,9 @@ async def login(
         }
     )
 
-    logger.info("User logged in", email=user.email, user_id=str(user.id))
+    logger.info("User logged in", user_id=str(user.id))
 
-    await audit_log(user.id, "auth.login", {"email": user.email})
+    await audit_log(user.id, "auth.login", {})
 
     return {
         "access_token": access_token,
@@ -264,7 +272,16 @@ async def change_password(
             detail="Failed to update password",
         )
 
-    logger.info("Password changed", email=user.email)
+    # Clear must_change_password flag if it was set
+    if getattr(user, "must_change_password", False):
+        from sqlalchemy import text as sa_text
+        await db.execute(
+            sa_text("UPDATE users SET must_change_password = FALSE WHERE id = :uid"),
+            {"uid": user.id},
+        )
+        await db.commit()
+
+    logger.info("Password changed", user_id=str(user.id))
     return {"message": "Password changed successfully"}
 
 

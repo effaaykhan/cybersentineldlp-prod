@@ -27,6 +27,31 @@ router = APIRouter()
 AGENT_TIMEOUT_MINUTES = 5
 
 
+async def verify_agent_key(request: Request) -> str:
+    """Verify the X-Agent-Key header matches the registered agent's API key.
+
+    Returns the agent_id from the verified key record.
+    Raises 401 if the key is missing or invalid.
+    """
+    agent_key = request.headers.get("X-Agent-Key")
+    if not agent_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing X-Agent-Key header",
+        )
+
+    db = get_mongodb()
+    agents_collection = db["agents"]
+    agent_doc = await agents_collection.find_one({"api_key": agent_key})
+    if not agent_doc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent API key",
+        )
+
+    return agent_doc["agent_id"]
+
+
 class AgentBase(BaseModel):
     """Base agent model"""
     name: str = Field(..., description="Agent name/hostname")
@@ -190,14 +215,20 @@ async def list_all_agents(
     return agents
 
 
-@router.post("/", response_model=Agent, status_code=status.HTTP_201_CREATED)
+@router.post("/", status_code=status.HTTP_201_CREATED)
 async def register_agent(
     request: Request,
     agent: AgentCreate,
-) -> Agent:
+) -> Dict[str, Any]:
     """
-    Register a new DLP agent (public endpoint - no auth required for agent self-registration)
+    Register a new DLP agent.
+
+    Returns the agent record **and** a one-time ``api_key``.  The agent
+    must store this key and send it as ``X-Agent-Key`` header on all
+    subsequent requests (events, heartbeat, policy sync).
     """
+    import secrets
+
     db = get_mongodb()
     agents_collection = db["agents"]
 
@@ -210,6 +241,9 @@ async def register_agent(
         agent_id = provided_agent_id
     else:
         agent_id = f"{agent.os.upper()}-{agent.name.replace(' ', '-')}"
+
+    # Generate a secure API key for this agent
+    api_key = f"csak_{secrets.token_urlsafe(32)}"
 
     # Create agent document with custom agent_id
     now = datetime.now(timezone.utc)
@@ -228,6 +262,7 @@ async def register_agent(
         "policy_sync_status": "never",
         "policy_last_synced_at": None,
         "policy_sync_error": None,
+        "api_key": api_key,
     }
 
     # Upsert - update if exists, insert if new
@@ -239,7 +274,14 @@ async def register_agent(
     )
 
     logger.info("Agent registered", agent_id=agent_id, name=agent.name)
-    return Agent(**agent_doc)
+
+    # Return agent data + the API key (shown once)
+    response_doc = {k: v for k, v in agent_doc.items() if k != "api_key"}
+    response_doc["api_key"] = api_key
+    response_doc["last_seen"] = now.isoformat()
+    response_doc["created_at"] = now.isoformat()
+
+    return response_doc
 
 
 @router.get("/{agent_id}", response_model=Agent)
@@ -284,11 +326,13 @@ class HeartbeatRequest(BaseModel):
 @router.put("/{agent_id}/heartbeat")
 async def agent_heartbeat(
     agent_id: str,
-    request: Optional[HeartbeatRequest] = None,
+    request: Request,
+    heartbeat: Optional[HeartbeatRequest] = None,
+    _verified_agent: str = Depends(verify_agent_key),
 ) -> Dict[str, Any]:
     """
-    Update agent heartbeat (public endpoint - no auth required for agents)
-    
+    Update agent heartbeat.  Requires ``X-Agent-Key`` header.
+
     Accepts optional request body with timestamp. If provided, validates it's within
     reasonable bounds (not more than 5 minutes in the future or past).
     Uses server time if not provided or invalid.
@@ -299,11 +343,11 @@ async def agent_heartbeat(
     # Determine timestamp to use
     server_time = datetime.now(timezone.utc)
     heartbeat_time = server_time
-    
-    if request and request.timestamp:
+
+    if heartbeat and heartbeat.timestamp:
         try:
             # Parse agent-provided timestamp
-            agent_time_str = request.timestamp.replace('Z', '+00:00')
+            agent_time_str = heartbeat.timestamp.replace('Z', '+00:00')
             agent_time = datetime.fromisoformat(agent_time_str)
             # Ensure agent_time is timezone-aware for comparison
             if agent_time.tzinfo is None:
@@ -316,7 +360,7 @@ async def agent_heartbeat(
                 logger.warning(
                     "Agent timestamp out of bounds, using server time",
                     agent_id=agent_id,
-                    agent_time=request.timestamp,
+                    agent_time=heartbeat.timestamp,
                     server_time=server_time.isoformat(),
                     diff_seconds=time_diff
                 )
@@ -327,17 +371,17 @@ async def agent_heartbeat(
     update_data = {
         "last_seen": heartbeat_time
     }
-    
-    if request and request.ip_address:
-        update_data["ip_address"] = request.ip_address
-    if request and request.policy_version is not None:
-        update_data["policy_version"] = request.policy_version
-    if request and request.policy_sync_status is not None:
-        update_data["policy_sync_status"] = request.policy_sync_status
-    if request and request.policy_last_synced_at is not None:
-        update_data["policy_last_synced_at"] = request.policy_last_synced_at
-    if request and request.policy_sync_error is not None:
-        update_data["policy_sync_error"] = request.policy_sync_error
+
+    if heartbeat and heartbeat.ip_address:
+        update_data["ip_address"] = heartbeat.ip_address
+    if heartbeat and heartbeat.policy_version is not None:
+        update_data["policy_version"] = heartbeat.policy_version
+    if heartbeat and heartbeat.policy_sync_status is not None:
+        update_data["policy_sync_status"] = heartbeat.policy_sync_status
+    if heartbeat and heartbeat.policy_last_synced_at is not None:
+        update_data["policy_last_synced_at"] = heartbeat.policy_last_synced_at
+    if heartbeat and heartbeat.policy_sync_error is not None:
+        update_data["policy_sync_error"] = heartbeat.policy_sync_error
 
     result = await agents_collection.update_one(
         {"agent_id": agent_id},
@@ -361,9 +405,11 @@ async def agent_heartbeat(
 @router.delete("/{agent_id}/unregister", status_code=status.HTTP_204_NO_CONTENT)
 async def unregister_agent(
     agent_id: str,
+    request: Request,
+    _verified_agent: str = Depends(verify_agent_key),
 ):
     """
-    Unregister an agent (public endpoint - called by agent on shutdown)
+    Unregister an agent.  Requires ``X-Agent-Key`` header.
     This allows agents to cleanly remove themselves when they stop running.
     """
     db = get_mongodb()
@@ -462,10 +508,13 @@ def _get_agent_policy_transformer() -> AgentPolicyTransformer:
 async def sync_agent_policies(
     agent_id: str,
     sync_request: AgentPolicySyncRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
 ):
     """
     Provide agents with a policy bundle tailored to their platform/capabilities.
+    Requires ``X-Agent-Key`` header.
     """
     mongo = get_mongodb()
     agents_collection = mongo["agents"]

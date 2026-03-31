@@ -39,6 +39,8 @@ async def _auto_init_schema_and_admin():
     Safe to call from multiple uvicorn workers simultaneously — uses
     INSERT … ON CONFLICT to avoid duplicate-key errors from race conditions.
     """
+    import secrets
+    import string
     from sqlalchemy import text
     from app.core.security import get_password_hash
 
@@ -75,17 +77,29 @@ async def _auto_init_schema_and_admin():
             )
             user_count = result.scalar()
             if user_count == 0:
-                hashed = get_password_hash("admin")
+                # Generate a cryptographically secure random password
+                alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+                admin_password = ''.join(secrets.choice(alphabet) for _ in range(20))
+                hashed = get_password_hash(admin_password)
                 await session.execute(
                     text(
-                        "INSERT INTO users (id, email, hashed_password, full_name, role, organization, is_active, is_verified, created_at, updated_at) "
-                        "VALUES (gen_random_uuid(), 'admin', :pw, 'Administrator', 'ADMIN', 'CyberSentinel', TRUE, TRUE, NOW(), NOW()) "
+                        "INSERT INTO users (id, email, hashed_password, full_name, role, organization, "
+                        "is_active, is_verified, must_change_password, created_at, updated_at) "
+                        "VALUES (gen_random_uuid(), 'admin', :pw, 'Administrator', 'ADMIN', 'CyberSentinel', "
+                        "TRUE, TRUE, TRUE, NOW(), NOW()) "
                         "ON CONFLICT (email) DO NOTHING"
                     ),
                     {"pw": hashed},
                 )
                 await session.commit()
-                logger.info("Default admin user created (username: admin, password: admin)")
+                # Log password once so admin can retrieve it from startup logs.
+                # In production, pipe logs to a secure log aggregator.
+                logger.warning(
+                    "DEFAULT ADMIN CREATED — change this password immediately",
+                    username="admin",
+                    generated_password=admin_password,
+                    must_change_password=True,
+                )
             else:
                 logger.info("Users table already populated, skipping admin seed")
     except Exception as e:
@@ -402,15 +416,24 @@ app.add_middleware(
     window_seconds=settings.RATE_LIMIT_WINDOW,
 )
 
-# CORS — when origins is ["*"] we must disable credentials (Starlette requirement).
-# This is fine because the app uses Bearer tokens, not cookies.
+# CORS — reject wildcard origins in production.
 _wildcard_cors = settings.CORS_ORIGINS == ["*"]
+if _wildcard_cors and settings.ENVIRONMENT.lower() == "production":
+    logger.error(
+        "CORS_ORIGINS is set to ['*'] in production — this is insecure. "
+        "Set CORS_ORIGINS to your dashboard URL(s) in .env."
+    )
+    raise SystemExit("Refusing to start with wildcard CORS in production.")
+
+if _wildcard_cors:
+    logger.warning("CORS_ORIGINS is ['*'] — acceptable for development only")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=not _wildcard_cors,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Agent-Key"],
     expose_headers=["X-Request-ID"],
 )
 
@@ -489,12 +512,57 @@ async def root() -> dict:
 @app.get("/health", tags=["Health"])
 async def health_check() -> dict:
     """
-    Health check endpoint for load balancers and monitoring
+    Health check endpoint for load balancers and monitoring.
+    Verifies connectivity to PostgreSQL, MongoDB, and Redis.
+    Returns 503 if any critical dependency is unreachable.
     """
+    from app.core.database import postgres_engine, mongodb_client
+    from app.core.cache import redis_client
+    from sqlalchemy import text
+
+    checks = {"postgres": "fail", "mongodb": "fail", "redis": "fail"}
+
+    try:
+        if postgres_engine:
+            async with postgres_engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            checks["postgres"] = "ok"
+    except Exception:
+        pass
+
+    try:
+        if mongodb_client:
+            await mongodb_client.admin.command("ping")
+            checks["mongodb"] = "ok"
+    except Exception:
+        pass
+
+    try:
+        if redis_client:
+            await redis_client.ping()
+            checks["redis"] = "ok"
+    except Exception:
+        pass
+
+    all_ok = all(v == "ok" for v in checks.values())
+
+    if not all_ok:
+        from fastapi.responses import JSONResponse as _JSONResp
+        return _JSONResp(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "service": settings.PROJECT_NAME,
+                "version": settings.VERSION,
+                "checks": checks,
+            },
+        )
+
     return {
         "status": "healthy",
         "service": settings.PROJECT_NAME,
         "version": settings.VERSION,
+        "checks": checks,
     }
 
 

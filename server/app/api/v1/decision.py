@@ -10,9 +10,11 @@ Also includes:
 """
 
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from hashlib import sha256
+import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
@@ -104,18 +106,21 @@ class PolicySyncResponse(BaseModel):
 @router.post("/", response_model=DecisionResponse)
 async def make_decision(
     request: DecisionRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """
     **Real-time enforcement decision.**
 
     Agent sends event context, server returns BLOCK/ALLOW/ALERT decision.
-    No auth required — agents call this for every enforcement action.
+    Requires ``X-Agent-Key`` header for authentication.
 
     Pipeline: Classify content → Evaluate policies → Resolve conflicts → Return decision
 
     Target latency: <100ms
     """
+    from app.api.v1.agents import verify_agent_key
+    await verify_agent_key(http_request)
     event = request.event
     content = event.get("content") or event.get("file_content", "")
 
@@ -204,10 +209,10 @@ async def ingest_batch_events(
                 "file_hash": item.file_hash,
                 "channel": item.channel,
                 "action_taken": item.action,
-                "timestamp": item.timestamp or datetime.utcnow().isoformat(),
+                "timestamp": item.timestamp or datetime.now(timezone.utc).isoformat(),
                 "metadata": item.metadata or {},
                 "batch_ingested": True,
-                "ingested_at": datetime.utcnow().isoformat(),
+                "ingested_at": datetime.now(timezone.utc).isoformat(),
             }
             docs.append(doc)
             accepted += 1
@@ -270,7 +275,7 @@ async def sync_policies(
             version=server_version,
             policies=[],
             policy_count=0,
-            generated_at=datetime.utcnow().isoformat() + "Z",
+            generated_at=datetime.now(timezone.utc).isoformat() + "Z",
             is_delta=True,
         )
 
@@ -287,4 +292,136 @@ async def sync_policies(
         policy_count=len(all_policies),
         generated_at=bundle["generated_at"],
         is_delta=False,
+    )
+
+
+# ─── Versioned Policy Distribution (Section 4 of DLP spec) ────────────────
+
+
+class PolicyLatestResponse(BaseModel):
+    """Lightweight version check — no policy payload."""
+    version: int = Field(..., description="Monotonic integer version")
+    checksum: str = Field(..., description="SHA-256 of the serialized bundle")
+    timestamp: str = Field(..., description="ISO-8601 generation time")
+    policy_count: int = Field(0)
+
+
+class PolicyDownloadResponse(BaseModel):
+    """Full versioned policy bundle for agent download."""
+    version: int
+    checksum: str
+    timestamp: str
+    policies: List[Dict[str, Any]]
+    policy_count: int
+
+
+# In-memory version counter — protected by asyncio.Lock for atomicity
+import asyncio
+_policy_version_counter: int = 0
+_policy_version_cache: Dict[str, Any] = {}
+_version_lock = asyncio.Lock()
+
+
+async def _build_versioned_bundle(
+    db: AsyncSession,
+    platform: str = "windows",
+    agent_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a versioned policy bundle with integer version and SHA-256 checksum."""
+    global _policy_version_counter, _policy_version_cache
+
+    from app.services.policy_service import PolicyService
+    from app.policies.agent_policy_transformer import AgentPolicyTransformer
+
+    service = PolicyService(db)
+    policies = await service.get_enabled_policies()
+
+    transformer = AgentPolicyTransformer()
+    bundle = transformer.build_bundle(policies, platform=platform, agent_id=agent_id)
+
+    # Flatten grouped policies into a list
+    all_policies = []
+    for policy_type, policy_list in bundle.get("policies", {}).items():
+        for p in policy_list:
+            p["policy_type"] = policy_type
+            all_policies.append(p)
+
+    # Serialize deterministically for checksum
+    serialized = json.dumps(all_policies, sort_keys=True, default=str)
+    checksum = sha256(serialized.encode("utf-8")).hexdigest()
+
+    # Atomic version update under lock
+    async with _version_lock:
+        if checksum != _policy_version_cache.get("checksum"):
+            _policy_version_counter += 1
+            _policy_version_cache = {
+                "version": _policy_version_counter,
+                "checksum": checksum,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "policies": all_policies,
+                "policy_count": len(all_policies),
+            }
+
+    return _policy_version_cache
+
+
+@router.get("/policy/latest", response_model=PolicyLatestResponse)
+async def get_policy_latest(
+    platform: str = Query("windows", description="Agent platform"),
+    agent_id: Optional[str] = Query(None, description="Agent ID for scoped policies"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    **GET /policy/latest** — Lightweight version check.
+
+    Agent calls this periodically to check if a newer policy bundle is available.
+    Returns only version + checksum (no policy payload).
+    Agent compares with its local version and downloads only if newer.
+    """
+    bundle = await _build_versioned_bundle(db, platform, agent_id)
+
+    return PolicyLatestResponse(
+        version=bundle["version"],
+        checksum=bundle["checksum"],
+        timestamp=bundle["timestamp"],
+        policy_count=bundle["policy_count"],
+    )
+
+
+@router.get("/policy/download", response_model=PolicyDownloadResponse)
+async def download_policy_bundle(
+    version: Optional[int] = Query(None, description="Specific version to download (latest if omitted)"),
+    platform: str = Query("windows", description="Agent platform"),
+    agent_id: Optional[str] = Query(None, description="Agent ID for scoped policies"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    **GET /policy/download** — Full policy bundle download.
+
+    Agent calls this after discovering a newer version via /policy/latest.
+    Returns the complete policy bundle with checksum for integrity validation.
+
+    The agent must:
+    1. Download to temp file
+    2. Validate checksum
+    3. Load into memory
+    4. Swap policy pointer atomically
+    """
+    bundle = await _build_versioned_bundle(db, platform, agent_id)
+
+    # Version mismatch check (requested specific version but it's not current)
+    if version is not None and version != bundle["version"]:
+        # For now, we only serve the latest version.
+        # In production, maintain a version history table.
+        raise HTTPException(
+            status_code=404,
+            detail=f"Version {version} not found. Latest is {bundle['version']}.",
+        )
+
+    return PolicyDownloadResponse(
+        version=bundle["version"],
+        checksum=bundle["checksum"],
+        timestamp=bundle["timestamp"],
+        policies=bundle["policies"],
+        policy_count=bundle["policy_count"],
     )

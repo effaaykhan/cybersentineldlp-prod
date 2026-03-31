@@ -30,7 +30,20 @@
       "Bash(npx tsc:*)",
       "Bash(npx --package typescript tsc --noEmit)",
       "Bash(node -e \":*)",
-      "Bash(__NEW_LINE_86237181b64cad8b__ python3 -c \":*)"
+      "Bash(__NEW_LINE_86237181b64cad8b__ python3 -c \":*)",
+      "Bash(find /home/soc/Data-Loss-Prevention -name *nginx* -o -name *ssl* -o -name *tls* -o -name *cert*)",
+      "Bash(docker run:*)",
+      "Bash(xargs -I {} basename {} .py)",
+      "Bash(grep -n \"String\\(255\\)\" server/app/models/*.py)",
+      "Bash(for f:*)",
+      "Bash(do python3:*)",
+      "Bash(echo \"OK: $f\")",
+      "Bash(echo \"FAIL: $f\")",
+      "Bash(docker restart:*)",
+      "Bash(find /home/soc/Data-Loss-Prevention/server/data -type f -name *.json)",
+      "Bash(find /home/soc/Data-Loss-Prevention -name \"*.py\" -exec grep -l \"priority\" {})",
+      "Bash(find /home/soc/Data-Loss-Prevention/server/app/models -name *policy*agent* -o -name *agent*policy*)",
+      "Bash(grep -n \"DateTime\\(\" /home/soc/Data-Loss-Prevention/server/app/models/*.py)"
     ],
     "deny": [],
     "ask": []

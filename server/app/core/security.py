@@ -139,8 +139,13 @@ async def get_current_user(
                 detail="Token has been revoked",
             )
     except RuntimeError:
-        # Redis not initialized, skip blacklist check (development mode)
-        logger.warning("Redis not initialized, skipping token blacklist check")
+        if settings.ENVIRONMENT.lower() == "production":
+            logger.error("Redis unavailable in production — token blacklist check failed")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service temporarily unavailable",
+            )
+        logger.warning("Redis not initialized, skipping token blacklist check (dev mode)")
 
     payload = decode_token(token)
 

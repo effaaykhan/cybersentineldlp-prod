@@ -121,10 +121,11 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:4000,http://127.0.0.1:4000}
+      - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
       # OneDrive OAuth configuration (forwarded from host .env)
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID}
       - ONEDRIVE_CLIENT_SECRET=${ONEDRIVE_CLIENT_SECRET}
@@ -181,7 +182,7 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
       # OneDrive OAuth configuration (forwarded from host .env)
@@ -231,7 +232,7 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD}
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
       # OneDrive OAuth configuration (forwarded from host .env)
@@ -263,7 +264,7 @@ services:
     networks:
       - cybersentinel-net
     ports:
-      - "4000:4000"
+      - "3023:3000"
     depends_on:
       manager:
         condition: service_started

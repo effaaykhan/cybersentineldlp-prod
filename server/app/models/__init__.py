@@ -13,6 +13,7 @@ from app.models.file_fingerprint import FileFingerprint
 from app.models.policy import Policy
 from app.models.policy_condition import PolicyCondition
 from app.models.policy_action import PolicyAction
+from app.models.policy_agent import PolicyAgent
 from app.models.agent import Agent
 from app.models.event import Event
 from app.models.incident import Incident
@@ -24,6 +25,7 @@ from app.models.scan_job import ScanJob
 from app.models.scan_result import ScanResult
 from app.models.audit_log import AuditLog
 from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedFolder
+from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
 
 __all__ = [
     "Role",
@@ -37,6 +39,7 @@ __all__ = [
     "Policy",
     "PolicyCondition",
     "PolicyAction",
+    "PolicyAgent",
     "Agent",
     "Event",
     "Incident",
@@ -49,4 +52,6 @@ __all__ = [
     "AuditLog",
     "GoogleDriveConnection",
     "GoogleDriveProtectedFolder",
+    "OneDriveConnection",
+    "OneDriveProtectedFolder",
 ]

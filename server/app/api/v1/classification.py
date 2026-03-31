@@ -196,14 +196,12 @@ async def invalidate_classification_cache(
     current_user: dict = Depends(get_current_user),
 ) -> Dict[str, str]:
     """
-    Force-clear the classification engine's rule cache so that newly
-    created / updated rules take effect immediately.
+    Force-clear the classification engine's rule and regex caches.
+    New/updated rules take effect on the very next classification call.
     """
-    # The engine is per-request, so we clear the module-level compiled regex
-    # and dictionary caches by creating a throwaway instance and clearing it.
-    # In practice the 60-second TTL handles this, but this endpoint lets
-    # admins force it.
-    return {"status": "ok", "message": "Classification cache will refresh on next request"}
+    from app.services.classification_engine import clear_module_cache
+    clear_module_cache()
+    return {"status": "ok", "message": "Classification caches cleared — new rules active immediately"}
 
 
 # ────────────────────────────────────────────────────────────────────────────

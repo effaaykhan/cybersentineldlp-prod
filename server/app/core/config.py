@@ -29,6 +29,8 @@ class Settings(BaseSettings):
 
     # Security
     SECRET_KEY: str = Field(...)
+    # Separate key for Fernet encryption (OAuth tokens). Falls back to SECRET_KEY if not set.
+    ENCRYPTION_KEY: str = Field(default="")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -108,7 +110,7 @@ class Settings(BaseSettings):
     OPENSEARCH_HOST: str = Field(default="localhost")
     OPENSEARCH_PORT: int = Field(default=9200)
     OPENSEARCH_USER: str = Field(default="admin")
-    OPENSEARCH_PASSWORD: str = Field(default="admin")
+    OPENSEARCH_PASSWORD: str = Field(...)
     OPENSEARCH_USE_SSL: bool = Field(default=True)
     OPENSEARCH_VERIFY_CERTS: bool = Field(default=False)
     OPENSEARCH_INDEX_PREFIX: str = Field(default="cybersentinel")
@@ -121,6 +123,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = Field(default=True)
     RATE_LIMIT_REQUESTS: int = Field(default=100)
     RATE_LIMIT_WINDOW: int = Field(default=60)
+
+    # Timezone — controls display/API timestamps. Storage is always UTC.
+    # Examples: "Asia/Kolkata", "US/Eastern", "Europe/London", "UTC"
+    APP_TIMEZONE: str = Field(default="UTC")
 
     # Logging
     LOG_LEVEL: str = Field(default="INFO")
@@ -249,6 +255,23 @@ class Settings(BaseSettings):
             default = cls.model_fields[field_name].default
             return list(default) if isinstance(default, list) else default
         return cleaned
+
+    @field_validator("SECRET_KEY", mode="after")
+    @classmethod
+    def reject_weak_secret_key(cls, v: str) -> str:
+        """Prevent startup with placeholder or weak secret keys."""
+        weak_keys = {
+            "change-this-to-a-random-secret-key-min-32-chars",
+            "change-this-secret-key-in-production",
+            "secret",
+            "changeme",
+        }
+        if v in weak_keys or len(v) < 32:
+            raise ValueError(
+                "SECRET_KEY is insecure. Set a random string of at least 32 characters. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
+        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",

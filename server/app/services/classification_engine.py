@@ -1,15 +1,30 @@
 """
-Production-Grade Classification Engine
-Uses dynamic rules for sensitive data detection with confidence scoring
+Production-Grade Classification Engine (v2)
+
+Multi-technique sensitive data detection:
+  1. Pattern-based: Regex with precompilation + validation (Luhn, Verhoeff)
+  2. Keyword matching: Case-sensitive and case-insensitive
+  3. File fingerprinting: SHA-256 exact hash matching
+  4. Entropy analysis: Shannon entropy for detecting encoded/encrypted data
+  5. Context-aware: File type and source metadata influence scoring
+  6. Dictionary: External wordlist matching with set intersection
+
+Classification levels (by confidence score):
+  - 0.0 - 0.3: Public
+  - 0.3 - 0.6: Internal
+  - 0.6 - 0.8: Confidential
+  - 0.8 - 1.0: Restricted
 """
 
-from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional, Tuple, Set
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 import re
+import math
 import hashlib
 import structlog
 from pathlib import Path
+from collections import Counter
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -19,46 +34,152 @@ from app.models.data_label import DataLabel
 
 logger = structlog.get_logger()
 
+# Module-level cache — shared across all engine instances within a worker.
+# Cleared by the /cache/invalidate endpoint.
+_module_cache: Dict[str, Any] = {
+    "rules": [],
+    "expires_at": None,
+    "regex": {},
+    "dictionary": {},
+}
+
+
+def clear_module_cache():
+    """Called by the cache invalidation endpoint."""
+    _module_cache["rules"] = []
+    _module_cache["expires_at"] = None
+    _module_cache["regex"].clear()
+    _module_cache["dictionary"].clear()
+    logger.info("Classification module-level caches cleared")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Validation helpers (Luhn, Verhoeff, Shannon entropy)
+# ────────────────────────────────────────────────────────────────────────────
+
+def luhn_check(number_str: str) -> bool:
+    """Validate a number string using the Luhn algorithm (credit cards)."""
+    digits = [int(d) for d in number_str if d.isdigit()]
+    if len(digits) < 13 or len(digits) > 19:
+        return False
+    checksum = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        checksum += d
+    return checksum % 10 == 0
+
+
+# Verhoeff algorithm tables for Aadhaar validation
+_VERHOEFF_D = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+    [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+    [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+    [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+    [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+]
+_VERHOEFF_P = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+    [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+    [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+    [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+]
+_VERHOEFF_INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]
+
+
+def verhoeff_check(number_str: str) -> bool:
+    """Validate a number string using the Verhoeff algorithm (Aadhaar)."""
+    digits = [int(d) for d in number_str if d.isdigit()]
+    if len(digits) != 12:
+        return False
+    c = 0
+    for i, d in enumerate(reversed(digits)):
+        c = _VERHOEFF_D[c][_VERHOEFF_P[i % 8][d]]
+    return c == 0
+
+
+def shannon_entropy(data: str) -> float:
+    """Calculate Shannon entropy of a string. Higher = more random/compressed/encrypted."""
+    if not data:
+        return 0.0
+    freq = Counter(data)
+    length = len(data)
+    return -sum((count / length) * math.log2(count / length) for count in freq.values())
+
+
+# File types with higher risk multiplier
+_HIGH_RISK_EXTENSIONS = frozenset({
+    ".xlsx", ".xls", ".csv", ".tsv", ".sql", ".db", ".sqlite",
+    ".json", ".xml", ".yaml", ".yml", ".env", ".conf", ".cfg",
+    ".pem", ".key", ".p12", ".pfx", ".cer",
+})
+_MEDIUM_RISK_EXTENSIONS = frozenset({
+    ".docx", ".doc", ".pdf", ".txt", ".rtf", ".odt",
+    ".pptx", ".ppt",
+})
+
+# Sources with higher risk multiplier
+_HIGH_RISK_SOURCES = frozenset({"clipboard", "usb", "removable", "email", "cloud"})
+
 
 @dataclass
 class ClassificationResult:
     """Result of classification analysis"""
-    classification: str  # 'Public', 'Internal', 'Confidential', 'Restricted'
-    confidence_score: float  # 0.0 - 1.0
+    classification: str
+    confidence_score: float
     matched_rules: List[Dict[str, Any]]
     total_matches: int
     details: Dict[str, Any]
+    entropy_score: float = 0.0
+    data_types: List[str] = field(default_factory=list)
 
 
 class ClassificationEngine:
     """
-    Classification Engine that uses database rules for content analysis.
+    Production classification engine with multi-technique detection.
 
-    Classification Levels (based on confidence score):
-    - 0.0 - 0.3: Public
-    - 0.3 - 0.6: Internal
-    - 0.6 - 0.8: Confidential
-    - 0.8 - 1.0: Restricted
+    Techniques:
+      1. Fingerprint matching (SHA-256, authoritative)
+      2. Regex pattern matching (precompiled, cached)
+      3. Keyword matching (case-sensitive/insensitive)
+      4. Dictionary matching (external wordlists)
+      5. Entropy analysis (encoded/encrypted content detection)
+      6. Context-aware scoring (file type, source channel)
     """
+
+    # Content size limits to prevent DoS
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10 MB
+    MAX_REGEX_TIMEOUT_CHARS = 1_000_000     # Limit regex evaluation to first 1M chars
 
     def __init__(self, session: AsyncSession, cache_ttl_seconds: int = 60):
         self.session = session
         self._cache_ttl = timedelta(seconds=cache_ttl_seconds)
-        self._cached_rules: List[Rule] = []
-        self._cache_expires_at: Optional[datetime] = None
-        self._regex_cache: Dict[str, re.Pattern] = {}
-        self._dictionary_cache: Dict[str, set] = {}
 
-    async def classify_content(self, content: str, context: Optional[Dict[str, Any]] = None) -> ClassificationResult:
+    async def classify_content(
+        self,
+        content: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> ClassificationResult:
         """
-        Classify content using enabled rules.
-
-        Args:
-            content: Text content to classify
-            context: Additional context (file_type, source, etc.)
-
-        Returns:
-            ClassificationResult with classification level and details
+        Full classification pipeline:
+          1. Fingerprint check (authoritative — stops if matched)
+          2. Entropy analysis
+          3. Regex pattern matching
+          4. Keyword matching
+          5. Dictionary matching
+          6. Context-aware score adjustment
+          7. Determine classification level
         """
         if not content or not isinstance(content, str):
             return ClassificationResult(
@@ -66,94 +187,273 @@ class ClassificationEngine:
                 confidence_score=0.0,
                 matched_rules=[],
                 total_matches=0,
-                details={"reason": "No content to classify"}
+                details={"reason": "No content to classify"},
             )
 
-        # Get enabled rules
+        # Truncate oversized content to prevent DoS
+        eval_content = content[:self.MAX_CONTENT_LENGTH]
+        ctx = context or {}
+
+        # Step 1: Fingerprint check (authoritative)
+        fp_match = None
+        try:
+            fp_match = await self._check_fingerprint(eval_content)
+        except Exception as e:
+            logger.warning("Fingerprint check failed", error=str(e))
+
+        if fp_match:
+            return ClassificationResult(
+                classification="Restricted",
+                confidence_score=1.0,
+                matched_rules=[fp_match],
+                total_matches=1,
+                details={
+                    "content_length": len(eval_content),
+                    "rules_evaluated": 0,
+                    "context": ctx,
+                    "method": "fingerprint",
+                },
+            )
+
+        # Step 2: Entropy analysis
+        # Use a sample for performance (first 10K chars)
+        entropy = shannon_entropy(eval_content[:10000])
+
+        # Step 3-5: Rule evaluation
         rules = await self._get_cached_rules()
         if not rules:
-            logger.warning("No enabled rules found for classification")
             return ClassificationResult(
                 classification="Public",
                 confidence_score=0.0,
                 matched_rules=[],
                 total_matches=0,
-                details={"reason": "No rules available"}
+                details={"reason": "No rules available"},
             )
 
-        # Evaluate each rule against content
-        matched_rules = []
+        matched_rules: List[Dict[str, Any]] = []
         total_weight = 0.0
         total_matches = 0
-
-        # Check file fingerprints for exact hash match
-        try:
-            fp_match = await self._check_fingerprint(content)
-            if fp_match:
-                matched_rules.append(fp_match)
-                total_weight += 1.0  # Fingerprint match = highest confidence
-                total_matches += 1
-        except Exception as e:
-            logger.warning("Fingerprint check failed", error=str(e))
+        data_types: List[str] = []
 
         for rule in rules:
-            matches, match_count = await self._evaluate_rule(rule, content, context)
-            if matches and match_count >= rule.threshold:
-                rule_result = {
-                    "rule_id": str(rule.id),
-                    "rule_name": rule.name,
-                    "rule_type": rule.type,
-                    "match_count": match_count,
-                    "weight": rule.weight,
-                    "priority": rule.priority,
-                    "classification_labels": rule.classification_labels or [],
-                    "severity": rule.severity,
-                    "category": rule.category,
-                }
-                # Include linked data_label info if present
-                if rule.label:
-                    rule_result["label"] = {
-                        "id": str(rule.label.id),
-                        "name": rule.label.name,
-                        "severity": rule.label.severity,
-                        "color": rule.label.color,
-                    }
+            # Context-aware filtering: skip rules that don't apply to this file type
+            if rule.file_types and ctx.get("file_type"):
+                if ctx["file_type"].lower() not in [ft.lower() for ft in rule.file_types]:
+                    continue
+
+            matches, match_count, validated_count = await self._evaluate_rule_with_validation(
+                rule, eval_content, ctx
+            )
+
+            if matches and validated_count >= rule.threshold:
+                rule_result = self._build_rule_result(rule, validated_count)
                 matched_rules.append(rule_result)
-                # Accumulate weighted score
-                # Use min to cap contribution at weight (multiple matches don't exceed weight)
-                contribution = min(rule.weight, rule.weight * (match_count / rule.threshold))
+
+                # Confidence contribution: scale with match count above threshold
+                # but cap at 2x weight for very high match counts
+                if rule.threshold > 0:
+                    scale = min(2.0, validated_count / rule.threshold)
+                else:
+                    scale = 1.0
+                contribution = rule.weight * scale
                 total_weight += contribution
-                total_matches += match_count
+                total_matches += validated_count
 
-        # Calculate confidence score (capped at 1.0)
-        confidence_score = min(1.0, total_weight)
+                # Track data types
+                if rule.classification_labels:
+                    for label in rule.classification_labels:
+                        if label not in data_types:
+                            data_types.append(label)
 
-        # Determine classification level
+        # Step 6: Context-aware score adjustment
+        context_multiplier = self._compute_context_multiplier(ctx)
+        adjusted_weight = total_weight * context_multiplier
+
+        # Entropy bonus: high entropy content with pattern matches is more suspicious
+        entropy_bonus = 0.0
+        if entropy > 5.0 and total_matches > 0:
+            entropy_bonus = 0.05  # Small bump for high-entropy content with matches
+
+        confidence_score = min(1.0, adjusted_weight + entropy_bonus)
+
         classification = self._determine_classification(confidence_score)
-
-        logger.info(
-            "Content classified",
-            classification=classification,
-            confidence=confidence_score,
-            matched_rules_count=len(matched_rules),
-            total_matches=total_matches
-        )
 
         return ClassificationResult(
             classification=classification,
-            confidence_score=confidence_score,
+            confidence_score=round(confidence_score, 4),
             matched_rules=matched_rules,
             total_matches=total_matches,
             details={
-                "content_length": len(content),
+                "content_length": len(eval_content),
                 "rules_evaluated": len(rules),
-                "context": context or {}
-            }
+                "context": ctx,
+                "context_multiplier": context_multiplier,
+                "entropy_score": round(entropy, 4),
+                "method": "multi_technique",
+            },
+            entropy_score=round(entropy, 4),
+            data_types=data_types,
         )
 
+    async def _evaluate_rule_with_validation(
+        self,
+        rule: Rule,
+        content: str,
+        context: Optional[Dict[str, Any]],
+    ) -> Tuple[bool, int, int]:
+        """
+        Evaluate a rule and apply secondary validation (Luhn, Verhoeff).
+
+        Returns:
+            (matched: bool, raw_match_count: int, validated_count: int)
+        """
+        try:
+            if rule.type == "regex":
+                return await self._evaluate_regex_with_validation(rule, content)
+            elif rule.type == "keyword":
+                matched, count = await self._evaluate_keyword_rule(rule, content)
+                return matched, count, count
+            elif rule.type == "dictionary":
+                matched, count = await self._evaluate_dictionary_rule(rule, content)
+                return matched, count, count
+            else:
+                return False, 0, 0
+        except Exception as e:
+            logger.error("Rule evaluation failed", rule_name=rule.name, error=str(e))
+            return False, 0, 0
+
+    async def _evaluate_regex_with_validation(
+        self, rule: Rule, content: str
+    ) -> Tuple[bool, int, int]:
+        """Evaluate regex rule with secondary validation for known patterns."""
+        if not rule.pattern:
+            return False, 0, 0
+
+        pattern = self._get_compiled_regex(rule)
+        if pattern is None:
+            return False, 0, 0
+
+        # Limit regex evaluation to prevent ReDoS
+        eval_text = content[:self.MAX_REGEX_TIMEOUT_CHARS]
+        raw_matches = pattern.findall(eval_text)
+        raw_count = len(raw_matches)
+
+        if raw_count == 0:
+            return False, 0, 0
+
+        # Apply secondary validation based on rule category
+        category = (rule.category or "").lower()
+        labels = [l.upper() for l in (rule.classification_labels or [])]
+
+        validated_count = raw_count
+
+        if "CREDIT_CARD" in labels or "PCI" in labels or category == "financial":
+            # Luhn validation for credit card numbers
+            validated = 0
+            for match in raw_matches:
+                match_str = match if isinstance(match, str) else str(match)
+                digits_only = re.sub(r'\D', '', match_str)
+                if luhn_check(digits_only):
+                    validated += 1
+            validated_count = validated
+
+        elif "AADHAAR" in labels or "INDIAN_ID" in labels:
+            # Verhoeff validation for Aadhaar numbers
+            validated = 0
+            for match in raw_matches:
+                match_str = match if isinstance(match, str) else str(match)
+                digits_only = re.sub(r'\D', '', match_str)
+                if verhoeff_check(digits_only):
+                    validated += 1
+            validated_count = validated
+
+        # Filter out matches inside code comments (// or # or /* */)
+        if validated_count > 0 and ("API" in labels or "CREDENTIALS" in labels):
+            # Check if the match is likely in a code comment or example
+            comment_pattern = re.compile(
+                r'(?:^|\n)\s*(?://|#|/\*|\*|<!--).*$', re.MULTILINE
+            )
+            non_comment_text = comment_pattern.sub('', eval_text)
+            non_comment_matches = pattern.findall(non_comment_text)
+            validated_count = len(non_comment_matches)
+
+        return validated_count > 0, raw_count, validated_count
+
+    def _get_compiled_regex(self, rule: Rule) -> Optional[re.Pattern]:
+        """Get compiled regex from module-level cache or compile and cache it."""
+        pattern_key = f"{rule.id}:{rule.pattern}"
+        if pattern_key in _module_cache["regex"]:
+            return _module_cache["regex"][pattern_key]
+
+        flags = 0
+        if rule.regex_flags:
+            for flag_name in rule.regex_flags:
+                if hasattr(re, flag_name):
+                    flags |= getattr(re, flag_name)
+        try:
+            compiled = re.compile(rule.pattern, flags)
+            _module_cache["regex"][pattern_key] = compiled
+            return compiled
+        except re.error as e:
+            logger.error("Invalid regex pattern", rule_name=rule.name, error=str(e))
+            return None
+
+    async def _evaluate_keyword_rule(self, rule: Rule, content: str) -> Tuple[bool, int]:
+        """Evaluate keyword matching rule."""
+        if not rule.keywords:
+            return False, 0
+
+        if rule.case_sensitive:
+            search_content = content
+            search_keywords = rule.keywords
+        else:
+            search_content = content.lower()
+            search_keywords = [kw.lower() for kw in rule.keywords]
+
+        match_count = 0
+        for keyword in search_keywords:
+            count = search_content.count(keyword)
+            match_count += count
+
+        return match_count > 0, match_count
+
+    async def _evaluate_dictionary_rule(self, rule: Rule, content: str) -> Tuple[bool, int]:
+        """Evaluate dictionary-based rule."""
+        if not rule.dictionary_path:
+            return False, 0
+
+        dict_key = f"{rule.id}:{rule.dictionary_path}"
+        if dict_key not in _module_cache["dictionary"]:
+            try:
+                words = await self._load_dictionary(rule.dictionary_path)
+                _module_cache["dictionary"][dict_key] = words
+            except Exception as e:
+                logger.error("Dictionary load failed", rule_name=rule.name, error=str(e))
+                return False, 0
+
+        dictionary = _module_cache["dictionary"][dict_key]
+        content_words = set(re.findall(r'\b\w+\b', content.lower()))
+        matched_words = content_words & dictionary
+        return len(matched_words) > 0, len(matched_words)
+
+    async def _load_dictionary(self, path: str) -> Set[str]:
+        """Load dictionary file into a set of lowercase words."""
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Dictionary file not found: {path}")
+
+        words: Set[str] = set()
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                word = line.strip().lower()
+                if word:
+                    words.add(word)
+
+        logger.info("Dictionary loaded", path=path, word_count=len(words))
+        return words
+
     async def _check_fingerprint(self, content: str) -> Optional[Dict[str, Any]]:
-        """Check content hash against known file fingerprints"""
-        import hashlib
+        """Check content hash against known file fingerprints."""
         from app.models.file_fingerprint import FileFingerprint
         from sqlalchemy.orm import selectinload
 
@@ -185,166 +485,80 @@ class ClassificationEngine:
                     "severity": fp.label.severity,
                     "color": fp.label.color,
                 }
-            logger.info("Fingerprint match found", hash=content_hash[:16], file_name=fp.file_name)
             return rule_result
         return None
 
     async def _get_cached_rules(self) -> List[Rule]:
-        """Get enabled rules with caching, ordered by priority (lower = higher priority)"""
-        if self._cache_expires_at and self._cache_expires_at > datetime.utcnow() and self._cached_rules:
-            return self._cached_rules
+        """Get enabled rules with module-level caching."""
+        now = datetime.now(timezone.utc)
+        expires = _module_cache.get("expires_at")
+        if expires and expires > now and _module_cache["rules"]:
+            return _module_cache["rules"]
 
-        # Fetch enabled rules ordered by priority, then weight descending
         from sqlalchemy.orm import selectinload
         stmt = (
             select(Rule)
             .where(Rule.enabled == True)
+            .where(Rule.deleted_at == None)  # noqa: E711 — SQLAlchemy requires == None
             .options(selectinload(Rule.label))
             .order_by(Rule.priority.asc(), Rule.weight.desc())
         )
         result = await self.session.execute(stmt)
-        rules = result.scalars().all()
+        rules = list(result.scalars().all())
 
-        self._cached_rules = list(rules)
-        self._cache_expires_at = datetime.utcnow() + self._cache_ttl
+        _module_cache["rules"] = rules
+        _module_cache["expires_at"] = now + self._cache_ttl
 
-        logger.info(
-            "Rule cache refreshed",
-            rule_count=len(rules),
-            cache_ttl_seconds=int(self._cache_ttl.total_seconds())
-        )
+        logger.info("Rule cache refreshed", rule_count=len(rules))
+        return rules
 
-        return self._cached_rules
-
-    async def _evaluate_rule(
-        self,
-        rule: Rule,
-        content: str,
-        context: Optional[Dict[str, Any]]
-    ) -> Tuple[bool, int]:
+    def _compute_context_multiplier(self, ctx: Dict[str, Any]) -> float:
         """
-        Evaluate a single rule against content.
+        Compute a score multiplier based on context metadata.
 
-        Returns:
-            (matched: bool, match_count: int)
+        High-risk file types and channels increase the score.
         """
-        try:
-            if rule.type == "regex":
-                return await self._evaluate_regex_rule(rule, content)
-            elif rule.type == "keyword":
-                return await self._evaluate_keyword_rule(rule, content)
-            elif rule.type == "dictionary":
-                return await self._evaluate_dictionary_rule(rule, content)
-            else:
-                logger.warning("Unknown rule type", rule_type=rule.type, rule_name=rule.name)
-                return False, 0
-        except Exception as e:
-            logger.error(
-                "Rule evaluation failed",
-                rule_name=rule.name,
-                rule_type=rule.type,
-                error=str(e)
-            )
-            return False, 0
+        multiplier = 1.0
 
-    async def _evaluate_regex_rule(self, rule: Rule, content: str) -> Tuple[bool, int]:
-        """Evaluate regex pattern rule"""
-        if not rule.pattern:
-            return False, 0
+        file_type = (ctx.get("file_type") or "").lower()
+        source = (ctx.get("source") or ctx.get("channel") or "").lower()
 
-        # Get compiled regex from cache or compile
-        pattern_key = f"{rule.id}:{rule.pattern}"
-        if pattern_key not in self._regex_cache:
-            flags = 0
-            if rule.regex_flags:
-                for flag_name in rule.regex_flags:
-                    if hasattr(re, flag_name):
-                        flags |= getattr(re, flag_name)
-            try:
-                self._regex_cache[pattern_key] = re.compile(rule.pattern, flags)
-            except re.error as e:
-                logger.error("Invalid regex pattern", rule_name=rule.name, error=str(e))
-                return False, 0
+        if file_type in _HIGH_RISK_EXTENSIONS:
+            multiplier *= 1.2
+        elif file_type in _MEDIUM_RISK_EXTENSIONS:
+            multiplier *= 1.1
 
-        pattern = self._regex_cache[pattern_key]
-        matches = pattern.findall(content)
-        match_count = len(matches)
+        if source in _HIGH_RISK_SOURCES:
+            multiplier *= 1.15
 
-        return match_count > 0, match_count
+        return multiplier
 
-    async def _evaluate_keyword_rule(self, rule: Rule, content: str) -> Tuple[bool, int]:
-        """Evaluate keyword matching rule"""
-        if not rule.keywords:
-            return False, 0
-
-        if rule.case_sensitive:
-            search_content = content
-            search_keywords = rule.keywords
+    def _build_rule_result(self, rule: Rule, match_count: int) -> Dict[str, Any]:
+        """Build a standardized rule result dictionary."""
+        result: Dict[str, Any] = {
+            "rule_id": str(rule.id),
+            "rule_name": rule.name,
+            "rule_type": rule.type,
+            "match_count": match_count,
+            "weight": rule.weight,
+            "priority": rule.priority,
+            "classification_labels": rule.classification_labels or [],
+            "severity": rule.severity,
+            "category": rule.category,
+        }
+        if rule.label:
+            result["label"] = {
+                "id": str(rule.label.id),
+                "name": rule.label.name,
+                "severity": rule.label.severity,
+                "color": rule.label.color,
+            }
         else:
-            search_content = content.lower()
-            search_keywords = [kw.lower() for kw in rule.keywords]
-
-        match_count = 0
-        for keyword in search_keywords:
-            # Count occurrences of each keyword
-            count = search_content.count(keyword)
-            match_count += count
-
-        return match_count > 0, match_count
-
-    async def _evaluate_dictionary_rule(self, rule: Rule, content: str) -> Tuple[bool, int]:
-        """Evaluate dictionary-based rule"""
-        if not rule.dictionary_path:
-            return False, 0
-
-        # Load dictionary from file with caching
-        dict_key = f"{rule.id}:{rule.dictionary_path}"
-        if dict_key not in self._dictionary_cache:
-            try:
-                words = await self._load_dictionary(rule.dictionary_path)
-                self._dictionary_cache[dict_key] = words
-            except Exception as e:
-                logger.error(
-                    "Failed to load dictionary",
-                    rule_name=rule.name,
-                    path=rule.dictionary_path,
-                    error=str(e)
-                )
-                return False, 0
-
-        dictionary = self._dictionary_cache[dict_key]
-
-        # Split content into words
-        content_words = set(re.findall(r'\b\w+\b', content.lower()))
-
-        # Find intersection
-        matched_words = content_words & dictionary
-        match_count = len(matched_words)
-
-        return match_count > 0, match_count
-
-    async def _load_dictionary(self, path: str) -> set:
-        """Load dictionary file into a set of words"""
-        file_path = Path(path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"Dictionary file not found: {path}")
-
-        with open(file_path, 'r', encoding='utf-8') as f:
-            words = {line.strip().lower() for line in f if line.strip()}
-
-        logger.info("Dictionary loaded", path=path, word_count=len(words))
-        return words
+            result["label"] = None
+        return result
 
     def _determine_classification(self, confidence_score: float) -> str:
-        """
-        Determine classification level based on confidence score.
-
-        Thresholds:
-        - 0.0 - 0.3: Public
-        - 0.3 - 0.6: Internal
-        - 0.6 - 0.8: Confidential
-        - 0.8 - 1.0: Restricted
-        """
+        """Map confidence score to classification level."""
         if confidence_score >= 0.8:
             return "Restricted"
         elif confidence_score >= 0.6:
@@ -355,14 +569,10 @@ class ClassificationEngine:
             return "Public"
 
     def clear_cache(self):
-        """Clear all caches"""
-        self._cached_rules = []
-        self._cache_expires_at = None
-        self._regex_cache.clear()
-        self._dictionary_cache.clear()
-        logger.info("Classification engine caches cleared")
+        """Clear all caches (instance + module level)."""
+        clear_module_cache()
 
 
 async def get_classification_engine(session: AsyncSession) -> ClassificationEngine:
-    """Factory function to create classification engine"""
+    """Factory function to create classification engine."""
     return ClassificationEngine(session)

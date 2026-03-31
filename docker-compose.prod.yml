@@ -9,7 +9,7 @@ services:
       - discovery.type=single-node
       - bootstrap.memory_lock=true
       - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
-      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
       - DISABLE_SECURITY_PLUGIN=false
     ulimits:
       memlock:
@@ -24,8 +24,15 @@ services:
       - cybersentinel
     ports:
       - "9200:9200"
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          memory: 2G
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u admin:${OPENSEARCH_PASSWORD:-CyberSentinel2025!} https://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -k -u admin:${OPENSEARCH_PASSWORD:?Set this password in .env file} https://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -37,7 +44,7 @@ services:
     container_name: cybersentinel-mongodb
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-CyberSentinel2025!}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:?Set this password in .env file}
       MONGO_INITDB_DATABASE: cybersentinel
     volumes:
       - mongodb_data:/data/db
@@ -46,6 +53,13 @@ services:
       - cybersentinel
     ports:
       - "27017:27017"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          memory: 512M
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 30s
@@ -59,7 +73,7 @@ services:
     container_name: cybersentinel-postgres
     environment:
       POSTGRES_USER: cybersentinel
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CyberSentinel2025!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set this password in .env file}
       POSTGRES_DB: cybersentinel
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
@@ -68,6 +82,13 @@ services:
       - cybersentinel
     ports:
       - "5432:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cybersentinel"]
       interval: 30s
@@ -79,15 +100,22 @@ services:
   redis:
     image: redis:7-alpine
     container_name: cybersentinel-redis
-    command: redis-server --requirepass ${REDIS_PASSWORD:-CyberSentinel2025!} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: redis-server --requirepass ${REDIS_PASSWORD:?Set this password in .env file} --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     networks:
       - cybersentinel
     ports:
       - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          memory: 128M
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-CyberSentinel2025!}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Set this password in .env file}", "ping"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -107,7 +135,7 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
       - OPENSEARCH_USE_SSL=true
       - OPENSEARCH_VERIFY_CERTS=false
       - OPENSEARCH_INDEX_PREFIX=cybersentinel
@@ -116,29 +144,32 @@ services:
       - MONGODB_HOST=mongodb
       - MONGODB_PORT=27017
       - MONGODB_USER=admin
-      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-CyberSentinel2025!}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
       - MONGODB_DB=cybersentinel
 
       # PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=cybersentinel
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CyberSentinel2025!}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
       - POSTGRES_DB=cybersentinel
 
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-CyberSentinel2025!}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set this password in .env file}
 
       # JWT & Security
-      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key-in-production}
-      - JWT_SECRET=${JWT_SECRET:-change-this-secret-key-in-production}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
+      - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRATION=3600
 
       # CORS
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
+
+      # Timezone (display only — storage is always UTC)
+      - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
 
       # OneDrive OAuth (optional)
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID:-}
@@ -162,6 +193,13 @@ services:
         condition: service_healthy
     networks:
       - cybersentinel
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          memory: 512M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:55000/health"]
       interval: 30s
@@ -175,13 +213,26 @@ services:
     image: ghcr.io/cybersentinel-06/dlp-dashboard:latest
     container_name: cybersentinel-dashboard
     ports:
-      - "4000:4000"
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Mount TLS certificates (optional — HTTP-only mode if absent)
+      # For Let's Encrypt: /etc/letsencrypt/live/your.domain/
+      - ${TLS_CERT_PATH:-./certs}/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ${TLS_CERT_PATH:-./certs}/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
     depends_on:
       - manager
     networks:
       - cybersentinel
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          memory: 64M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000"]
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -197,7 +248,7 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
       - OPENSEARCH_USE_SSL=true
       - OPENSEARCH_VERIFY_CERTS=false
 
@@ -205,24 +256,24 @@ services:
       - MONGODB_HOST=mongodb
       - MONGODB_PORT=27017
       - MONGODB_USER=admin
-      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-CyberSentinel2025!}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
       - MONGODB_DB=cybersentinel
 
       # PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=cybersentinel
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CyberSentinel2025!}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
       - POSTGRES_DB=cybersentinel
 
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-CyberSentinel2025!}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set this password in .env file}
 
       # JWT & Security
-      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key-in-production}
-      - JWT_SECRET=${JWT_SECRET:-change-this-secret-key-in-production}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
+      - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
     volumes:
       - ./server/logs:/var/log/cybersentinel
     depends_on:
@@ -236,6 +287,13 @@ services:
         condition: service_healthy
     networks:
       - cybersentinel
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.celery.celery_app inspect ping -d celery@$$HOSTNAME"]
       interval: 30s
@@ -252,30 +310,37 @@ services:
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-CyberSentinel2025!}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set this password in .env file}
 
       # PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=cybersentinel
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CyberSentinel2025!}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
       - POSTGRES_DB=cybersentinel
 
       # MongoDB
       - MONGODB_HOST=mongodb
       - MONGODB_PORT=27017
       - MONGODB_USER=admin
-      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-CyberSentinel2025!}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
       - MONGODB_DB=cybersentinel
 
       # JWT & Security
-      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key-in-production}
-      - JWT_SECRET=${JWT_SECRET:-change-this-secret-key-in-production}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
+      - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - cybersentinel
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid"]
       interval: 30s

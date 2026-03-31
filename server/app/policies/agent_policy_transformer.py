@@ -5,7 +5,7 @@ Turns database policies into agent-friendly bundles.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from typing import Any, Dict, Iterable, List, Optional
@@ -58,7 +58,7 @@ class AgentPolicyTransformer:
 
         return {
             "version": version,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
             "policy_count": sum(len(items) for items in grouped.values()),
             "policies": grouped,
         }
@@ -77,10 +77,16 @@ class AgentPolicyTransformer:
         if not policy_type:
             return False
 
-        # Agent scoping: apply when agent_ids is defined and non-empty
-        scoped_agents = policy.agent_ids or []
-        if scoped_agents:
-            if not agent_id or str(agent_id) not in set(map(str, scoped_agents)):
+        # Agent scoping via junction table (preferred) or legacy JSON fallback
+        assigned_agents: List[str] = []
+        if hasattr(policy, "agent_assignments") and policy.agent_assignments:
+            assigned_agents = [pa.agent_id for pa in policy.agent_assignments]
+        elif policy.agent_ids:
+            # Legacy JSON fallback — will be removed after migration
+            assigned_agents = [str(a) for a in policy.agent_ids]
+
+        if assigned_agents:
+            if not agent_id or str(agent_id) not in assigned_agents:
                 return False
 
         supported_platforms = POLICY_PLATFORM_SUPPORT.get(policy_type, [])
@@ -104,7 +110,7 @@ class AgentPolicyTransformer:
         return grouped
 
     def _serialize_policy(self, policy: Policy) -> Dict[str, Any]:
-        updated_at = policy.updated_at or policy.created_at or datetime.utcnow()
+        updated_at = policy.updated_at or policy.created_at or datetime.now(timezone.utc)
         return {
             "id": str(policy.id),
             "name": policy.name,
@@ -121,7 +127,7 @@ class AgentPolicyTransformer:
     def _calculate_version(self, policies: Iterable[Policy]) -> str:
         hasher = sha256()
         for policy in sorted(policies, key=lambda p: str(p.id)):
-            updated_at = policy.updated_at or policy.created_at or datetime.utcnow()
+            updated_at = policy.updated_at or policy.created_at or datetime.now(timezone.utc)
             hasher.update(str(policy.id).encode("utf-8"))
             hasher.update(updated_at.isoformat().encode("utf-8"))
             hasher.update(json.dumps(policy.config or {}, sort_keys=True).encode("utf-8"))

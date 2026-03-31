@@ -3,13 +3,17 @@ Event Database Model (PostgreSQL)
 Represents DLP events detected by agents or collectors
 """
 
-from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Index, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from datetime import datetime, timezone
+from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Index, ForeignKey, CheckConstraint
+from sqlalchemy.dialects.postgresql import UUID, INET
 from sqlalchemy.orm import relationship
 import uuid
 
 from app.core.database import Base
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 class Event(Base):
@@ -24,7 +28,6 @@ class Event(Base):
 
     # Source information
     agent_id = Column(String(64), nullable=True, index=True)
-    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True)
     endpoint_id = Column(UUID(as_uuid=True), ForeignKey("endpoints.id", ondelete="SET NULL"), nullable=True, index=True)
     source_type = Column(String(50), nullable=False)  # agent, collector, connector
     source_id = Column(String(64), nullable=True)
@@ -41,66 +44,67 @@ class Event(Base):
 
     # File/data information
     file_path = Column(Text, nullable=True)
-    file_name = Column(String(255), nullable=True)
+    file_name = Column(Text, nullable=True)
     file_size = Column(Integer, nullable=True)
     file_hash = Column(String(64), nullable=True)
 
     # Classification results
-    classification = Column(JSON, nullable=True)  # {"labels": ["PAN", "SSN"], "score": 0.95, "method": "regex"}
+    classification = Column(JSON, nullable=True)
     classification_label = Column(UUID(as_uuid=True), ForeignKey("data_labels.id", ondelete="SET NULL"), nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)
 
     # Policy information
     policy_id = Column(UUID(as_uuid=True), nullable=True, index=True)
-    policy_name = Column(String(255), nullable=True)
-    policy_violated = Column(String(255), nullable=True)
+    policy_name = Column(Text, nullable=True)
+    policy_violated = Column(Text, nullable=True)
 
     # Channel and decision
-    channel = Column(String(50), nullable=True)  # usb, email, cloud, web, network, clipboard
-    decision = Column(String(30), nullable=True)  # allowed, blocked, warned, quarantined
+    channel = Column(String(50), nullable=True)
+    decision = Column(String(30), nullable=True)
 
     # Destination information
-    destination = Column(String(255), nullable=True)  # usb, cloud, email, etc.
+    destination = Column(Text, nullable=True)
     destination_details = Column(JSON, nullable=True)
 
     # Relationships
-    device = relationship("Device", backref="events", foreign_keys=[device_id])
     endpoint = relationship("Endpoint", backref="events", foreign_keys=[endpoint_id])
     label = relationship("DataLabel", backref="events", foreign_keys=[classification_label])
 
     # Network information (for network events)
-    source_ip = Column(String(45), nullable=True)
-    destination_ip = Column(String(45), nullable=True)
+    source_ip = Column(INET, nullable=True)
+    destination_ip = Column(INET, nullable=True)
     protocol = Column(String(20), nullable=True)
 
     # Additional metadata
     details = Column(JSON, nullable=True)
-    tags = Column(JSON, nullable=True)  # ["pci-dss", "gdpr", "hipaa"]
+    tags = Column(JSON, nullable=True)
 
     # Status and processing
-    status = Column(String(20), nullable=False, default="new")  # new, processed, archived
-    reviewed = Column(String(20), nullable=False, default="no")  # yes, no
+    status = Column(String(20), nullable=False, default="new")
+    reviewed = Column(String(20), nullable=False, default="no")
     reviewed_by = Column(UUID(as_uuid=True), nullable=True)
-    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Timestamps
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=_utcnow, index=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     # Indexes for common queries
     __table_args__ = (
+        CheckConstraint("severity IN ('low', 'medium', 'high', 'critical', 'info')", name="ck_event_severity"),
         Index('idx_event_severity_timestamp', 'severity', 'timestamp'),
         Index('idx_event_user_timestamp', 'user_email', 'timestamp'),
         Index('idx_event_type_timestamp', 'event_type', 'timestamp'),
         Index('idx_event_agent_timestamp', 'agent_id', 'timestamp'),
+        Index('idx_event_status_timestamp', 'status', 'timestamp'),
     )
 
     def __repr__(self):
         return f"<Event {self.event_id} - {self.event_type}>"
 
     def to_dict(self):
-        """Convert event to dictionary"""
+        from app.core.timezone import format_iso
         return {
             "id": str(self.id),
             "event_id": self.event_id,
@@ -126,16 +130,16 @@ class Event(Base):
             "policy_violated": self.policy_violated,
             "destination": self.destination,
             "destination_details": self.destination_details,
-            "source_ip": self.source_ip,
-            "destination_ip": self.destination_ip,
+            "source_ip": str(self.source_ip) if self.source_ip else None,
+            "destination_ip": str(self.destination_ip) if self.destination_ip else None,
             "protocol": self.protocol,
             "details": self.details,
             "tags": self.tags,
             "status": self.status,
             "reviewed": self.reviewed,
             "reviewed_by": str(self.reviewed_by) if self.reviewed_by else None,
-            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
-            "timestamp": self.timestamp.isoformat(),
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "reviewed_at": format_iso(self.reviewed_at),
+            "timestamp": format_iso(self.timestamp),
+            "created_at": format_iso(self.created_at),
+            "updated_at": format_iso(self.updated_at),
         }

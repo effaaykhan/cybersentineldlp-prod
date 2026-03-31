@@ -4,6 +4,7 @@ Using structlog for JSON-formatted logs
 """
 
 import logging
+import re
 import sys
 from typing import Any
 
@@ -11,6 +12,45 @@ import structlog
 from structlog.types import EventDict, Processor
 
 from app.core.config import settings
+
+# Patterns for PII redaction
+_PII_PATTERNS = [
+    (re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'), '[EMAIL_REDACTED]'),
+    (re.compile(r'\b\d{3}[-.]?\d{2}[-.]?\d{4}\b'), '[SSN_REDACTED]'),
+    (re.compile(r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b'), '[CC_REDACTED]'),
+]
+
+# Keys whose values should always be fully redacted
+_SENSITIVE_KEYS = frozenset({
+    'password', 'hashed_password', 'secret', 'token', 'api_key',
+    'credit_card', 'ssn', 'secret_key', 'refresh_token', 'access_token',
+})
+
+# Keys whose values should be PII-scrubbed (regex replacement)
+_PII_KEYS = frozenset({
+    'email', 'user_email', 'username', 'file_path', 'source_path',
+    'destination', 'ip_address', 'filters', 'query_filter',
+})
+
+
+def _redact_value(value: Any) -> Any:
+    """Apply PII regex patterns to a string value."""
+    if not isinstance(value, str):
+        return value
+    for pattern, replacement in _PII_PATTERNS:
+        value = pattern.sub(replacement, value)
+    return value
+
+
+def redact_pii(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
+    """Structlog processor that redacts PII from log event fields."""
+    for key in list(event_dict.keys()):
+        lower_key = key.lower()
+        if lower_key in _SENSITIVE_KEYS:
+            event_dict[key] = '[REDACTED]'
+        elif lower_key in _PII_KEYS:
+            event_dict[key] = _redact_value(str(event_dict[key]))
+    return event_dict
 
 
 def add_app_context(logger: Any, method_name: str, event_dict: EventDict) -> EventDict:
@@ -37,6 +77,7 @@ def setup_logging() -> None:
         structlog.stdlib.add_log_level,
         structlog.stdlib.PositionalArgumentsFormatter(),
         add_app_context,
+        redact_pii,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,

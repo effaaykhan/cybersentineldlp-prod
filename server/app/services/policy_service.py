@@ -3,11 +3,12 @@ Policy Service - Business logic for DLP policy management
 """
 
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.policy import Policy
+from app.policies.cache_control import bump_policy_cache
 
 
 class PolicyService:
@@ -27,7 +28,9 @@ class PolicyService:
             Policy object or None if not found
         """
         result = await self.db.execute(
-            select(Policy).where(Policy.id == policy_id)
+            select(Policy)
+            .where(Policy.id == policy_id)
+            .where(Policy.deleted_at == None)  # noqa: E711
         )
         return result.scalar_one_or_none()
 
@@ -63,10 +66,10 @@ class PolicyService:
         Returns:
             List of Policy objects
         """
-        query = select(Policy)
+        query = select(Policy).where(Policy.deleted_at == None)  # noqa: E711
 
         if enabled_only:
-            query = query.where(Policy.enabled == True)
+            query = query.where(Policy.status == "active")
 
         query = query.offset(skip).limit(limit).order_by(Policy.priority.desc(), Policy.created_at.desc())
 
@@ -119,7 +122,7 @@ class PolicyService:
         policy = Policy(
             name=name,
             description=description,
-            enabled=enabled,
+            status="active" if enabled else "inactive",
             priority=priority,
             conditions=conditions,
             actions=actions,
@@ -134,6 +137,7 @@ class PolicyService:
         self.db.add(policy)
         await self.db.commit()
         await self.db.refresh(policy)
+        bump_policy_cache()
 
         return policy
 
@@ -194,7 +198,7 @@ class PolicyService:
             policy.actions = actions
 
         if enabled is not None:
-            policy.enabled = enabled
+            policy.status = "active" if enabled else "inactive"
 
         if priority is not None:
             policy.priority = priority
@@ -214,10 +218,9 @@ class PolicyService:
         if agent_ids is not None:
             policy.agent_ids = agent_ids
 
-        policy.updated_at = datetime.utcnow()
-
         await self.db.commit()
         await self.db.refresh(policy)
+        bump_policy_cache()
 
         return policy
 
@@ -235,8 +238,11 @@ class PolicyService:
         if not policy:
             return False
 
-        await self.db.delete(policy)
+        # Soft delete — preserve for audit trail
+        policy.deleted_at = datetime.now(timezone.utc)
+        policy.status = "inactive"
         await self.db.commit()
+        bump_policy_cache()
         return True
 
     async def enable_policy(self, policy_id: str) -> Optional[Policy]:
@@ -253,11 +259,11 @@ class PolicyService:
         if not policy:
             return None
 
-        policy.enabled = True
-        policy.updated_at = datetime.utcnow()
+        policy.status = "active"
 
         await self.db.commit()
         await self.db.refresh(policy)
+        bump_policy_cache()
 
         return policy
 
@@ -275,11 +281,11 @@ class PolicyService:
         if not policy:
             return None
 
-        policy.enabled = False
-        policy.updated_at = datetime.utcnow()
+        policy.status = "inactive"
 
         await self.db.commit()
         await self.db.refresh(policy)
+        bump_policy_cache()
 
         return policy
 
@@ -304,10 +310,10 @@ class PolicyService:
         """
         from sqlalchemy import func
 
-        query = select(func.count(Policy.id))
+        query = select(func.count(Policy.id)).where(Policy.deleted_at == None)  # noqa: E711
 
         if enabled_only:
-            query = query.where(Policy.enabled == True)
+            query = query.where(Policy.status == "active")
 
         result = await self.db.execute(query)
         return result.scalar_one()
@@ -321,13 +327,17 @@ class PolicyService:
         """
         from sqlalchemy import func
 
-        # Total policies
-        total_query = select(func.count(Policy.id))
+        # Total policies (excluding soft-deleted)
+        total_query = select(func.count(Policy.id)).where(Policy.deleted_at == None)  # noqa: E711
         total_result = await self.db.execute(total_query)
         total = total_result.scalar_one()
 
         # Active policies
-        active_query = select(func.count(Policy.id)).where(Policy.enabled == True)
+        active_query = (
+            select(func.count(Policy.id))
+            .where(Policy.status == "active")
+            .where(Policy.deleted_at == None)  # noqa: E711
+        )
         active_result = await self.db.execute(active_query)
         active = active_result.scalar_one()
 
@@ -359,20 +369,31 @@ class PolicyService:
         self._validate_conditions(conditions)
         self._validate_actions(actions)
 
+    _VALID_OPERATORS = frozenset({
+        "equals", "contains", "in", "starts_with", "matches_regex",
+        ">=", "<=", ">", "<",
+        "greater_than", "less_than",
+        "greater_than_or_equal", "less_than_or_equal",
+        "matches_any_prefix",
+    })
+
     def _validate_conditions(self, conditions: dict) -> None:
         """
-        Validate policy conditions structure
+        Validate the JSON conditions structure used by the policy evaluator.
 
-        Args:
-            conditions: Policy conditions
+        Expected schema::
 
-        Raises:
-            ValueError: If conditions are invalid
+            {
+              "match": "all" | "any" | "none",
+              "rules": [
+                {"field": "...", "operator": "...", "value": "..."},
+                {"match": "any", "rules": [...]},   # nested group
+              ]
+            }
         """
         if not isinstance(conditions, dict):
             raise ValueError("Conditions must be a dictionary")
 
-        # Basic validation - ensure required fields exist
         if "match" not in conditions:
             raise ValueError("Conditions must contain 'match' field")
 
@@ -385,6 +406,37 @@ class PolicyService:
 
         if not isinstance(conditions["rules"], list):
             raise ValueError("Rules must be a list")
+
+        self._validate_rules_recursive(conditions["rules"], depth=0)
+
+    def _validate_rules_recursive(self, rules: list, depth: int) -> None:
+        """Validate each rule or nested group, with depth limit to prevent abuse."""
+        if depth > 5:
+            raise ValueError("Condition nesting exceeds maximum depth of 5")
+
+        for idx, rule in enumerate(rules):
+            if not isinstance(rule, dict):
+                raise ValueError(f"Rule at index {idx} must be a dictionary")
+
+            # Nested group
+            if "rules" in rule:
+                if "match" not in rule:
+                    raise ValueError(f"Nested group at index {idx} must contain 'match'")
+                self._validate_rules_recursive(rule["rules"], depth + 1)
+                continue
+
+            # Leaf rule — must have field + operator + value
+            if "field" not in rule:
+                raise ValueError(f"Rule at index {idx} missing 'field'")
+            if "operator" not in rule:
+                raise ValueError(f"Rule at index {idx} missing 'operator'")
+            if "value" not in rule:
+                raise ValueError(f"Rule at index {idx} missing 'value'")
+            if rule["operator"] not in self._VALID_OPERATORS:
+                raise ValueError(
+                    f"Rule at index {idx} has invalid operator '{rule['operator']}'. "
+                    f"Valid operators: {sorted(self._VALID_OPERATORS)}"
+                )
 
     def _validate_actions(self, actions: dict) -> None:
         """

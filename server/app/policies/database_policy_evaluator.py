@@ -6,7 +6,7 @@ Evaluates incoming events against policies stored in PostgreSQL
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Callable, AsyncIterator
 import re
 import structlog
@@ -17,6 +17,8 @@ from app.core.database import get_postgres_session
 from app.services.policy_service import PolicyService
 
 logger = structlog.get_logger()
+
+from app.policies.cache_control import get_policy_cache_generation
 
 
 @dataclass
@@ -40,12 +42,13 @@ class DatabasePolicyEvaluator:
     def __init__(
         self,
         session_provider: Callable[[], AsyncIterator[AsyncSession]] = get_postgres_session,
-        cache_ttl_seconds: int = 30,
+        cache_ttl_seconds: int = 5,
     ):
         self._session_provider = session_provider
         self._cache_ttl = timedelta(seconds=cache_ttl_seconds)
         self._cached_policies: List[Any] = []
         self._cache_expires_at: Optional[datetime] = None
+        self._cache_generation: int = -1  # Force first load
         self._regex_cache: Dict[str, re.Pattern] = {}
 
     async def evaluate_event(self, event: Dict[str, Any]) -> List[PolicyMatch]:
@@ -84,7 +87,14 @@ class DatabasePolicyEvaluator:
         return matches
 
     async def _get_cached_policies(self) -> List[Any]:
-        if self._cache_expires_at and self._cache_expires_at > datetime.utcnow() and self._cached_policies:
+        current_gen = get_policy_cache_generation()
+        cache_valid = (
+            self._cache_expires_at
+            and self._cache_expires_at > datetime.now(timezone.utc)
+            and self._cached_policies
+            and self._cache_generation == current_gen
+        )
+        if cache_valid:
             return self._cached_policies
 
         async with self._session_provider() as session:
@@ -92,7 +102,8 @@ class DatabasePolicyEvaluator:
             policies = await service.get_enabled_policies()
 
         self._cached_policies = policies
-        self._cache_expires_at = datetime.utcnow() + self._cache_ttl
+        self._cache_expires_at = datetime.now(timezone.utc) + self._cache_ttl
+        self._cache_generation = current_gen
 
         logger.info(
             "Policy cache refreshed",

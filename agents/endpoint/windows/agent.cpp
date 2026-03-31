@@ -5186,10 +5186,29 @@ if (shouldMonitor) {
             }
             
             if (markedCount > 0) {
-                logger.Info("[INFO] Ignoring " + std::to_string(markedCount) + 
+                logger.Info("[INFO] Ignoring " + std::to_string(markedCount) +
                            " pre-existing monitored files on USB: " + drivePath);
             }
-            
+
+            // Also mark all USB files with classif: prefix for classification-based policies
+            // (policies with empty monitoredPaths). This prevents false alerts for files
+            // already on the USB when the drive is first connected.
+            bool hasClassificationPolicies = false;
+            for (const auto& policy : usbTransferPolicies) {
+                if (policy.enabled && policy.monitoredPaths.empty()) {
+                    hasClassificationPolicies = true;
+                    break;
+                }
+            }
+            if (hasClassificationPolicies) {
+                for (const auto& filePair : existingFiles) {
+                    std::string classifKey = std::string("classif:") + drivePath + ":" + filePair.first;
+                    currentUSBFileState[classifKey] = true;
+                }
+                logger.Info("[INFO] Marked " + std::to_string(existingFiles.size()) +
+                           " pre-existing USB files (classification-based monitoring): " + drivePath);
+            }
+
         } catch (const fs::filesystem_error& e) {
             logger.Debug("Drive not accessible for pre-existing file scan: " + drivePath);
         } catch (const std::exception& e) {
@@ -5554,7 +5573,84 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
             }
             // File state unchanged - do nothing
         }
-        
+
+        // CLASSIFICATION-BASED MONITORING: For policies with no monitoredPaths,
+        // scan ALL USB files directly and evaluate each NEW file via classification API.
+        // This handles seeded policies that rely on content classification rather than
+        // source-path matching.
+        bool hasClassificationOnlyPolicies = false;
+        for (const auto& policy : usbTransferPolicies) {
+            if (policy.enabled && policy.monitoredPaths.empty()) {
+                hasClassificationOnlyPolicies = true;
+                break;
+            }
+        }
+
+        if (hasClassificationOnlyPolicies) {
+            for (const auto& filePair : usbFiles) {
+                const std::string& fileName = filePair.first;
+                std::string classifKey = std::string("classif:") + drivePath + ":" + fileName;
+
+                // Skip files already evaluated
+                if (currentUSBFileState.find(classifKey) != currentUSBFileState.end()) {
+                    continue;
+                }
+
+                // Mark as evaluated to prevent re-processing
+                currentUSBFileState[classifKey] = true;
+
+                std::string usbFilePath = drivePath + "\\" + fileName;
+                if (!fs::exists(usbFilePath)) continue;
+
+                // Apply the first enabled classification-based policy
+                for (const auto& policy : usbTransferPolicies) {
+                    if (!policy.enabled || !policy.monitoredPaths.empty()) continue;
+
+                    logger.Info("🔍 Classification-based evaluation for new USB file:");
+                    logger.Info("   File: " + fileName);
+                    logger.Info("   Path: " + usbFilePath);
+                    logger.Info("   Policy: " + policy.name + " (Action: " + policy.action + ")");
+
+                    PolicyEvaluationResult evalResult = EvaluatePolicyRealtime(
+                        fileName, usbFilePath, usbFilePath, "usb_file_transfer");
+
+                    if (!evalResult.evaluationSucceeded) {
+                        logger.Warning("⚠️ Classification failed for: " + fileName +
+                                      " — falling back to policy action: " + policy.action);
+                        if (policy.action == "block") {
+                            HandleUSBFileTransferBlockNoTimestamp(
+                                fileName, fileName, drivePath, drivePath, policy);
+                        } else if (policy.action == "quarantine") {
+                            HandleUSBFileTransferQuarantineNoTimestamp(
+                                fileName, fileName, drivePath, drivePath, policy);
+                        } else {
+                            HandleUSBFileTransferAlertNoTimestamp(
+                                fileName, fileName, drivePath, drivePath, policy);
+                        }
+                    } else if (evalResult.shouldBlock) {
+                        logger.Warning("🚫 CONTENT-AWARE BLOCK: " + fileName +
+                                      " (" + evalResult.classificationLevel + " " +
+                                      std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%)");
+                        HandleUSBFileTransferBlockNoTimestamp(
+                            fileName, fileName, drivePath, drivePath, policy,
+                            evalResult.classificationLevel,
+                            evalResult.confidenceScore,
+                            evalResult.matchedRules);
+                    } else {
+                        logger.Info("✅ ALLOWED: " + fileName +
+                                   " (" + evalResult.classificationLevel + " " +
+                                   std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%)");
+                        SendUSBTransferEvent(fileName, usbFilePath, drivePath, "allowed", "info",
+                                           policy.policyId, policy.name, true,
+                                           evalResult.classificationLevel,
+                                           evalResult.confidenceScore,
+                                           evalResult.matchedRules);
+                    }
+                    break;  // Apply first matching policy only
+                }
+            }
+        }
+
     } catch (const fs::filesystem_error& e) {
         // Silently skip inaccessible drives (blocked/ejected)
         logger.Debug("Drive " + drivePath + " is not accessible - likely blocked or ejected");

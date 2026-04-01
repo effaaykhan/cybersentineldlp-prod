@@ -3990,9 +3990,45 @@ if (shouldMonitor) {
             
             std::string fileName = fs::path(filePath).filename().string();
             logger.Info("File " + action + ": " + fileName);
-            
-            // ... rest of the function continues as before ...
-            
+
+            // ── USB Transfer Tracking: register new/modified files ──
+            // When a file is created or modified in a monitored path,
+            // add it to monitoredFiles so USB transfer detection can find it.
+            if (eventSubtype == "file_created" || eventSubtype == "file_modified") {
+                std::lock_guard<std::mutex> lock(usbTransferMutex);
+                for (const auto& policy : usbTransferPolicies) {
+                    if (!policy.enabled) continue;
+                    for (const auto& monPath : policy.monitoredPaths) {
+                        std::string normalizedMonPath = NormalizeFilesystemPath(monPath);
+                        if (filePath.find(normalizedMonPath) == 0) {
+                            // File is under a USB-monitored path — add to tracking
+                            std::string relativePath = filePath.substr(normalizedMonPath.length());
+                            if (!relativePath.empty() && (relativePath[0] == '\\' || relativePath[0] == '/')) {
+                                relativePath = relativePath.substr(1);
+                            }
+                            std::string key = normalizedMonPath + ":" + relativePath;
+
+                            FileMetadata meta;
+                            meta.name = fileName;
+                            meta.relativePath = relativePath;
+                            meta.fullPath = filePath;
+                            meta.timestamp = time(NULL);
+                            meta.inMonitored = true;
+                            try {
+                                meta.fileSize = fs::file_size(filePath);
+                            } catch (...) {
+                                meta.fileSize = 0;
+                            }
+                            GetSystemTimeAsFileTime(&meta.lastModified);
+                            monitoredFiles[key] = meta;
+
+                            logger.Debug("USB tracking: added " + fileName + " (key=" + key + ")");
+                            break;
+                        }
+                    }
+                }
+            }
+
             size_t fileSize = 0;
             std::string fileHash = "";
             std::string content = "";

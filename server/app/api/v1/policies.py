@@ -309,7 +309,7 @@ async def sync_onedrive_folders(db: AsyncSession, config: Dict[str, Any]) -> Non
         await db.rollback()
 
 
-@router.get("/", response_model=List[Policy])
+@router.get("/")
 async def get_policies(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
@@ -353,7 +353,7 @@ async def get_policies(
     ]
 
 
-@router.get("/{policy_id}", response_model=Policy)
+@router.get("/{policy_id}")
 async def get_policy(
     policy_id: str,
     current_user: User = Depends(get_current_user),
@@ -391,7 +391,7 @@ async def get_policy(
     }
 
 
-@router.post("/", response_model=Policy, status_code=status.HTTP_201_CREATED)
+@router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_policy(
     policy: PolicyUpsert,
     current_user: User = Depends(require_role("analyst")),

@@ -232,40 +232,47 @@ async def register_agent(
     agents_collection = db["agents"]
 
     body = await request.json()
+    provided_agent_id = body.get("agent_id")
     capabilities = body.get("capabilities") or {}
     now = datetime.now(timezone.utc)
 
-    # Dedup key: same hostname + OS = same agent (prevents duplicates on reinstall)
+    # Use the agent's self-assigned ID if provided (C++ agent sends UUID).
+    # Otherwise generate a sequential one.
+    if provided_agent_id:
+        agent_id = provided_agent_id
+    else:
+        agent_id = f"{agent.os.upper()}-{agent.name.replace(' ', '-')}"
+
+    # Check if this agent already exists (by agent_id OR by hostname+os)
     existing = await agents_collection.find_one({
-        "name": agent.name,
-        "os": agent.os,
+        "$or": [
+            {"agent_id": agent_id},
+            {"name": agent.name, "os": agent.os},
+        ]
     })
 
     if existing:
-        # Same machine re-registering — reuse existing agent_id, update fields
-        agent_id = existing["agent_id"]
+        # Re-registering — update fields, keep the stored agent_id
+        stored_id = existing["agent_id"]
         api_key = existing.get("api_key") or f"csak_{secrets.token_urlsafe(32)}"
+
+        # If the agent changed its ID (reinstall), update to new ID
+        update_fields = {
+            "ip_address": agent.ip_address,
+            "version": agent.version,
+            "last_seen": now,
+            "capabilities": capabilities,
+            "api_key": api_key,
+        }
+        if stored_id != agent_id:
+            update_fields["agent_id"] = agent_id
+
         await agents_collection.update_one(
-            {"agent_id": agent_id},
-            {"$set": {
-                "ip_address": agent.ip_address,
-                "version": agent.version,
-                "last_seen": now,
-                "capabilities": capabilities,
-                "api_key": api_key,
-            }},
+            {"_id": existing["_id"]},
+            {"$set": update_fields},
         )
     else:
-        # New machine — assign sequential ID: WIN-001, WIN-002, LIN-001, etc.
-        prefix = agent.os[:3].upper()  # WIN, LIN, MAC
-        count = await agents_collection.count_documents({"os": agent.os})
-        agent_id = f"{prefix}-{str(count + 1).zfill(3)}"
-
-        # Ensure uniqueness (in case of race condition)
-        while await agents_collection.find_one({"agent_id": agent_id}):
-            count += 1
-            agent_id = f"{prefix}-{str(count + 1).zfill(3)}"
-
+        # New agent
         api_key = f"csak_{secrets.token_urlsafe(32)}"
 
         agent_doc = {

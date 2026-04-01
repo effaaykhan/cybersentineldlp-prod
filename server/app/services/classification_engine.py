@@ -347,8 +347,8 @@ class ClassificationEngine:
 
         validated_count = raw_count
 
-        if "CREDIT_CARD" in labels or "PCI" in labels or category == "financial":
-            # Luhn validation for credit card numbers
+        if "CREDIT_CARD" in labels or "PCI" in labels:
+            # Luhn validation — ONLY for credit card rules, not all financial rules
             validated = 0
             for match in raw_matches:
                 match_str = match if isinstance(match, str) else str(match)
@@ -357,7 +357,7 @@ class ClassificationEngine:
                     validated += 1
             validated_count = validated
 
-        elif "AADHAAR" in labels or "INDIAN_ID" in labels:
+        elif "AADHAAR" in labels:
             # Aadhaar: format match is sufficient for DLP detection.
             # Verhoeff is NOT a gate — real leaked numbers may have typos.
             # All format-matched 12-digit numbers are counted.

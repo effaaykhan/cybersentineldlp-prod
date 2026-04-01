@@ -2968,19 +2968,18 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                     break;
                 }
 
-                std::string value = arrayContent.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
-                // Unescape JSON backslashes: \\\\ → \\
-                std::string unescaped;
-                for (size_t i = 0; i < value.length(); i++) {
-                    if (value[i] == '\\' && i + 1 < value.length()) {
-                        unescaped += value[i + 1];
-                        i++; // Skip next char
+                std::string rawval = arrayContent.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+                std::string cleanval = "";
+                for (size_t vi = 0; vi < rawval.length(); vi++) {
+                    if (rawval[vi] == '\\' && vi + 1 < rawval.length()) {
+                        cleanval += rawval[vi + 1];
+                        vi++;
                     } else {
-                        unescaped += value[i];
+                        cleanval += rawval[vi];
                     }
                 }
-                result.push_back(unescaped);
-                std::cout << "[DEBUG] ExtractJsonArray: Extracted value: '" << unescaped << "'" << std::endl;
+                result.push_back(cleanval);
+                std::cout << "[DEBUG] ExtractJsonArray: Extracted value: '" << cleanval << "'" << std::endl;
 
                 pos = quoteEnd + 1;
             } else {

@@ -33,13 +33,14 @@ import secrets
 s = secrets.token_urlsafe
 c = open('.env.example').read()
 c = c.replace('change-this-to-a-random-secret-key-min-32-chars', s(48))
+c = c.replace('change-this-to-a-random-jwt-secret-min-32-chars', s(48))
+c = c.replace('change-this-to-a-random-encryption-key', s(48))
 c = c.replace('change-this-strong-postgres-password', s(24))
 c = c.replace('change-this-strong-mongodb-password', s(24))
 c = c.replace('change-this-strong-redis-password', s(24))
 c = c.replace('change-this-strong-opensearch-password', s(24))
 open('.env', 'w').write(c)
 "
-  echo "ENCRYPTION_KEY=$(python3 -c 'import secrets;print(secrets.token_urlsafe(48))')" >> .env
   echo "[+] .env created"
 else
   echo "[+] .env exists, skipping"

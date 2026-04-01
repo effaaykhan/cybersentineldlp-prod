@@ -2950,17 +2950,38 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             // Check for quoted string
             if (arrayContent[pos] == '"') {
                 size_t quoteStart = pos;
-                size_t quoteEnd = arrayContent.find("\"", quoteStart + 1);
-                
-                if (quoteEnd == std::string::npos) {
+                // Find closing quote, skipping escaped characters (\" and \\)
+                size_t quoteEnd = quoteStart + 1;
+                while (quoteEnd < arrayContent.length()) {
+                    if (arrayContent[quoteEnd] == '\\') {
+                        quoteEnd += 2; // Skip escaped character
+                        continue;
+                    }
+                    if (arrayContent[quoteEnd] == '"') {
+                        break;
+                    }
+                    quoteEnd++;
+                }
+
+                if (quoteEnd >= arrayContent.length()) {
                     std::cout << "[DEBUG] ExtractJsonArray: Unterminated string at position " << pos << std::endl;
                     break;
                 }
-                
+
                 std::string value = arrayContent.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
-                result.push_back(value);
-                std::cout << "[DEBUG] ExtractJsonArray: Extracted value: '" << value << "'" << std::endl;
-                
+                // Unescape JSON backslashes: \\\\ → \\
+                std::string unescaped;
+                for (size_t i = 0; i < value.length(); i++) {
+                    if (value[i] == '\\' && i + 1 < value.length()) {
+                        unescaped += value[i + 1];
+                        i++; // Skip next char
+                    } else {
+                        unescaped += value[i];
+                    }
+                }
+                result.push_back(unescaped);
+                std::cout << "[DEBUG] ExtractJsonArray: Extracted value: '" << unescaped << "'" << std::endl;
+
                 pos = quoteEnd + 1;
             } else {
                 // Skip to next comma or end

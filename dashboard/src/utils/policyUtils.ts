@@ -365,6 +365,8 @@ export const transformApiPolicyToFrontend = (apiPolicy: any): Policy => {
     violations: 0, // TODO: Get from stats endpoint
     lastViolation: undefined, // TODO: Get from stats endpoint
     config: apiPolicy.config || getDefaultConfig(apiPolicy.type as PolicyType),
+    conditions: apiPolicy.conditions || {},
+    actions: apiPolicy.actions || {},
     agentIds: apiPolicy.agent_ids || [],
   }
 }

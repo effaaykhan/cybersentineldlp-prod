@@ -180,9 +180,9 @@ class PolicyService:
             return None
 
         if name is not None:
-            # Check if new name conflicts
+            # Check if new name conflicts with a DIFFERENT policy
             existing = await self.get_policy_by_name(name)
-            if existing and str(existing.id) != policy_id:
+            if existing and str(existing.id) != str(policy_id):
                 raise ValueError(f"Policy with name '{name}' already exists")
             policy.name = name
 

@@ -43,7 +43,11 @@
       "Bash(find /home/soc/Data-Loss-Prevention/server/data -type f -name *.json)",
       "Bash(find /home/soc/Data-Loss-Prevention -name \"*.py\" -exec grep -l \"priority\" {})",
       "Bash(find /home/soc/Data-Loss-Prevention/server/app/models -name *policy*agent* -o -name *agent*policy*)",
-      "Bash(grep -n \"DateTime\\(\" /home/soc/Data-Loss-Prevention/server/app/models/*.py)"
+      "Bash(grep -n \"DateTime\\(\" /home/soc/Data-Loss-Prevention/server/app/models/*.py)",
+      "Bash(chmod:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(grep -n \"\\\\.map\\(\" /home/soc/Data-Loss-Prevention/dashboard/src/components/policies/*.tsx)"
     ],
     "deny": [],
     "ask": []

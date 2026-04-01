@@ -27,18 +27,17 @@ router = APIRouter()
 AGENT_TIMEOUT_MINUTES = 5
 
 
-async def verify_agent_key(request: Request) -> str:
-    """Verify the X-Agent-Key header matches the registered agent's API key.
+async def verify_agent_key(request: Request) -> Optional[str]:
+    """Verify the X-Agent-Key header if present.
 
-    Returns the agent_id from the verified key record.
-    Raises 401 if the key is missing or invalid.
+    Returns the agent_id if key is valid, None if no key provided
+    (backward compat with agents compiled before key support).
+    Raises 401 only if a key IS provided but is invalid.
     """
     agent_key = request.headers.get("X-Agent-Key")
     if not agent_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-Agent-Key header",
-        )
+        # Backward compatibility: allow agents without key support
+        return None
 
     db = get_mongodb()
     agents_collection = db["agents"]
@@ -232,46 +231,60 @@ async def register_agent(
     db = get_mongodb()
     agents_collection = db["agents"]
 
-    # Extract agent_id from raw request body (workaround for Pydantic not picking up the field)
     body = await request.json()
-    provided_agent_id = body.get("agent_id")
-
-    # Use provided agent_id or generate one from name
-    if provided_agent_id:
-        agent_id = provided_agent_id
-    else:
-        agent_id = f"{agent.os.upper()}-{agent.name.replace(' ', '-')}"
-
-    # Generate a secure API key for this agent
-    api_key = f"csak_{secrets.token_urlsafe(32)}"
-
-    # Create agent document with custom agent_id
-    now = datetime.now(timezone.utc)
     capabilities = body.get("capabilities") or {}
+    now = datetime.now(timezone.utc)
 
-    agent_doc = {
-        "agent_id": agent_id,
+    # Dedup key: same hostname + OS = same agent (prevents duplicates on reinstall)
+    existing = await agents_collection.find_one({
         "name": agent.name,
         "os": agent.os,
-        "ip_address": agent.ip_address,
-        "version": agent.version,
-        "last_seen": now,
-        "created_at": now,
-        "capabilities": capabilities,
-        "policy_version": None,
-        "policy_sync_status": "never",
-        "policy_last_synced_at": None,
-        "policy_sync_error": None,
-        "api_key": api_key,
-    }
+    })
 
-    # Upsert - update if exists, insert if new
-    # Always update name even if agent already exists (allows renaming)
-    await agents_collection.update_one(
-        {"agent_id": agent_id},
-        {"$set": agent_doc},
-        upsert=True
-    )
+    if existing:
+        # Same machine re-registering — reuse existing agent_id, update fields
+        agent_id = existing["agent_id"]
+        api_key = existing.get("api_key") or f"csak_{secrets.token_urlsafe(32)}"
+        await agents_collection.update_one(
+            {"agent_id": agent_id},
+            {"$set": {
+                "ip_address": agent.ip_address,
+                "version": agent.version,
+                "last_seen": now,
+                "capabilities": capabilities,
+                "api_key": api_key,
+            }},
+        )
+    else:
+        # New machine — assign sequential ID: WIN-001, WIN-002, LIN-001, etc.
+        prefix = agent.os[:3].upper()  # WIN, LIN, MAC
+        count = await agents_collection.count_documents({"os": agent.os})
+        agent_id = f"{prefix}-{str(count + 1).zfill(3)}"
+
+        # Ensure uniqueness (in case of race condition)
+        while await agents_collection.find_one({"agent_id": agent_id}):
+            count += 1
+            agent_id = f"{prefix}-{str(count + 1).zfill(3)}"
+
+        api_key = f"csak_{secrets.token_urlsafe(32)}"
+
+        agent_doc = {
+            "agent_id": agent_id,
+            "name": agent.name,
+            "os": agent.os,
+            "ip_address": agent.ip_address,
+            "version": agent.version,
+            "last_seen": now,
+            "created_at": now,
+            "capabilities": capabilities,
+            "policy_version": None,
+            "policy_sync_status": "never",
+            "policy_last_synced_at": None,
+            "policy_sync_error": None,
+            "api_key": api_key,
+        }
+
+        await agents_collection.insert_one(agent_doc)
 
     logger.info("Agent registered", agent_id=agent_id, name=agent.name)
 

@@ -6,93 +6,53 @@ Data Loss Prevention (DLP) is the practice of detecting and preventing unauthori
 
 - **Endpoint Monitoring** — File system, USB transfers, clipboard, screen capture, and print job monitoring on Windows and Linux
 - **Kernel-Level Enforcement** — Windows minifilter driver intercepts file operations at the IRP level for tamper-proof blocking
-- **Content Classification** — 20+ detection patterns with Luhn/Verhoeff checksum validation, SHA-256 fingerprinting, keyword matching, and Shannon entropy analysis
+- **Content Classification** — 20+ detection patterns with Luhn checksum validation, SHA-256 fingerprinting, keyword matching, and Shannon entropy analysis
 - **Policy Engine** — Priority-based deterministic evaluation with nested condition trees, channel-aware enforcement, and atomic hot-reload
 - **Cloud Integration** — Google Drive and OneDrive monitoring via OAuth with delta-query polling
 - **Real-Time Decisions** — Sub-10ms local policy evaluation on agents; server-side decision API for content-aware blocking
 - **SIEM Integration** — Splunk and OpenSearch/Elasticsearch connectors
 - **Dashboard** — React-based UI for event viewer, policy builder, rule management, agent fleet monitoring, and classification analytics
+- **Sequential Agent IDs** — Agents are assigned WIN-001, WIN-002, LIN-001 format IDs automatically
 
 ---
 
 ## Installation
 
-### Server
+### Server (one-liner)
 
-**Requirements:** Docker Engine 24+, Docker Compose v2+, 8 GB RAM
+**Requirements:** Docker Engine 24+, Docker Compose v2+, Python 3, 8 GB RAM
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh)
+```
+
+This clones the repo, generates secure passwords, starts all services, and prints the admin credentials.
+
+**Manual install:**
 
 ```bash
 git clone https://github.com/effaaykhan/cybersentineldlp-prod.git
 cd cybersentineldlp-prod
 cp .env.example .env
-```
-
-Edit `.env` — set all passwords and generate `SECRET_KEY`:
-
-```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"
-```
-
-Start:
-
-```bash
-docker compose up -d
-```
-
-Get the auto-generated admin password (must be changed on first login):
-
-```bash
+# Edit .env — set passwords, or run: python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+docker compose -f docker-compose.prod.yml up -d
 docker logs cybersentinel-manager 2>&1 | grep "generated_password"
 ```
 
-Dashboard: `http://<server-ip>:3023`
-API docs: `http://<server-ip>:55000/api/v1/docs`
+- Dashboard: `http://<server-ip>:4000`
+- API docs: `http://<server-ip>:55000/api/v1/docs`
 
-### Windows Agent
+### Windows Agent (one-liner)
 
-**Requirements:** Windows 10/11 64-bit, Administrator privileges
-
-```powershell
-# Create directories
-New-Item -ItemType Directory -Path "C:\Program Files\CyberSentinel" -Force
-New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\logs" -Force
-New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\quarantine" -Force
-New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\cache" -Force
-
-# Copy agent binary
-Copy-Item cybersentinel_agent.exe "C:\Program Files\CyberSentinel\"
-```
-
-Create `C:\Program Files\CyberSentinel\agent_config.json`:
-
-```json
-{
-  "server_url": "http://<SERVER_IP>:55000/api/v1",
-  "agent_name": "WORKSTATION-01",
-  "heartbeat_interval": 30,
-  "policy_sync_interval": 60,
-  "monitoring": {
-    "file_system": true,
-    "clipboard": true,
-    "usb_devices": true,
-    "screen_capture": true,
-    "print_jobs": true,
-    "monitored_paths": ["C:\\Users"],
-    "file_extensions": [".pdf", ".docx", ".xlsx", ".csv", ".txt", ".json", ".sql", ".pem", ".key"]
-  }
-}
-```
-
-Install as service (requires [NSSM](https://nssm.cc/download)):
+**Requirements:** Windows 10/11 64-bit, PowerShell as Administrator
 
 ```powershell
-nssm install CyberSentinelAgent "C:\Program Files\CyberSentinel\cybersentinel_agent.exe"
-nssm set CyberSentinelAgent Start SERVICE_AUTO_START
-nssm set CyberSentinelAgent ObjectName LocalSystem
-nssm start CyberSentinelAgent
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
 ```
 
-Full guide: [docs/WINDOWS_AGENT_INSTALL.md](docs/WINDOWS_AGENT_INSTALL.md)
+This downloads the agent binary, creates configuration, registers a scheduled task (runs as current user for clipboard/screen access), and starts monitoring.
+
+Agent IDs are assigned automatically: WIN-001, WIN-002, etc.
 
 ### Linux Agent
 
@@ -101,11 +61,7 @@ Full guide: [docs/WINDOWS_AGENT_INSTALL.md](docs/WINDOWS_AGENT_INSTALL.md)
 ```bash
 cd agents/endpoint/linux
 pip install -r requirements.txt
-
-# Configure
 export CYBERSENTINEL_SERVER_URL=http://<SERVER_IP>:55000/api/v1
-
-# Run
 python agent.py
 ```
 
@@ -115,6 +71,18 @@ Install as systemd service:
 sudo cp systemd/cybersentinel-agent.service /etc/systemd/system/
 sudo systemctl enable cybersentinel-agent
 sudo systemctl start cybersentinel-agent
+```
+
+### Windows Agent Compilation (from source)
+
+Requires MSYS2 with MinGW-w64:
+
+```bash
+cd agents/endpoint/windows
+g++ -std=c++17 -O2 agent.cpp screen_capture_monitor.cpp print_monitor.cpp \
+    -o cybersentinel_agent.exe \
+    -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
+    -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool -static
 ```
 
 ---
@@ -129,6 +97,7 @@ sudo systemctl start cybersentinel-agent
 | [Testing Commands](TESTING_COMMANDS.md) | Step-by-step manual testing procedures |
 | [Utility Commands](UTILITY_COMMANDS.md) | Common operational commands |
 | [Windows Agent Build](agents/endpoint/windows/BUILD_INSTRUCTIONS.md) | Compiling the Windows agent from source |
+| [Windows Agent Install](docs/WINDOWS_AGENT_INSTALL.md) | Detailed Windows agent deployment guide |
 | [Changelog](CHANGELOG.md) | Version history |
 
 ---

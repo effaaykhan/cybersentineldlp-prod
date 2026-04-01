@@ -58,7 +58,7 @@ class AgentPolicyTransformer:
 
         return {
             "version": version,
-            "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "policy_count": sum(len(items) for items in grouped.values()),
             "policies": grouped,
         }
@@ -77,16 +77,10 @@ class AgentPolicyTransformer:
         if not policy_type:
             return False
 
-        # Agent scoping via junction table (preferred) or legacy JSON fallback
-        assigned_agents: List[str] = []
-        if hasattr(policy, "agent_assignments") and policy.agent_assignments:
-            assigned_agents = [pa.agent_id for pa in policy.agent_assignments]
-        elif policy.agent_ids:
-            # Legacy JSON fallback — will be removed after migration
-            assigned_agents = [str(a) for a in policy.agent_ids]
-
-        if assigned_agents:
-            if not agent_id or str(agent_id) not in assigned_agents:
+        # Agent scoping via JSON agent_ids (junction table migration pending)
+        scoped_agents = policy.agent_ids or []
+        if scoped_agents:
+            if not agent_id or str(agent_id) not in [str(a) for a in scoped_agents]:
                 return False
 
         supported_platforms = POLICY_PLATFORM_SUPPORT.get(policy_type, [])
@@ -121,7 +115,7 @@ class AgentPolicyTransformer:
             "config": policy.config or {},
             "actions": policy.actions or {},
             "compliance_tags": policy.compliance_tags or [],
-            "updated_at": updated_at.isoformat() + "Z",
+            "updated_at": updated_at.isoformat(),
         }
 
     def _calculate_version(self, policies: Iterable[Policy]) -> str:

@@ -464,8 +464,8 @@ async def create_policy(
             "type": created_policy.type,
             "severity": created_policy.severity,
             "config": created_policy.config,
-            "conditions": policy.conditions or [],
-            "actions": policy.actions or [],
+            "conditions": created_policy.conditions or {},
+            "actions": created_policy.actions or {},
             "compliance_tags": created_policy.compliance_tags or [],
             "agent_ids": created_policy.agent_ids or [],
             "created_at": created_policy.created_at,
@@ -477,7 +477,7 @@ async def create_policy(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.put("/{policy_id}", response_model=Policy)
+@router.put("/{policy_id}")
 async def update_policy(
     policy_id: str,
     policy: PolicyUpsert,
@@ -547,8 +547,8 @@ async def update_policy(
             "type": updated_policy.type,
             "severity": updated_policy.severity,
             "config": updated_policy.config,
-            "conditions": policy.conditions or [],
-            "actions": policy.actions or [],
+            "conditions": updated_policy.conditions or {},
+            "actions": updated_policy.actions or {},
             "compliance_tags": updated_policy.compliance_tags or [],
             "agent_ids": updated_policy.agent_ids or [],
             "created_at": updated_policy.created_at,

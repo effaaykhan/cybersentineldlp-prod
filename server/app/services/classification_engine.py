@@ -358,14 +358,10 @@ class ClassificationEngine:
             validated_count = validated
 
         elif "AADHAAR" in labels or "INDIAN_ID" in labels:
-            # Verhoeff validation for Aadhaar numbers
-            validated = 0
-            for match in raw_matches:
-                match_str = match if isinstance(match, str) else str(match)
-                digits_only = re.sub(r'\D', '', match_str)
-                if verhoeff_check(digits_only):
-                    validated += 1
-            validated_count = validated
+            # Aadhaar: format match is sufficient for DLP detection.
+            # Verhoeff is NOT a gate — real leaked numbers may have typos.
+            # All format-matched 12-digit numbers are counted.
+            validated_count = raw_count
 
         # Filter out matches inside code comments (// or # or /* */)
         if validated_count > 0 and ("API" in labels or "CREDENTIALS" in labels):

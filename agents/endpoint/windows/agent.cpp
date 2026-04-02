@@ -3284,17 +3284,26 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             description += "\nDetected sensitive data:" + detectedSummary;
             description += "\nMatched policies: " + std::to_string(classification.matchedPolicies.size());
             
-            // Determine classification level from local analysis
-            std::string classLevel = "Public";
-            float classScore = 0.0f;
-            if (!classification.labels.empty()) {
-                classLevel = classification.labels[0];
+            // Determine classification level from confidence score
+            float classScore = std::min(1.0f, (float)totalMatches * 0.3f);
+            // Boost score based on severity of detected types
+            for (const auto& dt : detectedTypes) {
+                std::string lower = ToLower(dt);
+                if (lower == "credit_card" || lower == "ssn" || lower == "aadhaar" ||
+                    lower == "private_key" || lower == "aws_key") {
+                    classScore = std::max(classScore, 0.9f);
+                } else if (lower == "pan" || lower == "ifsc" || lower == "bank_account") {
+                    classScore = std::max(classScore, 0.7f);
+                } else if (lower == "email" || lower == "phone") {
+                    classScore = std::max(classScore, 0.4f);
+                }
             }
-            // Score based on match density
-            classScore = std::min(1.0f, (float)totalMatches * 0.3f);
-            if (classLevel == "Restricted" || classLevel == "restricted") classScore = std::max(classScore, 0.9f);
-            else if (classLevel == "Confidential" || classLevel == "confidential") classScore = std::max(classScore, 0.7f);
-            else if (classLevel == "Internal" || classLevel == "internal") classScore = std::max(classScore, 0.4f);
+            // Map score to classification level
+            std::string classLevel;
+            if (classScore >= 0.8f) classLevel = "Restricted";
+            else if (classScore >= 0.6f) classLevel = "Confidential";
+            else if (classScore >= 0.3f) classLevel = "Internal";
+            else classLevel = "Public";
 
             // Build matched rules list for the event
             std::string matchedRulesJson = "[";
@@ -3307,23 +3316,14 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             }
             matchedRulesJson += "]";
 
-            // Build precise description
-            std::string preciseDesc = "CLIPBOARD ALERT: Sensitive data detected in clipboard\n";
-            preciseDesc += "Classification: " + classLevel + " (confidence: " + std::to_string((int)(classScore * 100)) + "%)\n";
-            preciseDesc += "Action: " + classification.suggestedAction + "\n";
-            if (!windowTitle.empty()) preciseDesc += "Source: " + windowTitle + "\n";
-            preciseDesc += "\nMatched Classification Rules:\n";
-            for (const auto& [dataType, values] : classification.detectedContent) {
-                if (values.empty()) continue;
-                preciseDesc += "  - " + dataType + ": " + std::to_string(values.size()) + " match(es)\n";
-                for (size_t i = 0; i < values.size() && i < 2; i++) {
-                    std::string val = values[i];
-                    if (val.length() > 30) val = val.substr(0, 27) + "...";
-                    preciseDesc += "      " + val + "\n";
-                }
-            }
-            if (classification.suggestedAction == "block") {
-                preciseDesc += "\nClipboard content has been cleared.";
+            // Build clean description based on classification level
+            std::string preciseDesc;
+            if (classLevel == "Restricted" || classLevel == "Confidential") {
+                preciseDesc = "CLIPBOARD ALERT: Sensitive data detected";
+            } else if (classLevel == "Internal") {
+                preciseDesc = "CLIPBOARD: Internal data detected";
+            } else {
+                preciseDesc = "CLIPBOARD: Public data detected";
             }
 
             // Build JSON event

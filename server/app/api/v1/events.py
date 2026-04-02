@@ -31,6 +31,9 @@ class EventCreate(BaseModel):
     classification_level: Optional[str] = Field(None, description="Classification level (Public/Internal/Confidential/Restricted)")
     classification_score: Optional[float] = Field(None, description="Classification confidence score (0.0-1.0)")
     classification_labels: Optional[List[str]] = Field(None, description="List of sensitive data types detected")
+    classification_category: Optional[str] = Field(None, description="Classification category (Public/Internal/Confidential/Restricted)")
+    classification_rules_matched: Optional[List[str]] = Field(None, description="Names of classification rules that matched")
+    detected_content: Optional[str] = Field(None, description="Summary of detected sensitive content")
     action: Optional[str] = Field(None, description="Action taken (logged, blocked, alerted, etc.)")
     destination: Optional[str] = Field(None, description="Destination path for transfers")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., removable_drive, network_share)")
@@ -58,6 +61,9 @@ class DLPEvent(BaseModel):
     classification_labels: Optional[List[str]] = Field(default_factory=list)
     classification: Optional[List[Dict[str, Any]]] = None
     classification_metadata: Optional[Dict[str, Any]] = None
+    classification_category: Optional[str] = None
+    classification_rules_matched: Optional[List[str]] = None
+    detected_content: Optional[str] = None
     policy_id: Optional[str] = None
     action_taken: str = "logged"
     severity: str = "medium"
@@ -153,7 +159,10 @@ async def create_event(
         "metadata": {},
         "policy_version": event.policy_version,
         "content": event.content,
-        "processing_status": "pending",   # Tracks background processing
+        "classification_category": event.classification_category or event.classification_level or "Public",
+        "classification_rules_matched": event.classification_rules_matched or [],
+        "detected_content": event.detected_content,
+        "processing_status": "pending",
     }
 
     if event.event_subtype:

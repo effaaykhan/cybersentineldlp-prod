@@ -947,14 +947,17 @@ static ClassificationResult Classify(const std::string& content,
     std::cout << "[DEBUG] Mapped to detection type: '" << mappedType << "'" << std::endl;
     
     // Map data types to regex patterns and extract matches
-    // Patterns match server-side rules with boundary assertions to prevent cross-matching
+    // C++ std::regex uses ECMAScript — no lookbehind support
+    // Use \b word boundaries and post-match digit-count validation instead
     if (mappedType == "aadhaar") {
-        // Exactly 12 digits in 4-4-4 format, NOT part of longer number
-        std::regex pattern(R"((?<!\d)\d{4}[\s-]\d{4}[\s-]\d{4}(?!\d))");
+        // 12 digits in 4-4-4 format with space or dash separator (mandatory separator)
+        std::regex pattern(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)");
         std::sregex_iterator iter(content.begin(), content.end(), pattern);
         std::sregex_iterator end;
         for (; iter != end && results.size() < 10; ++iter) {
-            results.push_back(iter->str());
+            std::string m = iter->str();
+            std::string d; for (char c : m) if (std::isdigit(c)) d += c;
+            if (d.length() == 12) results.push_back(m);
         }
     }
     else if (mappedType == "pan") {
@@ -982,27 +985,30 @@ static ClassificationResult Classify(const std::string& content,
         }
     }
     else if (mappedType == "phone") {
-        // Indian mobile: +91/0 prefix + 10 digits starting with 6-9, NOT part of longer number
-        std::regex inPattern(R"((?<!\d)(?:\+91[\s.-]?|91[\s.-]?|0)?[6-9]\d{4}[\s.-]?\d{5}(?!\d))");
+        // Indian mobile: +91 prefix or starts with 6-9, exactly 10 digits
+        std::regex inPattern(R"((?:\+91[\s.-]?|0)[6-9]\d{4}[\s.-]?\d{5})");
         std::sregex_iterator inIter(content.begin(), content.end(), inPattern);
         std::sregex_iterator end;
         for (; inIter != end && results.size() < 10; ++inIter) {
-            results.push_back(inIter->str());
+            std::string m = inIter->str();
+            std::string d; for (char c : m) if (std::isdigit(c)) d += c;
+            if (d.length() >= 10 && d.length() <= 12) results.push_back(m);
         }
-        // US phone: (XXX) XXX-XXXX or XXX-XXX-XXXX with separators
-        std::regex usPattern(R"((?<!\d)(?:\+?1[\s.-])?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}(?!\d))");
+        // US phone: must have separator — (XXX) XXX-XXXX or XXX-XXX-XXXX
+        std::regex usPattern(R"((?:\+?1[\s.-])?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4})");
         std::sregex_iterator usIter(content.begin(), content.end(), usPattern);
         for (; usIter != end && results.size() < 10; ++usIter) {
-            results.push_back(usIter->str());
+            std::string m = usIter->str();
+            std::string d; for (char c : m) if (std::isdigit(c)) d += c;
+            if (d.length() >= 10 && d.length() <= 11) results.push_back(m);
         }
     }
     else if (mappedType == "credit_card") {
-        // 16 digits with optional separators, NOT part of longer number
-        std::regex pattern(R"((?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d))");
+        // 16 digits with optional separators, Luhn validated
+        std::regex pattern(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)");
         std::sregex_iterator iter(content.begin(), content.end(), pattern);
         std::sregex_iterator end;
         for (; iter != end && results.size() < 10; ++iter) {
-            // Luhn validation — reject fake numbers
             std::string digits;
             for (char c : iter->str()) { if (std::isdigit(c)) digits += c; }
             if (digits.length() == 16) {

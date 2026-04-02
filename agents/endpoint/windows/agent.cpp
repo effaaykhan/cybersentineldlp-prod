@@ -3255,7 +3255,19 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             description += "\nDetected sensitive data:" + detectedSummary;
             description += "\nMatched policies: " + std::to_string(classification.matchedPolicies.size());
             
-            // Build JSON event
+            // Determine classification level from local analysis
+            std::string classLevel = "Public";
+            float classScore = 0.0f;
+            if (!classification.labels.empty()) {
+                classLevel = classification.labels[0];
+            }
+            // Score based on match density
+            classScore = std::min(1.0f, (float)totalMatches * 0.3f);
+            if (classLevel == "Restricted" || classLevel == "restricted") classScore = std::max(classScore, 0.9f);
+            else if (classLevel == "Confidential" || classLevel == "confidential") classScore = std::max(classScore, 0.7f);
+            else if (classLevel == "Internal" || classLevel == "internal") classScore = std::max(classScore, 0.4f);
+
+            // Build JSON event — include raw content for server-side classification
             JsonBuilder json;
             json.AddString("event_id", GenerateUUID());
             json.AddString("event_type", "clipboard");
@@ -3266,22 +3278,38 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("description", description);
             json.AddString("severity", classification.severity);
             json.AddString("action", classification.suggestedAction);
+            json.AddString("content", Escape(content));  // Raw content for server classification
+            json.AddString("classification_level", classLevel);
+            json.AddDouble("classification_score", classScore);
+            json.AddArray("classification_labels", detectedTypes);
             json.AddString("detected_content", detectedSummary);
             json.AddArray("data_types", detectedTypes);
             json.AddArray("matched_policies", classification.matchedPolicies);
             json.AddInt("total_matches", totalMatches);
-            
+
             if (!sourceFile.empty()) {
                 json.AddString("source_file", sourceFile);
             }
             if (!windowTitle.empty()) {
                 json.AddString("source_window", windowTitle);
             }
-            
+
             json.AddString("timestamp", GetCurrentTimestampISO());
-            
+
             SendEvent(json.Build());
-            
+
+            // ENFORCEMENT: If policy says block, clear the clipboard
+            if (classification.suggestedAction == "block") {
+                logger.Warning("  CLEARING CLIPBOARD — sensitive data detected!");
+                if (OpenClipboard(NULL)) {
+                    EmptyClipboard();
+                    CloseClipboard();
+                    logger.Warning("  Clipboard cleared successfully");
+                } else {
+                    logger.Error("  Failed to clear clipboard");
+                }
+            }
+
             // Enhanced console logging
             logger.Warning("\n============================================================");
             logger.Warning("  🚨 CLIPBOARD ALERT: SENSITIVE DATA DETECTED!");

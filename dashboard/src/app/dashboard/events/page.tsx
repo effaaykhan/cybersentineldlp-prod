@@ -605,6 +605,66 @@ function EventDetailModal({
             </div>
           </div>
 
+          {/* Classification Details Section */}
+          {(event.classification_category || event.classification_level || event.classification_rules_matched?.length > 0) && (
+            <div className="bg-gradient-to-r from-purple-900/20 to-indigo-900/20 rounded-xl p-5 border border-purple-500/30">
+              <label className="text-sm text-purple-300 uppercase font-semibold mb-3 block">Classification Details</label>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Category</label>
+                  <span className={`inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-bold uppercase ${
+                    (event.classification_category || event.classification_level) === 'Restricted' ? 'bg-red-900/40 text-red-300 border border-red-500/50' :
+                    (event.classification_category || event.classification_level) === 'Confidential' ? 'bg-orange-900/40 text-orange-300 border border-orange-500/50' :
+                    (event.classification_category || event.classification_level) === 'Internal' ? 'bg-yellow-900/40 text-yellow-300 border border-yellow-500/50' :
+                    'bg-green-900/40 text-green-300 border border-green-500/50'
+                  }`}>
+                    {event.classification_category || event.classification_level || 'Public'}
+                  </span>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Confidence Score</label>
+                  <p className="text-white font-bold text-lg">{((event.classification_score || 0) * 100).toFixed(0)}%</p>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Action</label>
+                  <span className={`inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium uppercase ${
+                    event.action_taken === 'block' ? 'bg-red-900/40 text-red-300 border border-red-500/50' :
+                    event.action_taken === 'alert' ? 'bg-yellow-900/40 text-yellow-300 border border-yellow-500/50' :
+                    'bg-green-900/40 text-green-300 border border-green-500/50'
+                  }`}>
+                    {event.action_taken || 'allowed'}
+                  </span>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500 mb-1 block">Blocked</label>
+                  <span className={`inline-flex items-center px-3 py-1.5 rounded-lg text-sm font-medium ${
+                    event.blocked ? 'bg-red-900/40 text-red-300 border border-red-500/50' : 'bg-green-900/40 text-green-300 border border-green-500/50'
+                  }`}>
+                    {event.blocked ? 'Yes' : 'No'}
+                  </span>
+                </div>
+              </div>
+              {event.classification_rules_matched && event.classification_rules_matched.length > 0 && (
+                <div className="mt-4">
+                  <label className="text-xs text-gray-500 mb-2 block">Matched Classification Rules</label>
+                  <div className="flex flex-wrap gap-2">
+                    {event.classification_rules_matched.map((rule: string, idx: number) => (
+                      <span key={idx} className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-purple-900/40 text-purple-300 border border-purple-500/40">
+                        {rule}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {event.detected_content && (
+                <div className="mt-4">
+                  <label className="text-xs text-gray-500 mb-1 block">Detected Sensitive Content</label>
+                  <pre className="text-sm text-gray-300 bg-gray-900/50 rounded-lg p-3 border border-gray-700 whitespace-pre-wrap">{event.detected_content}</pre>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Raw JSON Data (Expandable) */}
           <div className="border-t border-gray-700 pt-4">
             <button

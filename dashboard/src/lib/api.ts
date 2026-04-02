@@ -208,6 +208,9 @@ export type Event = {
   classification_type?: string
   classification?: Array<{ label: string; confidence: number; [key: string]: any }>
   classification_metadata?: Record<string, any>
+  classification_category?: string
+  classification_rules_matched?: string[]
+  detected_content?: string
   file_path?: string
   file_name?: string
   file_id?: string

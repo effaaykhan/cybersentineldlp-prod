@@ -3278,7 +3278,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("description", description);
             json.AddString("severity", classification.severity);
             json.AddString("action", classification.suggestedAction);
-            json.AddString("content", Escape(content));  // Raw content for server classification
+            json.AddString("content", content);  // Raw content for server classification
             json.AddString("classification_level", classLevel);
             json.AddDouble("classification_score", classScore);
             json.AddArray("classification_labels", detectedTypes);

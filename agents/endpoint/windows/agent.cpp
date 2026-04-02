@@ -3335,36 +3335,6 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                     logger.Error("  Failed to clear clipboard");
                 }
 
-                // Step 2: Clear ONLY sensitive items from clipboard history
-                // Windows has no API to delete individual items, so we:
-                //   1. Read all clipboard history items
-                //   2. Clear entire history
-                //   3. Re-add only the non-sensitive items
-                try {
-                    system("powershell -WindowStyle Hidden -Command \""
-                           "[Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime] | Out-Null; "
-                           "$items = [Windows.ApplicationModel.DataTransfer.Clipboard]::GetHistoryItemsAsync().GetAwaiter().GetResult(); "
-                           "$safe = @(); "
-                           "$patterns = @('\\d{3}-\\d{2}-\\d{4}', '\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}', "
-                           "'[A-Z]{5}\\d{4}[A-Z]', '\\d{4}\\s\\d{4}\\s\\d{4}', 'BEGIN.*PRIVATE KEY', 'AKIA[0-9A-Z]{16}'); "
-                           "foreach($item in $items.Items) { "
-                           "  $txt = $item.Content.GetTextAsync().GetAwaiter().GetResult(); "
-                           "  $isSensitive = $false; "
-                           "  foreach($p in $patterns) { if($txt -match $p) { $isSensitive = $true; break } }; "
-                           "  if(-not $isSensitive) { $safe += $txt } "
-                           "}; "
-                           "[Windows.ApplicationModel.DataTransfer.Clipboard]::ClearHistory(); "
-                           "foreach($s in $safe) { "
-                           "  $dp = [Windows.ApplicationModel.DataTransfer.DataPackage]::new(); "
-                           "  $dp.SetText($s); "
-                           "  [Windows.ApplicationModel.DataTransfer.Clipboard]::SetHistoryItemAsContent($dp) "
-                           "  | Out-Null "
-                           "}"
-                           "\" >nul 2>&1");
-                    logger.Warning("  Sensitive items removed from clipboard history");
-                } catch (...) {
-                    logger.Debug("  Clipboard history selective clear failed");
-                }
 
                 // Update lastClipboard to prevent re-triggering on the empty clipboard
                 lastClipboard = "";

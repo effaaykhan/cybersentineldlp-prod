@@ -3336,23 +3336,24 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 }
 
                 // Step 2: Clear Windows clipboard history (Win+V)
-                // Uses the ClearHistory API available in Windows 10 1809+
+                // Kill TextInputHost process and delete clipboard cache files
                 try {
-                    HMODULE hUser32 = GetModuleHandleA("user32.dll");
-                    if (hUser32) {
-                        // Try to disable clipboard history for this content
-                        // by rapidly setting and clearing clipboard
-                        for (int i = 0; i < 3; i++) {
-                            if (OpenClipboard(NULL)) {
-                                EmptyClipboard();
-                                CloseClipboard();
-                            }
-                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    // Kill the clipboard history process
+                    system("taskkill /F /IM TextInputHost.exe >nul 2>&1");
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+                    // Delete clipboard history cache files
+                    std::string clipPath = std::string(getenv("LOCALAPPDATA") ? getenv("LOCALAPPDATA") : "") +
+                                           "\\Microsoft\\Windows\\Clipboard";
+                    if (!clipPath.empty() && fs::exists(clipPath)) {
+                        std::error_code ec;
+                        fs::remove_all(clipPath, ec);
+                        if (!ec) {
+                            logger.Warning("  Clipboard history cleared (Win+V)");
                         }
                     }
-                    logger.Warning("  Clipboard history clear attempted");
                 } catch (...) {
-                    logger.Debug("  Clipboard history clear not available");
+                    logger.Debug("  Clipboard history clear failed");
                 }
 
                 // Update lastClipboard to prevent re-triggering on the empty clipboard

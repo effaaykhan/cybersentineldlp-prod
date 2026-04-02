@@ -265,17 +265,26 @@ class ClassificationEngine:
                         if label not in data_types:
                             data_types.append(label)
 
-        # Step 6: Context-aware score adjustment
+        # Step 6: Correlation analysis — detect multi-signal patterns
+        correlation_result = self._correlate_signals(eval_content, matched_rules, data_types)
+        if correlation_result:
+            matched_rules.extend(correlation_result["extra_rules"])
+            total_weight += correlation_result["bonus_weight"]
+            total_matches += correlation_result["extra_matches"]
+            for dt in correlation_result.get("extra_types", []):
+                if dt not in data_types:
+                    data_types.append(dt)
+
+        # Step 7: Context-aware score adjustment
         context_multiplier = self._compute_context_multiplier(ctx)
         adjusted_weight = total_weight * context_multiplier
 
         # Entropy bonus: high entropy content with pattern matches is more suspicious
         entropy_bonus = 0.0
         if entropy > 5.0 and total_matches > 0:
-            entropy_bonus = 0.05  # Small bump for high-entropy content with matches
+            entropy_bonus = 0.05
 
         confidence_score = min(1.0, adjusted_weight + entropy_bonus)
-
         classification = self._determine_classification(confidence_score)
 
         return ClassificationResult(
@@ -289,7 +298,8 @@ class ClassificationEngine:
                 "context": ctx,
                 "context_multiplier": context_multiplier,
                 "entropy_score": round(entropy, 4),
-                "method": "multi_technique",
+                "method": "multi_technique_correlated",
+                "correlation": correlation_result.get("signals", []) if correlation_result else [],
             },
             entropy_score=round(entropy, 4),
             data_types=data_types,
@@ -507,6 +517,160 @@ class ClassificationEngine:
 
         logger.info("Rule cache refreshed", rule_count=len(rules))
         return rules
+
+    # ── Banking context keywords for correlation scoring ────────────────
+    _BANKING_KEYWORDS = frozenset({
+        "account", "acc", "acct", "a/c", "bank", "beneficiary",
+        "saving", "savings", "current", "deposit", "neft", "rtgs",
+        "imps", "ifsc", "branch", "cheque", "check", "transfer",
+        "wire", "remittance", "balance", "statement", "passbook",
+        "micr", "swift", "iban", "routing", "sort code",
+    })
+
+    _PII_KEYWORDS = frozenset({
+        "name", "dob", "date of birth", "address", "father",
+        "mother", "spouse", "gender", "nationality", "passport",
+        "voter", "driving", "license", "employee", "salary",
+        "compensation", "social security",
+    })
+
+    def _correlate_signals(
+        self,
+        content: str,
+        existing_rules: List[Dict[str, Any]],
+        existing_types: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Multi-signal correlation — detects when multiple weak signals
+        combine into a strong indicator of sensitive data.
+
+        Scoring system:
+          +50 → IFSC code detected
+          +40 → PAN card detected
+          +30 → Aadhaar detected
+          +20 → Numeric pattern (9-18 digits) near banking keywords
+          +20 → Banking keyword context present
+          +15 → PII keyword context present
+          +10 → Multiple structured IDs in same content
+
+        Thresholds:
+          score >= 70 → RESTRICTED (weight 0.95)
+          score >= 50 → CONFIDENTIAL (weight 0.7)
+          score >= 30 → INTERNAL (weight 0.4)
+        """
+        content_lower = content.lower()
+        score = 0
+        signals: List[str] = []
+        extra_rules: List[Dict[str, Any]] = []
+        extra_types: List[str] = []
+
+        # Already-detected signal types from rule evaluation
+        detected_set = set(t.upper() for t in existing_types)
+
+        # Score existing detections
+        if "IFSC" in detected_set or "IFSC_CODE" in detected_set:
+            score += 50
+            signals.append("IFSC_DETECTED(+50)")
+        if "PAN" in detected_set or "PAN_CARD" in detected_set or "TAX" in detected_set:
+            score += 40
+            signals.append("PAN_DETECTED(+40)")
+        if "AADHAAR" in detected_set:
+            score += 30
+            signals.append("AADHAAR_DETECTED(+30)")
+        if "CREDIT_CARD" in detected_set or "PCI" in detected_set:
+            score += 40
+            signals.append("CREDIT_CARD_DETECTED(+40)")
+        if "SSN" in detected_set:
+            score += 40
+            signals.append("SSN_DETECTED(+40)")
+        if "BANK_ACCOUNT" in detected_set:
+            score += 40
+            signals.append("BANK_ACCOUNT_DETECTED(+40)")
+
+        # Stage 1: Detect unstructured numeric candidates (9-18 digits)
+        # that weren't caught by specific rules
+        candidate_numbers = re.findall(r'(?<!\d)\d{9,18}(?!\d)', content)
+        uncaught_candidates = []
+        for num in candidate_numbers:
+            # Skip if already matched by a specific rule
+            already_matched = False
+            for rule in existing_rules:
+                if num in str(rule.get("match_count", "")):
+                    already_matched = True
+                    break
+            if not already_matched:
+                uncaught_candidates.append(num)
+
+        if uncaught_candidates:
+            score += 10
+            signals.append(f"NUMERIC_CANDIDATES({len(uncaught_candidates)})(+10)")
+
+        # Stage 2: Banking keyword context
+        banking_hits = [kw for kw in self._BANKING_KEYWORDS if kw in content_lower]
+        if banking_hits:
+            score += 20
+            signals.append(f"BANKING_CONTEXT({','.join(banking_hits[:3])})(+20)")
+
+            # If we have numeric candidates + banking context = likely account number
+            if uncaught_candidates:
+                score += 20
+                signals.append("NUMERIC+BANKING_CORRELATION(+20)")
+                extra_types.append("BANK_ACCOUNT_CANDIDATE")
+                extra_rules.append({
+                    "rule_id": "correlation-bank",
+                    "rule_name": "Correlation: Bank Account (context)",
+                    "rule_type": "correlation",
+                    "match_count": len(uncaught_candidates),
+                    "weight": 0.0,  # Weight handled by correlation score
+                    "priority": 0,
+                    "classification_labels": ["FINANCIAL", "BANK_ACCOUNT"],
+                    "severity": "high",
+                    "category": "Correlation",
+                    "label": None,
+                })
+
+        # Stage 3: PII keyword context
+        pii_hits = [kw for kw in self._PII_KEYWORDS if kw in content_lower]
+        if pii_hits:
+            score += 15
+            signals.append(f"PII_CONTEXT({','.join(pii_hits[:3])})(+15)")
+
+        # Stage 4: Multi-signal correlation bonus
+        structured_count = sum(1 for t in detected_set if t in {
+            "IFSC", "PAN", "PAN_CARD", "TAX", "AADHAAR",
+            "CREDIT_CARD", "SSN", "BANK_ACCOUNT",
+        })
+        if structured_count >= 2:
+            score += 10 * (structured_count - 1)
+            signals.append(f"MULTI_SIGNAL({structured_count} types)(+{10*(structured_count-1)})")
+
+        # No correlation signals found
+        if score == 0:
+            return None
+
+        # Convert score to weight bonus
+        if score >= 70:
+            bonus_weight = 0.95
+        elif score >= 50:
+            bonus_weight = 0.7
+        elif score >= 30:
+            bonus_weight = 0.4
+        else:
+            bonus_weight = 0.1
+
+        # Don't add bonus if rules already gave high confidence
+        existing_weight = sum(r.get("weight", 0) for r in existing_rules)
+        if existing_weight >= 0.8:
+            bonus_weight = max(0, bonus_weight - existing_weight)
+
+        return {
+            "score": score,
+            "signals": signals,
+            "bonus_weight": round(bonus_weight, 4),
+            "extra_rules": extra_rules,
+            "extra_matches": len(uncaught_candidates),
+            "extra_types": extra_types,
+        }
 
     def _compute_context_multiplier(self, ctx: Dict[str, Any]) -> float:
         """

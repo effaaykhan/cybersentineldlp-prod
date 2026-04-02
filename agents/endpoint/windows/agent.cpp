@@ -947,8 +947,10 @@ static ClassificationResult Classify(const std::string& content,
     std::cout << "[DEBUG] Mapped to detection type: '" << mappedType << "'" << std::endl;
     
     // Map data types to regex patterns and extract matches
+    // Patterns match server-side rules with boundary assertions to prevent cross-matching
     if (mappedType == "aadhaar") {
-        std::regex pattern(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)");
+        // Exactly 12 digits in 4-4-4 format, NOT part of longer number
+        std::regex pattern(R"((?<!\d)\d{4}[\s-]\d{4}[\s-]\d{4}(?!\d))");
         std::sregex_iterator iter(content.begin(), content.end(), pattern);
         std::sregex_iterator end;
         for (; iter != end && results.size() < 10; ++iter) {
@@ -972,7 +974,7 @@ static ClassificationResult Classify(const std::string& content,
         }
     }
     else if (mappedType == "email") {
-        std::regex pattern(R"(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b)");
+        std::regex pattern(R"(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b)");
         std::sregex_iterator iter(content.begin(), content.end(), pattern);
         std::sregex_iterator end;
         for (; iter != end && results.size() < 10; ++iter) {
@@ -980,31 +982,38 @@ static ClassificationResult Classify(const std::string& content,
         }
     }
     else if (mappedType == "phone") {
-        // Matches:
-        // +1-555-123-4567, +44 20 7123 4567, +91 98765 43210
-        // (555) 123-4567, 555-123-4567, 555.123.4567
-        // Indian: +91 9876543210, 9876543210, 09876543210
-        std::regex pattern(R"(\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b)");
-        std::sregex_iterator iter(content.begin(), content.end(), pattern);
+        // Indian mobile: +91/0 prefix + 10 digits starting with 6-9, NOT part of longer number
+        std::regex inPattern(R"((?<!\d)(?:\+91[\s.-]?|91[\s.-]?|0)?[6-9]\d{4}[\s.-]?\d{5}(?!\d))");
+        std::sregex_iterator inIter(content.begin(), content.end(), inPattern);
         std::sregex_iterator end;
-        for (; iter != end && results.size() < 10; ++iter) {
-            std::string match = iter->str();
-            // Filter: must have at least 10 digits total
-            std::string digitsOnly;
-            for (char c : match) {
-                if (std::isdigit(c)) digitsOnly += c;
-            }
-            if (digitsOnly.length() >= 10) {
-                results.push_back(match);
-            }
+        for (; inIter != end && results.size() < 10; ++inIter) {
+            results.push_back(inIter->str());
+        }
+        // US phone: (XXX) XXX-XXXX or XXX-XXX-XXXX with separators
+        std::regex usPattern(R"((?<!\d)(?:\+?1[\s.-])?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}(?!\d))");
+        std::sregex_iterator usIter(content.begin(), content.end(), usPattern);
+        for (; usIter != end && results.size() < 10; ++usIter) {
+            results.push_back(usIter->str());
         }
     }
     else if (mappedType == "credit_card") {
-        std::regex pattern(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)");
+        // 16 digits with optional separators, NOT part of longer number
+        std::regex pattern(R"((?<!\d)\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}(?!\d))");
         std::sregex_iterator iter(content.begin(), content.end(), pattern);
         std::sregex_iterator end;
         for (; iter != end && results.size() < 10; ++iter) {
-            results.push_back(iter->str());
+            // Luhn validation — reject fake numbers
+            std::string digits;
+            for (char c : iter->str()) { if (std::isdigit(c)) digits += c; }
+            if (digits.length() == 16) {
+                int sum = 0;
+                for (int i = digits.length() - 1; i >= 0; i--) {
+                    int d = digits[i] - '0';
+                    if ((digits.length() - 1 - i) % 2 == 1) { d *= 2; if (d > 9) d -= 9; }
+                    sum += d;
+                }
+                if (sum % 10 == 0) results.push_back(iter->str());
+            }
         }
     }
     else if (mappedType == "ssn") {
@@ -3281,7 +3290,37 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             else if (classLevel == "Confidential" || classLevel == "confidential") classScore = std::max(classScore, 0.7f);
             else if (classLevel == "Internal" || classLevel == "internal") classScore = std::max(classScore, 0.4f);
 
-            // Build JSON event — include raw content for server-side classification
+            // Build matched rules list for the event
+            std::string matchedRulesJson = "[";
+            bool firstRule = true;
+            for (const auto& [dataType, values] : classification.detectedContent) {
+                if (values.empty()) continue;
+                if (!firstRule) matchedRulesJson += ",";
+                firstRule = false;
+                matchedRulesJson += "{\"rule_name\":\"" + dataType + "\",\"match_count\":" + std::to_string(values.size()) + "}";
+            }
+            matchedRulesJson += "]";
+
+            // Build precise description
+            std::string preciseDesc = "CLIPBOARD ALERT: Sensitive data detected in clipboard\n";
+            preciseDesc += "Classification: " + classLevel + " (confidence: " + std::to_string((int)(classScore * 100)) + "%)\n";
+            preciseDesc += "Action: " + classification.suggestedAction + "\n";
+            if (!windowTitle.empty()) preciseDesc += "Source: " + windowTitle + "\n";
+            preciseDesc += "\nMatched Classification Rules:\n";
+            for (const auto& [dataType, values] : classification.detectedContent) {
+                if (values.empty()) continue;
+                preciseDesc += "  - " + dataType + ": " + std::to_string(values.size()) + " match(es)\n";
+                for (size_t i = 0; i < values.size() && i < 2; i++) {
+                    std::string val = values[i];
+                    if (val.length() > 30) val = val.substr(0, 27) + "...";
+                    preciseDesc += "      " + val + "\n";
+                }
+            }
+            if (classification.suggestedAction == "block") {
+                preciseDesc += "\nClipboard content has been cleared.";
+            }
+
+            // Build JSON event
             JsonBuilder json;
             json.AddString("event_id", GenerateUUID());
             json.AddString("event_type", "clipboard");
@@ -3289,17 +3328,20 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "agent");
             json.AddString("user_email", GetUsername() + "@" + GetHostname());
-            json.AddString("description", description);
+            json.AddString("description", preciseDesc);
             json.AddString("severity", classification.severity);
             json.AddString("action", classification.suggestedAction);
-            json.AddString("content", content);  // Raw content for server classification
+            json.AddString("content", content);
             json.AddString("classification_level", classLevel);
             json.AddDouble("classification_score", classScore);
+            json.AddString("classification_category", classLevel);
             json.AddArray("classification_labels", detectedTypes);
+            json.AddArray("classification_rules_matched", detectedTypes);
             json.AddString("detected_content", detectedSummary);
             json.AddArray("data_types", detectedTypes);
             json.AddArray("matched_policies", classification.matchedPolicies);
             json.AddInt("total_matches", totalMatches);
+            json.AddBool("blocked", classification.suggestedAction == "block");
 
             if (!sourceFile.empty()) {
                 json.AddString("source_file", sourceFile);

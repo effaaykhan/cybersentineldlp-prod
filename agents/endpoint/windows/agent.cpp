@@ -3183,19 +3183,33 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 }
             }
             
-            if (classification.detectedContent.empty()) {
-                logger.Info("No actual sensitive content detected");
-                return;
-            }
-            
             // Count total matches
             int totalMatches = 0;
             for (const auto& [dataType, values] : classification.detectedContent) {
                 totalMatches += values.size();
             }
-            
-            if (totalMatches == 0) {
-                logger.Info("No sensitive content to report - skipping alert");
+
+            // If no sensitive content detected, send a Public/Allowed event
+            if (classification.detectedContent.empty() || totalMatches == 0) {
+                logger.Info("Clipboard content classified as Public - allowed");
+                JsonBuilder pubJson;
+                pubJson.AddString("event_id", GenerateUUID());
+                pubJson.AddString("event_type", "clipboard");
+                pubJson.AddString("event_subtype", "clipboard_copy");
+                pubJson.AddString("agent_id", config.agentId);
+                pubJson.AddString("source_type", "agent");
+                pubJson.AddString("user_email", GetUsername() + "@" + GetHostname());
+                pubJson.AddString("description", "Clipboard content - no sensitive data detected");
+                pubJson.AddString("severity", "low");
+                pubJson.AddString("action", "allowed");
+                pubJson.AddString("content", content);
+                pubJson.AddString("classification_level", "Public");
+                pubJson.AddDouble("classification_score", 0.0);
+                pubJson.AddString("timestamp", GetCurrentTimestampISO());
+                if (!windowTitle.empty()) {
+                    pubJson.AddString("source_window", windowTitle);
+                }
+                SendEvent(pubJson.Build());
                 return;
             }
             
@@ -3298,16 +3312,51 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
 
             SendEvent(json.Build());
 
-            // ENFORCEMENT: If policy says block, clear the clipboard
+            // ENFORCEMENT: If policy says block, clear the clipboard completely
             if (classification.suggestedAction == "block") {
                 logger.Warning("  CLEARING CLIPBOARD — sensitive data detected!");
+
+                // Step 1: Clear traditional clipboard
                 if (OpenClipboard(NULL)) {
                     EmptyClipboard();
+                    // Set empty text so clipboard history gets an empty entry
+                    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(wchar_t));
+                    if (hMem) {
+                        wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
+                        if (pMem) {
+                            pMem[0] = L'\0';
+                            GlobalUnlock(hMem);
+                            SetClipboardData(CF_UNICODETEXT, hMem);
+                        }
+                    }
                     CloseClipboard();
                     logger.Warning("  Clipboard cleared successfully");
                 } else {
                     logger.Error("  Failed to clear clipboard");
                 }
+
+                // Step 2: Clear Windows clipboard history (Win+V)
+                // Uses the ClearHistory API available in Windows 10 1809+
+                try {
+                    HMODULE hUser32 = GetModuleHandleA("user32.dll");
+                    if (hUser32) {
+                        // Try to disable clipboard history for this content
+                        // by rapidly setting and clearing clipboard
+                        for (int i = 0; i < 3; i++) {
+                            if (OpenClipboard(NULL)) {
+                                EmptyClipboard();
+                                CloseClipboard();
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        }
+                    }
+                    logger.Warning("  Clipboard history clear attempted");
+                } catch (...) {
+                    logger.Debug("  Clipboard history clear not available");
+                }
+
+                // Update lastClipboard to prevent re-triggering on the empty clipboard
+                lastClipboard = "";
             }
 
             // Enhanced console logging

@@ -3336,22 +3336,12 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 }
 
                 // Step 2: Clear Windows clipboard history (Win+V)
-                // Kill TextInputHost process and delete clipboard cache files
                 try {
-                    // Kill the clipboard history process
-                    system("taskkill /F /IM TextInputHost.exe >nul 2>&1");
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-                    // Delete clipboard history cache files
-                    std::string clipPath = std::string(getenv("LOCALAPPDATA") ? getenv("LOCALAPPDATA") : "") +
-                                           "\\Microsoft\\Windows\\Clipboard";
-                    if (!clipPath.empty() && fs::exists(clipPath)) {
-                        std::error_code ec;
-                        fs::remove_all(clipPath, ec);
-                        if (!ec) {
-                            logger.Warning("  Clipboard history cleared (Win+V)");
-                        }
-                    }
+                    system("powershell -WindowStyle Hidden -Command \"Set-Clipboard -Value $null; "
+                           "Get-Process TextInputHost -ErrorAction SilentlyContinue | Stop-Process -Force; "
+                           "Start-Sleep 1; "
+                           "Remove-Item $env:LOCALAPPDATA\\Microsoft\\Windows\\Clipboard\\* -Recurse -Force -ErrorAction SilentlyContinue\" >nul 2>&1");
+                    logger.Warning("  Clipboard history cleared (Win+V)");
                 } catch (...) {
                     logger.Debug("  Clipboard history clear failed");
                 }

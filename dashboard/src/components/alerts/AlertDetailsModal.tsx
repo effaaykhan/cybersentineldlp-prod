@@ -117,6 +117,69 @@ export default function AlertDetailsModal({ alert, isOpen, onClose }: AlertDetai
               </div>
             </div>
 
+            {/* Classification Details */}
+            {(alert.classification_category || alert.classification_level || alert.classification_rules_matched?.length > 0) && (
+              <div className="mb-6 bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <h3 className="text-sm font-semibold text-purple-800 mb-3">Classification Details</h3>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <span className="font-medium text-gray-600">Category:</span>
+                    <span className={cn(
+                      'ml-2 px-2 py-0.5 rounded text-xs font-bold uppercase',
+                      (alert.classification_category || alert.classification_level) === 'Restricted' ? 'bg-red-100 text-red-800' :
+                      (alert.classification_category || alert.classification_level) === 'Confidential' ? 'bg-orange-100 text-orange-800' :
+                      (alert.classification_category || alert.classification_level) === 'Internal' ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-green-100 text-green-800'
+                    )}>
+                      {alert.classification_category || alert.classification_level || 'Public'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-600">Confidence:</span>
+                    <span className="ml-2 font-bold">{((alert.classification_score || 0) * 100).toFixed(0)}%</span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-600">Action:</span>
+                    <span className={cn(
+                      'ml-2 px-2 py-0.5 rounded text-xs font-medium uppercase',
+                      alert.action_taken === 'block' ? 'bg-red-100 text-red-800' :
+                      alert.action_taken === 'alert' ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-green-100 text-green-800'
+                    )}>
+                      {alert.action_taken || 'allowed'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="font-medium text-gray-600">Blocked:</span>
+                    <span className={cn(
+                      'ml-2 px-2 py-0.5 rounded text-xs font-medium',
+                      alert.blocked ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+                    )}>
+                      {alert.blocked ? 'Yes' : 'No'}
+                    </span>
+                  </div>
+                </div>
+                {alert.classification_rules_matched && alert.classification_rules_matched.length > 0 && (
+                  <div className="mt-3">
+                    <span className="font-medium text-gray-600 text-sm">Matched Rules:</span>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {alert.classification_rules_matched.map((rule: string, idx: number) => (
+                        <span key={idx} className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                          {rule}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {alert.detected_content && (
+                  <div className="mt-3">
+                    <span className="font-medium text-gray-600 text-sm">Detected Content:</span>
+                    <pre className="mt-1 text-xs text-gray-700 bg-white rounded p-2 border border-gray-200 whitespace-pre-wrap">{alert.detected_content}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Raw Event Log */}
             <div>
               <h3 className="text-sm font-semibold text-gray-700 mb-3">Raw Event Log</h3>

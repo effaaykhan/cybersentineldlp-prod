@@ -27,6 +27,13 @@ class Alert(BaseModel):
     event_id: str
     agent_id: Optional[str] = None
     created_at: Optional[datetime] = None
+    classification_category: Optional[str] = None
+    classification_level: Optional[str] = None
+    classification_score: Optional[float] = None
+    classification_rules_matched: Optional[List[str]] = None
+    action_taken: Optional[str] = None
+    blocked: Optional[bool] = None
+    detected_content: Optional[str] = None
 
 
 class AlertsResponse(BaseModel):
@@ -155,6 +162,13 @@ async def get_alerts(
                     event_id=alert_id,
                     agent_id=event_doc.get("agent_id"),
                     created_at=ts,
+                    classification_category=event_doc.get("classification_category") or event_doc.get("classification_level"),
+                    classification_level=event_doc.get("classification_level"),
+                    classification_score=event_doc.get("classification_score"),
+                    classification_rules_matched=event_doc.get("classification_rules_matched") or event_doc.get("classification_labels"),
+                    action_taken=event_doc.get("action_taken"),
+                    blocked=event_doc.get("blocked"),
+                    detected_content=event_doc.get("detected_content"),
                 )
                 alerts.append(alert)
             except Exception as e:

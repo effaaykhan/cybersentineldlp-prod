@@ -3336,11 +3336,13 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 }
 
                 // Step 2: Clear Windows clipboard history (Win+V)
+                // Uses the official WinRT Clipboard.ClearHistory() API
                 try {
-                    system("powershell -WindowStyle Hidden -Command \"Set-Clipboard -Value $null; "
-                           "Get-Process TextInputHost -ErrorAction SilentlyContinue | Stop-Process -Force; "
-                           "Start-Sleep 1; "
-                           "Remove-Item $env:LOCALAPPDATA\\Microsoft\\Windows\\Clipboard\\* -Recurse -Force -ErrorAction SilentlyContinue\" >nul 2>&1");
+                    system("powershell -WindowStyle Hidden -Command \""
+                           "[Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType=WindowsRuntime] | Out-Null; "
+                           "[Windows.ApplicationModel.DataTransfer.Clipboard]::ClearHistory(); "
+                           "[Windows.ApplicationModel.DataTransfer.Clipboard]::SetContent($null)"
+                           "\" >nul 2>&1");
                     logger.Warning("  Clipboard history cleared (Win+V)");
                 } catch (...) {
                     logger.Debug("  Clipboard history clear failed");

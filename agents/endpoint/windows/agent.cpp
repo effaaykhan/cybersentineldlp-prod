@@ -5804,9 +5804,11 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                         if (policy.action == "block") {
                             HandleUSBFileTransferBlockNoTimestamp(
                                 fileName, fileName, drivePath, drivePath, policy);
+                            currentUSBFileState.erase(classifKey);
                         } else if (policy.action == "quarantine") {
                             HandleUSBFileTransferQuarantineNoTimestamp(
                                 fileName, fileName, drivePath, drivePath, policy);
+                            currentUSBFileState.erase(classifKey);
                         } else {
                             HandleUSBFileTransferAlertNoTimestamp(
                                 fileName, fileName, drivePath, drivePath, policy);
@@ -5820,6 +5822,8 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                             evalResult.classificationLevel,
                             evalResult.confidenceScore,
                             evalResult.matchedRules);
+                        // Reset classifKey so the same file can be detected if re-copied
+                        currentUSBFileState.erase(classifKey);
                     } else {
                         logger.Info("✅ ALLOWED: " + fileName +
                                    " (" + evalResult.classificationLevel + " " +

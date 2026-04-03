@@ -15,7 +15,10 @@ import {
   X,
   Bell,
   Monitor,
-  FolderTree
+  FolderTree,
+  Search,
+  ClipboardList,
+  Flame,
 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -48,8 +51,11 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Agents', href: '/dashboard/agents', icon: Monitor },
     { name: 'Events', href: '/dashboard/events', icon: AlertTriangle },
+    { name: 'Incidents', href: '/dashboard/incidents', icon: Flame },
+    { name: 'Log Explorer', href: '/dashboard/log-explorer', icon: Search },
     { name: 'Classification', href: '/dashboard/classification', icon: FolderTree },
     { name: 'Policies', href: '/dashboard/policies', icon: FileText },
+    { name: 'Audit Trail', href: '/dashboard/audit-trail', icon: ClipboardList },
     { name: 'Users', href: '/dashboard/users', icon: Users },
     { name: 'Settings', href: '/dashboard/settings', icon: Settings },
   ]

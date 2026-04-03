@@ -49,7 +49,9 @@
       "Bash(git push:*)",
       "Bash(grep -n \"\\\\.map\\(\" /home/soc/Data-Loss-Prevention/dashboard/src/components/policies/*.tsx)",
       "Bash(head -10 __NEW_LINE_6480d0c4ff334cfe__ echo --- grep -n \"Incident\\\\|AuditTrail\\\\|LogExplorer\\\\|audit-trail\\\\|log-explorer\\\\|incidents\" /home/soc/Data-Loss-Prevention/dashboard/src/App.tsx)",
-      "Bash(echo '=== Incidents API ===' grep -n def.*incident /home/soc/Data-Loss-Prevention/server/app/api/v1/incidents.py)"
+      "Bash(echo '=== Incidents API ===' grep -n def.*incident /home/soc/Data-Loss-Prevention/server/app/api/v1/incidents.py)",
+      "Bash(docker stop:*)",
+      "Bash(docker rm:*)"
     ],
     "deny": [],
     "ask": []

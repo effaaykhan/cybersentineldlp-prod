@@ -1,8 +1,8 @@
-'use client'
+
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import DashboardLayout from '@/components/layout/DashboardLayout'
+
 import { Flame, Shield, Clock, User, ChevronDown, ChevronUp, Loader2, X, AlertTriangle, CheckCircle, Eye, RefreshCcw } from 'lucide-react'
 import { getAutoIncidents, getAutoIncident, updateAutoIncident } from '@/lib/api'
 import { formatDateTimeIST } from '@/lib/utils'
@@ -189,7 +189,7 @@ export default function IncidentsPage() {
   const resolvedIncidents = incidents.filter((i: any) => i.status === 'resolved')
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -278,6 +278,6 @@ export default function IncidentsPage() {
 
         {selectedIncident && <IncidentDetail incidentId={selectedIncident} onClose={() => setSelectedIncident(null)} />}
       </div>
-    </DashboardLayout>
+    </>
   )
 }

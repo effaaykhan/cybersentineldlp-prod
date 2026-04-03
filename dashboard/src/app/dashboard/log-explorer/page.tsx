@@ -1,8 +1,8 @@
-'use client'
+
 
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import DashboardLayout from '@/components/layout/DashboardLayout'
+
 import { Search, Loader2, X, Download, RefreshCcw, Clock, AlertTriangle, Clipboard, Usb, File, ChevronDown, ChevronUp, Filter, FileText } from 'lucide-react'
 import { getEvents as fetchEvents } from '@/lib/api'
 import { formatDateTimeIST } from '@/lib/utils'
@@ -145,7 +145,7 @@ export default function LogExplorerPage() {
   const hasFilters = searchQuery || eventType !== 'all' || severity !== 'all' || classification !== 'all' || timePreset || startTime || endTime || agentFilter || userFilter
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -362,6 +362,6 @@ export default function LogExplorerPage() {
           </div>
         )}
       </div>
-    </DashboardLayout>
+    </>
   )
 }

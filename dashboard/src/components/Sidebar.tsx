@@ -22,11 +22,10 @@ const navigation = [
   { name: 'Agents', to: '/agents', icon: Server },
   { name: 'Events', to: '/events', icon: FileText },
   { name: 'Alerts', to: '/alerts', icon: AlertCircle },
-  { name: 'Rules', to: '/rules', icon: List },
-  { name: 'Policies', to: '/policies', icon: Shield },
   { name: 'Incidents', to: '/incidents', icon: AlertTriangle },
   { name: 'Log Explorer', to: '/log-explorer', icon: Search },
-  { name: 'Audit Trail', to: '/audit-trail', icon: ClipboardList },
+  { name: 'Rules', to: '/rules', icon: List },
+  { name: 'Policies', to: '/policies', icon: Shield },
   { name: 'Settings', to: '/settings', icon: Settings },
 ]
 

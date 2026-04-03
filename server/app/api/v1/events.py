@@ -239,6 +239,9 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                 {"$set": update_fields},
             )
 
+            # Auto-create incident for blocked/critical events
+            await _auto_create_incident(db, event_id, payload, update_fields)
+
             logger.info("Background event processing complete", event_id=event_id)
             return
 
@@ -270,6 +273,99 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                     event_id=event_id,
                     error=str(e),
                 )
+
+
+async def _auto_create_incident(
+    db, event_id: str, payload: Dict[str, Any], update_fields: Dict[str, Any]
+) -> None:
+    """
+    Auto-create incidents for blocked or high-severity events.
+
+    Triggers:
+      - Classification level is Restricted or Confidential AND action is block
+      - Severity is critical or high
+      - Repeated violations from same user (5+ events in 1 hour)
+    """
+    try:
+        incidents_col = db["incidents"]
+        events_col = db["dlp_events"]
+
+        classification = (
+            update_fields.get("classification_level")
+            or payload.get("classification_level")
+            or "Public"
+        )
+        action = update_fields.get("action_taken") or payload.get("event", {}).get("action", "logged")
+        severity_str = update_fields.get("severity") or payload.get("event", {}).get("severity", "low")
+        blocked = update_fields.get("blocked", False)
+        agent_id = payload.get("agent", {}).get("id", "unknown")
+        user_email = payload.get("user", {}).get("email", "unknown")
+        event_type = payload.get("event", {}).get("type", "unknown")
+
+        should_create = False
+        title = ""
+        sev_num = 2
+
+        # Rule 1: Blocked restricted/confidential data
+        if blocked and classification in ("Restricted", "Confidential"):
+            should_create = True
+            title = f"Blocked {classification} Data — {event_type.replace('_', ' ').title()}"
+            sev_num = 4 if classification == "Restricted" else 3
+
+        # Rule 2: Critical/high severity events
+        elif severity_str in ("critical", "high"):
+            should_create = True
+            title = f"{severity_str.title()} Severity Event — {event_type.replace('_', ' ').title()}"
+            sev_num = 4 if severity_str == "critical" else 3
+
+        if not should_create:
+            return
+
+        # Check for duplicate — don't create if same event_id already has an incident
+        existing = await incidents_col.find_one({"event_id": event_id})
+        if existing:
+            return
+
+        # Check for repeated violations — count events from same user in last hour
+        from datetime import timedelta
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        violation_count = await events_col.count_documents({
+            "user_email": user_email,
+            "blocked": True,
+            "timestamp": {"$gte": one_hour_ago},
+        })
+
+        if violation_count >= 5:
+            title = f"Repeated Violations ({violation_count}x) — {user_email}"
+            sev_num = 4
+
+        incident_doc = {
+            "id": event_id,
+            "event_id": event_id,
+            "title": title,
+            "description": f"Auto-generated from {event_type} event. Classification: {classification}. Action: {action}.",
+            "severity": sev_num,
+            "status": "open",
+            "agent_id": agent_id,
+            "user_email": user_email,
+            "classification_level": classification,
+            "event_count": violation_count,
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+            "assigned_to": None,
+            "comments": [],
+        }
+
+        await incidents_col.update_one(
+            {"event_id": event_id},
+            {"$setOnInsert": incident_doc},
+            upsert=True,
+        )
+
+        logger.info("Auto-incident created", event_id=event_id, title=title, severity=sev_num)
+
+    except Exception as e:
+        logger.warning("Auto-incident creation failed (non-fatal)", error=str(e))
 
 
 def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:

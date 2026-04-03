@@ -277,3 +277,113 @@ async def list_comments(
 
     comments = await svc.get_comments(incident_id)
     return [_comment_to_out(c) for c in comments]
+
+
+# ---------------------------------------------------------------------------
+# MongoDB-backed auto-incident endpoints
+# ---------------------------------------------------------------------------
+
+from app.core.database import get_mongodb
+from datetime import timezone
+
+
+@router.get("/auto/list")
+async def list_auto_incidents(
+    status: Optional[str] = Query(None),
+    severity: Optional[int] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: dict = Depends(get_current_user),
+):
+    """List auto-generated incidents from MongoDB."""
+    db = get_mongodb()
+    col = db["incidents"]
+
+    query: dict = {}
+    if status:
+        query["status"] = status
+    if severity is not None:
+        query["severity"] = severity
+
+    cursor = col.find(query).sort("created_at", -1).limit(limit)
+    incidents = []
+    async for doc in cursor:
+        doc.pop("_id", None)
+        # Normalize datetime
+        for f in ("created_at", "updated_at"):
+            if f in doc and isinstance(doc[f], datetime):
+                doc[f] = doc[f].isoformat()
+        incidents.append(doc)
+
+    # Stats
+    stats = {
+        "total": await col.count_documents({}),
+        "open": await col.count_documents({"status": "open"}),
+        "investigating": await col.count_documents({"status": "investigating"}),
+        "resolved": await col.count_documents({"status": "resolved"}),
+    }
+
+    return {"incidents": incidents, "stats": stats}
+
+
+@router.patch("/auto/{incident_id}")
+async def update_auto_incident(
+    incident_id: str,
+    update: IncidentUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Update an auto-generated incident status/assignment."""
+    db = get_mongodb()
+    col = db["incidents"]
+
+    update_fields: dict = {"updated_at": datetime.now(timezone.utc)}
+    if update.status:
+        update_fields["status"] = update.status
+    if update.assigned_to:
+        update_fields["assigned_to"] = str(update.assigned_to)
+
+    result = await col.update_one({"id": incident_id}, {"$set": update_fields})
+    if result.matched_count == 0:
+        # Try event_id as fallback
+        result = await col.update_one({"event_id": incident_id}, {"$set": update_fields})
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    return {"status": "updated"}
+
+
+@router.get("/auto/{incident_id}")
+async def get_auto_incident(
+    incident_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get a single auto-generated incident with related events."""
+    db = get_mongodb()
+    col = db["incidents"]
+    events_col = db["dlp_events"]
+
+    doc = await col.find_one({"$or": [{"id": incident_id}, {"event_id": incident_id}]})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    doc.pop("_id", None)
+    for f in ("created_at", "updated_at"):
+        if f in doc and isinstance(doc[f], datetime):
+            doc[f] = doc[f].isoformat()
+
+    # Get related events (same user, same hour)
+    related = []
+    if doc.get("user_email"):
+        cursor = events_col.find({
+            "user_email": doc["user_email"],
+            "severity": {"$in": ["critical", "high"]},
+        }).sort("timestamp", -1).limit(20)
+        async for ev in cursor:
+            ev.pop("_id", None)
+            for f in ("timestamp", "created_at", "processed_at"):
+                if f in ev and isinstance(ev[f], datetime):
+                    ev[f] = ev[f].isoformat()
+            related.append(ev)
+
+    doc["related_events"] = related
+    return doc

@@ -504,6 +504,22 @@ export async function getIncidentStats() {
   return data
 }
 
+// ── Auto Incidents (MongoDB-backed) ──
+export async function getAutoIncidents(params?: { status?: string; severity?: number; limit?: number }) {
+  const { data } = await apiClient.get('/incidents/auto/list', { params })
+  return data
+}
+
+export async function getAutoIncident(id: string) {
+  const { data } = await apiClient.get(`/incidents/auto/${id}`)
+  return data
+}
+
+export async function updateAutoIncident(id: string, payload: { status?: string; assigned_to?: string }) {
+  const { data } = await apiClient.patch(`/incidents/auto/${id}`, payload)
+  return data
+}
+
 // ── Audit Logs ──
 export async function getAuditLogs(params?: { skip?: number; limit?: number; user_id?: string; action?: string; start_date?: string; end_date?: string }) {
   const { data } = await apiClient.get('/audit-logs/', { params })

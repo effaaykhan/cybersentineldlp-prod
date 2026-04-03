@@ -5748,13 +5748,21 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
             }
         }
 
-        if (hasClassificationOnlyPolicies) {
+        // PASS 2: Classify ALL new files on USB — catches files not in monitoredFiles
+        // This ensures files created directly on USB or copied from non-monitored paths
+        // are still classified and enforced.
+        {
             for (const auto& filePair : usbFiles) {
                 const std::string& fileName = filePair.first;
                 std::string classifKey = std::string("classif:") + drivePath + ":" + fileName;
 
-                // Skip files already evaluated
+                // Skip files already evaluated in Pass 1 or previous scans
                 if (currentUSBFileState.find(classifKey) != currentUSBFileState.end()) {
+                    continue;
+                }
+                // Also skip if already caught by monitored files check
+                std::string monFileKey = drivePath + ":" + fileName;
+                if (currentUSBFileState.find(monFileKey) != currentUSBFileState.end()) {
                     continue;
                 }
 
@@ -5764,9 +5772,9 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                 std::string usbFilePath = drivePath + "\\" + fileName;
                 if (!fs::exists(usbFilePath)) continue;
 
-                // Apply the first enabled classification-based policy
+                // Apply the first enabled USB transfer policy
                 for (const auto& policy : usbTransferPolicies) {
-                    if (!policy.enabled || !policy.monitoredPaths.empty()) continue;
+                    if (!policy.enabled) continue;
 
                     logger.Info("🔍 Classification-based evaluation for new USB file:");
                     logger.Info("   File: " + fileName);

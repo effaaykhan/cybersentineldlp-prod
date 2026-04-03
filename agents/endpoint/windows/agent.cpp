@@ -5749,28 +5749,42 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
         }
 
         // PASS 2: Classify ALL new files on USB — catches files not in monitoredFiles
-        // This ensures files created directly on USB or copied from non-monitored paths
-        // are still classified and enforced.
         {
+            int newFileCount = 0;
+            int skippedCount = 0;
+
             for (const auto& filePair : usbFiles) {
                 const std::string& fileName = filePair.first;
                 std::string classifKey = std::string("classif:") + drivePath + ":" + fileName;
 
-                // Skip files already evaluated in Pass 1 or previous scans
+                // Skip files already evaluated
                 if (currentUSBFileState.find(classifKey) != currentUSBFileState.end()) {
+                    skippedCount++;
                     continue;
                 }
-                // Also skip if already caught by monitored files check
                 std::string monFileKey = drivePath + ":" + fileName;
                 if (currentUSBFileState.find(monFileKey) != currentUSBFileState.end()) {
+                    skippedCount++;
                     continue;
                 }
 
-                // Mark as evaluated to prevent re-processing
+                // NEW FILE DETECTED ON USB!
                 currentUSBFileState[classifKey] = true;
+                newFileCount++;
 
-                std::string usbFilePath = drivePath + "\\" + fileName;
-                if (!fs::exists(usbFilePath)) continue;
+                std::string usbFilePath = drivePath + "\\" + filePair.second;
+                if (usbFilePath.find("\\\\") != std::string::npos) {
+                    // filePair.second is relative path, build full path
+                    usbFilePath = drivePath + "\\" + filePair.second;
+                }
+                if (!fs::exists(usbFilePath)) {
+                    usbFilePath = drivePath + "\\" + fileName;
+                    if (!fs::exists(usbFilePath)) continue;
+                }
+
+                logger.Warning("USB_FILE_TRANSFER_DETECTED: New file on USB — " + fileName);
+                logger.Info("  Path: " + usbFilePath);
+                logger.Info("  Size: " + std::to_string(fs::file_size(usbFilePath)) + " bytes");
 
                 // Apply the first enabled USB transfer policy
                 for (const auto& policy : usbTransferPolicies) {
@@ -5819,10 +5833,14 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                     break;  // Apply first matching policy only
                 }
             }
+
+            if (newFileCount > 0) {
+                logger.Info("USB scan: " + std::to_string(newFileCount) + " new file(s) detected, " +
+                           std::to_string(skippedCount) + " pre-existing skipped on " + drivePath);
+            }
         }
 
     } catch (const fs::filesystem_error& e) {
-        // Silently skip inaccessible drives (blocked/ejected)
         logger.Debug("Drive " + drivePath + " is not accessible - likely blocked or ejected");
     } catch (const std::exception& e) {
         logger.Debug("Error checking USB drive " + drivePath + ": " + std::string(e.what()));

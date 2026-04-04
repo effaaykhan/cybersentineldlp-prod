@@ -2286,14 +2286,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          workerThreads.emplace_back(&DLPAgent::MonitorUSBTransferDirectories, this);
 
          // ── Screen Capture Monitor ──
-         // Screen-level OCR: captures the entire screen, extracts text via
-         // Windows built-in OCR (WinRT OcrEngine), classifies the extracted text.
+         // Multi-method text extraction + classification:
+         //   1) Window title keywords (instant)
+         //   2) Window text via WM_GETTEXT + EnumChildWindows (reads ALL visible text)
+         //   3) File content from disk (if editor with filename in title)
          auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName) -> std::string {
 
-             // Classification function — runs regex patterns on extracted text
+             // Shared: classify any text using regex patterns
              auto classifyText = [](const std::string& content) -> std::string {
                  if (content.empty()) return "Public";
-
                  static const std::vector<std::pair<std::string, std::regex>> patterns = {
                      {"AADHAAR", std::regex(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)")},
                      {"PAN", std::regex(R"(\b[A-Z]{5}\d{4}[A-Z]\b)")},
@@ -2303,127 +2304,110 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      {"AWS_KEY", std::regex(R"(AKIA[0-9A-Z]{16})")},
                      {"IFSC", std::regex(R"(\b[A-Z]{4}0[A-Z0-9]{6}\b)")},
                  };
-
                  float score = 0.0f;
                  for (const auto& [name, pattern] : patterns) {
                      try {
-                         auto begin = std::sregex_iterator(content.begin(), content.end(), pattern);
-                         auto end = std::sregex_iterator();
-                         if (std::distance(begin, end) > 0) {
+                         auto it = std::sregex_iterator(content.begin(), content.end(), pattern);
+                         if (it != std::sregex_iterator()) {
                              if (name == "CREDIT_CARD" || name == "SSN" || name == "AADHAAR" ||
                                  name == "PRIVATE_KEY" || name == "AWS_KEY") score += 0.9f;
                              else if (name == "PAN" || name == "IFSC") score += 0.7f;
                          }
                      } catch (...) {}
                  }
-
                  if (score >= 0.8f) return "Restricted";
                  if (score >= 0.6f) return "Confidential";
                  if (score >= 0.3f) return "Internal";
                  return "Public";
              };
 
-             // ── Stage 1: Quick title keyword check (microseconds) ──
+             // ── Stage 1: Window title keywords (microseconds) ──
              std::string lower = windowTitle;
              std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-             static const std::vector<std::string> restrictedKeywords = {
+             static const std::vector<std::string> restrictedKw = {
                  "restricted", "confidential", "secret", "classified",
                  "employee", "salary", "payroll", "ssn", "aadhaar",
                  "credit card", "bank account", "password", "private key"
              };
-             for (const auto& kw : restrictedKeywords) {
+             for (const auto& kw : restrictedKw) {
                  if (lower.find(kw) != std::string::npos) return "Restricted";
              }
 
-             // ── Stage 2: Screen-level OCR using Windows built-in OcrEngine ──
-             // Captures entire screen → saves as temp BMP → runs OCR → classifies text
-             try {
-                 // Capture screen to BMP file
-                 std::string tempBmp = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp") + "\\cs_screen_ocr.bmp";
-                 std::string tempTxt = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp") + "\\cs_screen_ocr.txt";
+             // ── Stage 2: Read ALL visible text from foreground window ──
+             // Uses EnumChildWindows to find ALL text controls and reads their content.
+             // Works for Notepad, WordPad, browsers, terminals, most applications.
+             HWND fgWnd = GetForegroundWindow();
+             if (fgWnd) {
+                 std::string allText;
 
-                 // Delete old files
-                 DeleteFileA(tempBmp.c_str());
-                 DeleteFileA(tempTxt.c_str());
+                 // Callback to collect text from all child windows
+                 struct EnumData { std::string* text; };
+                 EnumData data{&allText};
 
-                 // Capture screen using GDI
-                 HDC hScreenDC = GetDC(NULL);
-                 HDC hMemDC = CreateCompatibleDC(hScreenDC);
-                 int width = GetSystemMetrics(SM_CXSCREEN);
-                 int height = GetSystemMetrics(SM_CYSCREEN);
-                 HBITMAP hBitmap = CreateCompatibleBitmap(hScreenDC, width, height);
-                 SelectObject(hMemDC, hBitmap);
-                 BitBlt(hMemDC, 0, 0, width, height, hScreenDC, 0, 0, SRCCOPY);
+                 EnumChildWindows(fgWnd, [](HWND hwnd, LPARAM lParam) -> BOOL {
+                     EnumData* d = (EnumData*)lParam;
+                     int len = (int)SendMessageA(hwnd, WM_GETTEXTLENGTH, 0, 0);
+                     if (len > 0 && len < 500000) {
+                         int readLen = std::min(len, 65536);
+                         std::vector<char> buf(readLen + 1, 0);
+                         SendMessageA(hwnd, WM_GETTEXT, readLen + 1, (LPARAM)buf.data());
+                         if (buf[0] != 0) {
+                             *(d->text) += std::string(buf.data()) + "\n";
+                         }
+                     }
+                     return TRUE; // Continue enumeration
+                 }, (LPARAM)&data);
 
-                 // Save BMP to file
-                 BITMAPINFOHEADER bi = {};
-                 bi.biSize = sizeof(BITMAPINFOHEADER);
-                 bi.biWidth = width;
-                 bi.biHeight = -height; // top-down
-                 bi.biPlanes = 1;
-                 bi.biBitCount = 24;
-                 bi.biCompression = BI_RGB;
-                 int rowSize = ((width * 3 + 3) & ~3);
-                 bi.biSizeImage = rowSize * height;
-
-                 std::vector<BYTE> pixels(bi.biSizeImage);
-                 GetDIBits(hMemDC, hBitmap, 0, height, pixels.data(), (BITMAPINFO*)&bi, DIB_RGB_COLORS);
-
-                 BITMAPFILEHEADER bf = {};
-                 bf.bfType = 0x4D42;
-                 bf.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-                 bf.bfSize = bf.bfOffBits + bi.biSizeImage;
-
-                 HANDLE hFile = CreateFileA(tempBmp.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-                 if (hFile != INVALID_HANDLE_VALUE) {
-                     DWORD written;
-                     WriteFile(hFile, &bf, sizeof(bf), &written, NULL);
-                     WriteFile(hFile, &bi, sizeof(bi), &written, NULL);
-                     WriteFile(hFile, pixels.data(), bi.biSizeImage, &written, NULL);
-                     CloseHandle(hFile);
+                 // Also try the main window itself
+                 {
+                     int len = (int)SendMessageA(fgWnd, WM_GETTEXTLENGTH, 0, 0);
+                     if (len > 0 && len < 500000) {
+                         int readLen = std::min(len, 65536);
+                         std::vector<char> buf(readLen + 1, 0);
+                         SendMessageA(fgWnd, WM_GETTEXT, readLen + 1, (LPARAM)buf.data());
+                         allText += std::string(buf.data()) + "\n";
+                     }
                  }
 
-                 DeleteObject(hBitmap);
-                 DeleteDC(hMemDC);
-                 ReleaseDC(NULL, hScreenDC);
-
-                 // Run OCR via PowerShell (Windows built-in WinRT OcrEngine)
-                 std::string psCmd = "powershell -WindowStyle Hidden -Command \""
-                     "Add-Type -AssemblyName System.Runtime.WindowsRuntime;"
-                     "[Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime] | Out-Null;"
-                     "[Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType=WindowsRuntime] | Out-Null;"
-                     "$file = [Windows.Storage.StorageFile]::GetFileFromPathAsync('" + tempBmp + "').GetAwaiter().GetResult();"
-                     "$stream = $file.OpenAsync([Windows.Storage.FileAccessMode]::Read).GetAwaiter().GetResult();"
-                     "$decoder = [Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream).GetAwaiter().GetResult();"
-                     "$bitmap = $decoder.GetSoftwareBitmapAsync().GetAwaiter().GetResult();"
-                     "$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages();"
-                     "$result = $engine.RecognizeAsync($bitmap).GetAwaiter().GetResult();"
-                     "$result.Text | Out-File -FilePath '" + tempTxt + "' -Encoding UTF8"
-                     "\" >nul 2>&1";
-
-                 system(psCmd.c_str());
-
-                 // Read OCR result
-                 std::string ocrText;
-                 std::ifstream ocrFile(tempTxt);
-                 if (ocrFile.is_open()) {
-                     std::stringstream ss;
-                     ss << ocrFile.rdbuf();
-                     ocrText = ss.str();
-                     ocrFile.close();
-                 }
-
-                 // Cleanup temp files
-                 DeleteFileA(tempBmp.c_str());
-                 DeleteFileA(tempTxt.c_str());
-
-                 if (!ocrText.empty()) {
-                     logger.Debug("Screen OCR extracted " + std::to_string(ocrText.length()) + " chars");
-                     std::string result = classifyText(ocrText);
+                 if (allText.length() > 10) {
+                     logger.Debug("Screen text extracted: " + std::to_string(allText.length()) + " chars from window");
+                     std::string result = classifyText(allText);
                      if (result != "Public") return result;
                  }
-             } catch (...) {
-                 logger.Debug("Screen OCR failed — falling back to Public");
+             }
+
+             // ── Stage 3: File content from disk ──
+             auto dashPos = windowTitle.find(" - ");
+             if (dashPos != std::string::npos) {
+                 std::string candidate = windowTitle.substr(0, dashPos);
+                 while (!candidate.empty() && (candidate[0] == ' ' || candidate[0] == '*')) candidate.erase(0, 1);
+                 while (!candidate.empty() && candidate.back() == ' ') candidate.pop_back();
+
+                 if (!candidate.empty()) {
+                     char userProfile[MAX_PATH] = {0};
+                     GetEnvironmentVariableA("USERPROFILE", userProfile, MAX_PATH);
+                     std::string up(userProfile);
+                     std::vector<std::string> paths = {
+                         up + "\\Desktop\\" + candidate, up + "\\Documents\\" + candidate,
+                         up + "\\Downloads\\" + candidate, up + "\\OneDrive\\Desktop\\" + candidate,
+                     };
+                     for (const auto& path : paths) {
+                         if (fs::exists(path) && fs::is_regular_file(path)) {
+                             try {
+                                 std::ifstream f(path, std::ios::binary);
+                                 if (f.is_open()) {
+                                     std::vector<char> buf(65536);
+                                     f.read(buf.data(), buf.size());
+                                     std::string content(buf.data(), f.gcount());
+                                     f.close();
+                                     std::string result = classifyText(content);
+                                     if (result != "Public") return result;
+                                 }
+                             } catch (...) {}
+                             break;
+                         }
+                     }
+                 }
              }
 
              return "Public";

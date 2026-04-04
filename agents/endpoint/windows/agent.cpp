@@ -2286,111 +2286,129 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          workerThreads.emplace_back(&DLPAgent::MonitorUSBTransferDirectories, this);
 
          // ── Screen Capture Monitor ──
-         // Classifies by: 1) window title keywords, 2) file content if open in editor
+         // 3-stage classification:
+         //   1) Window title keywords (instant)
+         //   2) Window text extraction via SendMessage WM_GETTEXT (works for all windows)
+         //   3) File content fallback (if editor detected)
          auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName) -> std::string {
+
+             // Shared classification function — runs regex patterns on any text
+             auto classifyText = [](const std::string& content) -> std::string {
+                 if (content.empty()) return "";
+
+                 static const std::vector<std::pair<std::string, std::regex>> patterns = {
+                     {"AADHAAR", std::regex(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)")},
+                     {"PAN", std::regex(R"(\b[A-Z]{5}\d{4}[A-Z]\b)")},
+                     {"CREDIT_CARD", std::regex(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)")},
+                     {"SSN", std::regex(R"(\b\d{3}-\d{2}-\d{4}\b)")},
+                     {"PRIVATE_KEY", std::regex(R"(-----BEGIN\s+(RSA\s+)?PRIVATE KEY-----)")},
+                     {"AWS_KEY", std::regex(R"(AKIA[0-9A-Z]{16})")},
+                     {"IFSC", std::regex(R"(\b[A-Z]{4}0[A-Z0-9]{6}\b)")},
+                     {"EMAIL", std::regex(R"(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b)")},
+                 };
+
+                 float score = 0.0f;
+                 for (const auto& [name, pattern] : patterns) {
+                     try {
+                         auto begin = std::sregex_iterator(content.begin(), content.end(), pattern);
+                         auto end = std::sregex_iterator();
+                         int count = (int)std::distance(begin, end);
+                         if (count > 0) {
+                             if (name == "CREDIT_CARD" || name == "SSN" || name == "AADHAAR" ||
+                                 name == "PRIVATE_KEY" || name == "AWS_KEY") score += 0.9f;
+                             else if (name == "PAN" || name == "IFSC") score += 0.7f;
+                             else if (name == "EMAIL") score += 0.3f;
+                         }
+                     } catch (...) {}
+                 }
+
+                 if (score >= 0.8f) return "Restricted";
+                 if (score >= 0.6f) return "Confidential";
+                 if (score >= 0.3f) return "Internal";
+                 return "";
+             };
+
+             // ── Stage 1: Window title keywords ──
              std::string lower = windowTitle;
              std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-             // Step 1: Quick keyword check on window title
              static const std::vector<std::string> restrictedKeywords = {
                  "restricted", "confidential", "secret", "classified", "sensitive",
                  "employee", "salary", "payroll", "ssn", "aadhaar", "pan card",
                  "credit card", "bank account", "password", "private key"
              };
-             static const std::vector<std::string> internalKeywords = {
-                 "internal", "draft", "budget", "financial", "revenue", "forecast"
-             };
              for (const auto& kw : restrictedKeywords) {
                  if (lower.find(kw) != std::string::npos) return "Restricted";
              }
-             for (const auto& kw : internalKeywords) {
-                 if (lower.find(kw) != std::string::npos) return "Internal";
-             }
 
-             // Step 2: Extract file path from window title and classify its content
-             // Window titles: "filename.txt - Notepad", "filename - Word", etc.
-             std::string filePath;
-             // Try to extract filename before " - "
-             auto dashPos = windowTitle.find(" - ");
-             if (dashPos != std::string::npos) {
-                 std::string candidate = windowTitle.substr(0, dashPos);
-                 // Remove leading/trailing whitespace and asterisk (unsaved marker)
-                 while (!candidate.empty() && (candidate[0] == ' ' || candidate[0] == '*')) candidate.erase(0, 1);
-                 while (!candidate.empty() && candidate.back() == ' ') candidate.pop_back();
+             // ── Stage 2: Extract visible text from the active window ──
+             // This reads the ACTUAL text displayed on screen — works for
+             // Notepad, WordPad, text editors, and any window with text content.
+             HWND fgWnd = GetForegroundWindow();
+             if (fgWnd) {
+                 // Method A: Find the edit control (child window) and read its text
+                 // Notepad's text is in a child "Edit" control
+                 HWND editCtrl = FindWindowExA(fgWnd, NULL, "Edit", NULL);
+                 if (!editCtrl) editCtrl = FindWindowExA(fgWnd, NULL, "RichEdit20W", NULL);
+                 if (!editCtrl) editCtrl = FindWindowExA(fgWnd, NULL, "RichEdit50W", NULL);
+                 if (!editCtrl) editCtrl = FindWindowExA(fgWnd, NULL, "Scintilla", NULL);
+                 // For modern Notepad (Windows 11), try RichEditD2DPT
+                 if (!editCtrl) editCtrl = FindWindowExA(fgWnd, NULL, "RichEditD2DPT", NULL);
+                 // Try RICHEDIT
+                 if (!editCtrl) editCtrl = FindWindowExA(fgWnd, NULL, "RICHEDIT", NULL);
 
-                 if (!candidate.empty()) {
-                     // Check common editor locations
-                     std::vector<std::string> searchPaths;
-                     char userProfile[MAX_PATH] = {0};
-                     if (GetEnvironmentVariableA("USERPROFILE", userProfile, MAX_PATH)) {
-                         std::string up(userProfile);
-                         searchPaths.push_back(up + "\\Desktop\\" + candidate);
-                         searchPaths.push_back(up + "\\Documents\\" + candidate);
-                         searchPaths.push_back(up + "\\Downloads\\" + candidate);
-                         searchPaths.push_back(up + "\\OneDrive\\Desktop\\" + candidate);
-                         searchPaths.push_back(up + "\\OneDrive\\Documents\\" + candidate);
-                     }
-                     searchPaths.push_back("C:\\" + candidate);
+                 HWND targetWnd = editCtrl ? editCtrl : fgWnd;
 
-                     for (const auto& path : searchPaths) {
-                         if (fs::exists(path) && fs::is_regular_file(path)) {
-                             filePath = path;
-                             break;
-                         }
+                 int textLen = (int)SendMessageA(targetWnd, WM_GETTEXTLENGTH, 0, 0);
+                 if (textLen > 0 && textLen < 1000000) { // Cap at 1MB to prevent OOM
+                     int readLen = std::min(textLen, 65536); // Classify first 64KB
+                     std::vector<char> buf(readLen + 1, 0);
+                     SendMessageA(targetWnd, WM_GETTEXT, readLen + 1, (LPARAM)buf.data());
+                     std::string visibleText(buf.data());
+
+                     if (!visibleText.empty()) {
+                         std::string result = classifyText(visibleText);
+                         if (!result.empty()) return result;
                      }
                  }
              }
 
-             // If we found the file, read and classify its content
-             if (!filePath.empty()) {
-                 try {
-                     std::ifstream file(filePath, std::ios::binary);
-                     if (file.is_open()) {
-                         // Read first 64KB for classification
-                         std::vector<char> buf(65536);
-                         file.read(buf.data(), buf.size());
-                         auto bytesRead = file.gcount();
-                         file.close();
+             // ── Stage 3: File content fallback ──
+             // Extract filename from window title and read the file directly
+             auto dashPos = windowTitle.find(" - ");
+             if (dashPos != std::string::npos) {
+                 std::string candidate = windowTitle.substr(0, dashPos);
+                 while (!candidate.empty() && (candidate[0] == ' ' || candidate[0] == '*')) candidate.erase(0, 1);
+                 while (!candidate.empty() && candidate.back() == ' ') candidate.pop_back();
 
-                         if (bytesRead > 0) {
-                             std::string content(buf.data(), bytesRead);
+                 if (!candidate.empty()) {
+                     char userProfile[MAX_PATH] = {0};
+                     GetEnvironmentVariableA("USERPROFILE", userProfile, MAX_PATH);
+                     std::string up(userProfile);
 
-                             // Run the same patterns used for clipboard/USB
-                             // Check for sensitive data patterns
-                             static const std::vector<std::pair<std::string, std::regex>> patterns = {
-                                 {"AADHAAR", std::regex(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)")},
-                                 {"PAN", std::regex(R"(\b[A-Z]{5}\d{4}[A-Z]\b)")},
-                                 {"CREDIT_CARD", std::regex(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)")},
-                                 {"SSN", std::regex(R"(\b\d{3}-\d{2}-\d{4}\b)")},
-                                 {"PRIVATE_KEY", std::regex(R"(-----BEGIN\s+(RSA\s+)?PRIVATE KEY-----)")},
-                                 {"AWS_KEY", std::regex(R"(AKIA[0-9A-Z]{16})")},
-                                 {"API_KEY", std::regex(R"((?:api[_-]?key|apikey|access[_-]?token)\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{32,})")},
-                             };
+                     std::vector<std::string> searchPaths = {
+                         up + "\\Desktop\\" + candidate,
+                         up + "\\Documents\\" + candidate,
+                         up + "\\Downloads\\" + candidate,
+                         up + "\\OneDrive\\Desktop\\" + candidate,
+                     };
 
-                             float score = 0.0f;
-                             for (const auto& [name, pattern] : patterns) {
-                                 try {
-                                     auto begin = std::sregex_iterator(content.begin(), content.end(), pattern);
-                                     auto end = std::sregex_iterator();
-                                     int count = (int)std::distance(begin, end);
-                                     if (count > 0) {
-                                         if (name == "CREDIT_CARD" || name == "SSN" || name == "AADHAAR" ||
-                                             name == "PRIVATE_KEY" || name == "AWS_KEY") {
-                                             score += 0.9f;
-                                         } else if (name == "PAN" || name == "API_KEY") {
-                                             score += 0.7f;
-                                         }
-                                     }
-                                 } catch (...) {}
-                             }
-
-                             if (score >= 0.8f) return "Restricted";
-                             if (score >= 0.6f) return "Confidential";
-                             if (score >= 0.3f) return "Internal";
+                     for (const auto& path : searchPaths) {
+                         if (fs::exists(path) && fs::is_regular_file(path)) {
+                             try {
+                                 std::ifstream file(path, std::ios::binary);
+                                 if (file.is_open()) {
+                                     std::vector<char> buf(65536);
+                                     file.read(buf.data(), buf.size());
+                                     std::string content(buf.data(), file.gcount());
+                                     file.close();
+                                     std::string result = classifyText(content);
+                                     if (!result.empty()) return result;
+                                 }
+                             } catch (...) {}
+                             break;
                          }
                      }
-                 } catch (...) {
-                     // File read failed — fall through to Public
                  }
              }
 

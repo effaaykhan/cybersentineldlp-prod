@@ -45,7 +45,7 @@ void ScreenCaptureMonitor::Stop() {
     }
     // Post quit to hook thread's message loop
     if (m_hookThread.joinable()) {
-        PostThreadMessage(GetThreadId(m_hookThread.native_handle()), WM_QUIT, 0, 0);
+        PostThreadMessage(GetThreadId((HANDLE)m_hookThread.native_handle()), WM_QUIT, 0, 0);
         m_hookThread.join();
     }
     if (m_processThread.joinable()) m_processThread.join();

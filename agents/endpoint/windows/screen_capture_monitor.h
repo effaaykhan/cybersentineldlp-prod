@@ -20,10 +20,8 @@ struct ScreenCaptureEvent {
 
 class ScreenCaptureMonitor {
 public:
-    // New callback receives full event structure
     using CaptureCallback = std::function<void(ScreenCaptureEvent& event)>;
     using LogCallback = std::function<void(const std::string& level, const std::string& message)>;
-    // Classifier takes window title + process → returns classification level
     using ClassifyCallback = std::function<std::string(const std::string& windowTitle, const std::string& processName)>;
 
     ScreenCaptureMonitor(CaptureCallback callback, LogCallback logger = nullptr,
@@ -36,19 +34,28 @@ public:
 
     void SetClassifier(ClassifyCallback classifier) { m_classifier = classifier; }
 
+    // Static hook callback — must be static for Windows API
+    static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+
 private:
-    void MonitorLoop();
+    void HookThread();           // Thread that runs the keyboard hook message loop
+    void ProcessMonitorThread(); // Thread that monitors capture tool processes
     std::string GetActiveWindowTitle();
     std::string GetForegroundProcessName();
     std::string GetTimestamp();
-    void BlockScreenshot();
     void TerminateProcessByName(const std::string& processName);
+    void HandleCaptureAttempt(const std::string& method);
 
     CaptureCallback m_callback;
     LogCallback m_logger;
     ClassifyCallback m_classifier;
-    std::thread m_thread;
+    std::thread m_hookThread;
+    std::thread m_processThread;
     std::atomic<bool> m_running{false};
+
+    // Static instance pointer for the hook callback
+    static ScreenCaptureMonitor* s_instance;
+    static HHOOK s_keyboardHook;
 
     static const std::vector<std::string> CAPTURE_PROCESSES;
 };

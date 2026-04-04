@@ -137,14 +137,23 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
             EmptyClipboard();
             CloseClipboard();
         }
-        // Show popup notification on a separate thread (non-blocking)
-        std::thread([windowTitle]() {
-            MessageBoxA(NULL,
+        // Show popup on TOP of the sensitive window
+        HWND fgWindow = GetForegroundWindow();
+        std::thread([fgWindow]() {
+            // Force our popup to the absolute foreground
+            DWORD fgThread = GetWindowThreadProcessId(fgWindow, NULL);
+            DWORD curThread = GetCurrentThreadId();
+            AttachThreadInput(curThread, fgThread, TRUE);
+            SetForegroundWindow(fgWindow);
+
+            MessageBoxA(fgWindow,
                 "Screenshot blocked by CyberSentinel DLP.\n\n"
                 "The active window contains sensitive/restricted data.\n"
                 "Screenshots are not allowed for this page.",
                 "CyberSentinel DLP - Screenshot Blocked",
-                MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+                MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+
+            AttachThreadInput(curThread, fgThread, FALSE);
         }).detach();
 
         if (m_logger) m_logger("WARNING", "SCREEN_ACTION_ENFORCED: BLOCKED " + method +

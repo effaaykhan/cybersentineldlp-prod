@@ -194,47 +194,47 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
         KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;
 
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
-            // Detect PrintScreen key (VK_SNAPSHOT = 0x2C)
+
+            // ── PrintScreen (VK_SNAPSHOT = 0x2C) ──
             if (pKey->vkCode == VK_SNAPSHOT) {
-                bool altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-                std::string method = altDown ? "alt_printscreen" : "printscreen";
-
-                if (s_instance->m_logger) s_instance->m_logger("INFO", "SCREEN_CAPTURE_KEY_DETECTED: " + method);
-
-                // Check if sensitive data is visible
+                // Classify FAST — just check window title, no network calls
                 std::string windowTitle = s_instance->GetActiveWindowTitle();
-                std::string processName = s_instance->GetForegroundProcessName();
-
                 std::string classification = "Public";
-                if (s_instance->m_classifier) classification = s_instance->m_classifier(windowTitle, processName);
+                if (s_instance->m_classifier) classification = s_instance->m_classifier(windowTitle, "");
 
                 bool isSensitive = (classification == "Restricted" || classification == "Confidential");
 
                 if (isSensitive) {
-                    if (s_instance->m_logger) s_instance->m_logger("WARNING",
-                        "SCREEN_ACTION_ENFORCED: SWALLOWED PrintScreen key — " +
-                        classification + " data visible in: " + windowTitle);
+                    // SWALLOW IMMEDIATELY — return 1 before doing anything else
+                    // Heavy work (popup, event, logging) happens on background thread
+                    bool altDown = (pKey->flags & LLKHF_ALTDOWN) != 0;
+                    std::string method = altDown ? "alt_printscreen" : "printscreen";
 
-                    // Send event
-                    s_instance->HandleCaptureAttempt(method);
+                    std::thread([method]() {
+                        if (s_instance) {
+                            if (s_instance->m_logger) s_instance->m_logger("WARNING",
+                                "SCREEN_ACTION_ENFORCED: SWALLOWED " + method);
+                            // Clear clipboard as backup
+                            if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
+                            s_instance->HandleCaptureAttempt(method);
+                        }
+                    }).detach();
 
-                    // SWALLOW the key — return 1 to prevent Windows from capturing screenshot
-                    return 1;
-                } else {
-                    // Non-sensitive — allow the screenshot
-                    s_instance->HandleCaptureAttempt(method);
+                    return 1; // SWALLOW — must return FAST
                 }
+
+                // Non-sensitive — allow and log in background
+                std::thread([]() {
+                    if (s_instance) s_instance->HandleCaptureAttempt("printscreen");
+                }).detach();
             }
 
-            // Detect Win+Shift+S (Snip & Sketch)
-            // S key = 0x53
+            // ── Win+Shift+S ──
             if (pKey->vkCode == 0x53) {
                 bool winDown = (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 || (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
                 bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 
                 if (winDown && shiftDown) {
-                    if (s_instance->m_logger) s_instance->m_logger("INFO", "SCREEN_CAPTURE_KEY_DETECTED: win_shift_s");
-
                     std::string windowTitle = s_instance->GetActiveWindowTitle();
                     std::string classification = "Public";
                     if (s_instance->m_classifier) classification = s_instance->m_classifier(windowTitle, "");
@@ -242,15 +242,21 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
                     bool isSensitive = (classification == "Restricted" || classification == "Confidential");
 
                     if (isSensitive) {
-                        if (s_instance->m_logger) s_instance->m_logger("WARNING",
-                            "SCREEN_ACTION_ENFORCED: SWALLOWED Win+Shift+S — " +
-                            classification + " data visible");
+                        std::thread([]() {
+                            if (s_instance) {
+                                if (s_instance->m_logger) s_instance->m_logger("WARNING",
+                                    "SCREEN_ACTION_ENFORCED: SWALLOWED Win+Shift+S");
+                                if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
+                                s_instance->HandleCaptureAttempt("win_shift_s");
+                            }
+                        }).detach();
 
-                        s_instance->HandleCaptureAttempt("win_shift_s");
                         return 1; // SWALLOW
-                    } else {
-                        s_instance->HandleCaptureAttempt("win_shift_s");
                     }
+
+                    std::thread([]() {
+                        if (s_instance) s_instance->HandleCaptureAttempt("win_shift_s");
+                    }).detach();
                 }
             }
         }

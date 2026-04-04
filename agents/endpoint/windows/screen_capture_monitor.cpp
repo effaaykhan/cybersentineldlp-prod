@@ -189,44 +189,106 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
  * Return 1 to SWALLOW the key (prevent screenshot).
  * Return CallNextHookEx to ALLOW it.
  */
+/*
+ * BLOCK-FIRST-OCR-SECOND ARCHITECTURE:
+ *
+ * 1. EVERY PrintScreen/Win+Shift+S is SWALLOWED immediately (return 1)
+ * 2. Background thread captures screen → runs OCR → classifies text
+ * 3. If Public → programmatically take screenshot and put it on clipboard
+ *    + show "Snapshot allowed" toast
+ * 4. If Sensitive → keep clipboard empty + show "Snapshot blocked" popup
+ *
+ * This ensures OCR has time to run without the Windows 200ms hook timeout.
+ */
 LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && s_instance) {
         KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;
 
         if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
 
-            // ── PrintScreen (VK_SNAPSHOT = 0x2C) ──
+            // ── PrintScreen ──
             if (pKey->vkCode == VK_SNAPSHOT) {
-                // Classify FAST — just check window title, no network calls
-                std::string windowTitle = s_instance->GetActiveWindowTitle();
-                std::string classification = "Public";
-                if (s_instance->m_classifier) classification = s_instance->m_classifier(windowTitle, "");
+                bool altDown = (pKey->flags & LLKHF_ALTDOWN) != 0;
+                std::string method = altDown ? "alt_printscreen" : "printscreen";
+                HWND targetWindow = altDown ? GetForegroundWindow() : NULL;
 
-                bool isSensitive = (classification == "Restricted" || classification == "Confidential");
+                if (s_instance->m_logger) s_instance->m_logger("INFO",
+                    "SCREEN_CAPTURE_KEY_DETECTED: " + method + " — intercepted, running OCR...");
 
-                if (isSensitive) {
-                    // SWALLOW IMMEDIATELY — return 1 before doing anything else
-                    // Heavy work (popup, event, logging) happens on background thread
-                    bool altDown = (pKey->flags & LLKHF_ALTDOWN) != 0;
-                    std::string method = altDown ? "alt_printscreen" : "printscreen";
+                // SWALLOW the key — then analyze in background
+                std::thread([method, targetWindow]() {
+                    if (!s_instance) return;
 
-                    std::thread([method]() {
-                        if (s_instance) {
-                            if (s_instance->m_logger) s_instance->m_logger("WARNING",
-                                "SCREEN_ACTION_ENFORCED: SWALLOWED " + method);
-                            // Clear clipboard as backup
-                            if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
-                            s_instance->HandleCaptureAttempt(method);
+                    // Run the classifier (which does OCR)
+                    std::string windowTitle = s_instance->GetActiveWindowTitle();
+                    std::string classification = "Public";
+                    if (s_instance->m_classifier) classification = s_instance->m_classifier(windowTitle, "");
+
+                    bool isSensitive = (classification == "Restricted" || classification == "Confidential");
+
+                    if (isSensitive) {
+                        // BLOCKED — clear clipboard and notify
+                        if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
+
+                        if (s_instance->m_logger) s_instance->m_logger("WARNING",
+                            "SCREEN_ACTION_ENFORCED: BLOCKED " + method +
+                            " — " + classification + " content detected on screen");
+
+                        // Show popup on top of active window
+                        HWND fgWnd = GetForegroundWindow();
+                        DWORD fgThread = GetWindowThreadProcessId(fgWnd, NULL);
+                        DWORD curThread = GetCurrentThreadId();
+                        AttachThreadInput(curThread, fgThread, TRUE);
+                        MessageBoxA(fgWnd,
+                            "Sensitive content detected. Snapshot blocked.\n\n"
+                            "CyberSentinel DLP detected restricted/confidential data\n"
+                            "on screen. Screenshots are not allowed.",
+                            "CyberSentinel DLP - Snapshot Blocked",
+                            MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+                        AttachThreadInput(curThread, fgThread, FALSE);
+
+                        s_instance->HandleCaptureAttempt(method);
+
+                    } else {
+                        // ALLOWED — programmatically take the screenshot and put it on clipboard
+                        if (s_instance->m_logger) s_instance->m_logger("INFO",
+                            "SCREEN_POLICY_DECISION: ALLOW — no sensitive data on screen");
+
+                        // Capture screen to clipboard programmatically
+                        HDC hScreenDC = GetDC(targetWindow); // NULL = full screen
+                        if (!hScreenDC) hScreenDC = GetDC(NULL);
+                        int w = targetWindow ? 0 : GetSystemMetrics(SM_CXSCREEN);
+                        int h = targetWindow ? 0 : GetSystemMetrics(SM_CYSCREEN);
+                        if (targetWindow) {
+                            RECT rc; GetClientRect(targetWindow, &rc);
+                            w = rc.right - rc.left; h = rc.bottom - rc.top;
                         }
-                    }).detach();
 
-                    return 1; // SWALLOW — must return FAST
-                }
+                        HDC hMemDC = CreateCompatibleDC(hScreenDC);
+                        HBITMAP hBitmap = CreateCompatibleBitmap(hScreenDC, w, h);
+                        SelectObject(hMemDC, hBitmap);
+                        BitBlt(hMemDC, 0, 0, w, h, hScreenDC, 0, 0, SRCCOPY);
 
-                // Non-sensitive — allow and log in background
-                std::thread([]() {
-                    if (s_instance) s_instance->HandleCaptureAttempt("printscreen");
+                        // Put on clipboard
+                        if (OpenClipboard(NULL)) {
+                            EmptyClipboard();
+                            SetClipboardData(CF_BITMAP, hBitmap);
+                            CloseClipboard();
+                        }
+
+                        DeleteDC(hMemDC);
+                        ReleaseDC(targetWindow, hScreenDC);
+                        // Note: hBitmap is now owned by clipboard, don't delete
+
+                        // Show brief allowed notification
+                        if (s_instance->m_logger) s_instance->m_logger("INFO",
+                            "SCREEN_ACTION_ENFORCED: ALLOWED — screenshot placed on clipboard");
+
+                        s_instance->HandleCaptureAttempt(method);
+                    }
                 }).detach();
+
+                return 1; // ALWAYS swallow — background thread handles the rest
             }
 
             // ── Win+Shift+S ──
@@ -235,28 +297,49 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
                 bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 
                 if (winDown && shiftDown) {
-                    std::string windowTitle = s_instance->GetActiveWindowTitle();
-                    std::string classification = "Public";
-                    if (s_instance->m_classifier) classification = s_instance->m_classifier(windowTitle, "");
-
-                    bool isSensitive = (classification == "Restricted" || classification == "Confidential");
-
-                    if (isSensitive) {
-                        std::thread([]() {
-                            if (s_instance) {
-                                if (s_instance->m_logger) s_instance->m_logger("WARNING",
-                                    "SCREEN_ACTION_ENFORCED: SWALLOWED Win+Shift+S");
-                                if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
-                                s_instance->HandleCaptureAttempt("win_shift_s");
-                            }
-                        }).detach();
-
-                        return 1; // SWALLOW
-                    }
+                    if (s_instance->m_logger) s_instance->m_logger("INFO",
+                        "SCREEN_CAPTURE_KEY_DETECTED: win_shift_s — intercepted, running OCR...");
 
                     std::thread([]() {
-                        if (s_instance) s_instance->HandleCaptureAttempt("win_shift_s");
+                        if (!s_instance) return;
+
+                        std::string windowTitle = s_instance->GetActiveWindowTitle();
+                        std::string classification = "Public";
+                        if (s_instance->m_classifier) classification = s_instance->m_classifier(windowTitle, "");
+
+                        bool isSensitive = (classification == "Restricted" || classification == "Confidential");
+
+                        if (isSensitive) {
+                            if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
+
+                            if (s_instance->m_logger) s_instance->m_logger("WARNING",
+                                "SCREEN_ACTION_ENFORCED: BLOCKED Win+Shift+S — sensitive content on screen");
+
+                            HWND fgWnd = GetForegroundWindow();
+                            DWORD fgThread = GetWindowThreadProcessId(fgWnd, NULL);
+                            DWORD curThread = GetCurrentThreadId();
+                            AttachThreadInput(curThread, fgThread, TRUE);
+                            MessageBoxA(fgWnd,
+                                "Sensitive content detected. Snapshot blocked.\n\n"
+                                "CyberSentinel DLP detected restricted/confidential data\n"
+                                "on screen. Snip & Sketch is not allowed.",
+                                "CyberSentinel DLP - Snapshot Blocked",
+                                MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+                            AttachThreadInput(curThread, fgThread, FALSE);
+
+                            s_instance->HandleCaptureAttempt("win_shift_s");
+                        } else {
+                            if (s_instance->m_logger) s_instance->m_logger("INFO",
+                                "SCREEN_POLICY_DECISION: ALLOW Win+Shift+S — no sensitive data");
+
+                            // Simulate Win+Shift+S by launching Snipping Tool
+                            system("start ms-screenclip: >nul 2>&1");
+
+                            s_instance->HandleCaptureAttempt("win_shift_s");
+                        }
                     }).detach();
+
+                    return 1; // ALWAYS swallow
                 }
             }
         }

@@ -36,6 +36,8 @@
  #include <mutex>
  #include <atomic>
  #include <chrono>
+ #include "screen_capture_monitor.h"
+ #include "print_monitor.h"
  #include <regex>
  #include <iomanip>
  #include <filesystem>
@@ -2282,7 +2284,111 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
         // workerThreads.emplace_back(&DLPAgent::RemovableDriveMonitor, this);
          workerThreads.emplace_back(&DLPAgent::UsbFileTransferMonitor, this);
          workerThreads.emplace_back(&DLPAgent::MonitorUSBTransferDirectories, this);
-         
+
+         // ── Screen Capture Monitor ──
+         // Uses window title keywords to classify sensitivity
+         auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName) -> std::string {
+             std::string lower = windowTitle;
+             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+             // Check for sensitive keywords in window title
+             static const std::vector<std::string> restrictedKeywords = {
+                 "restricted", "confidential", "secret", "classified", "sensitive",
+                 "employee", "salary", "payroll", "ssn", "aadhaar", "pan card",
+                 "credit card", "bank account", "password", "private key"
+             };
+             static const std::vector<std::string> internalKeywords = {
+                 "internal", "draft", "budget", "financial", "revenue", "forecast"
+             };
+             for (const auto& kw : restrictedKeywords) {
+                 if (lower.find(kw) != std::string::npos) return "Restricted";
+             }
+             for (const auto& kw : internalKeywords) {
+                 if (lower.find(kw) != std::string::npos) return "Internal";
+             }
+             return "Public";
+         };
+
+         auto screenMonitor = std::make_shared<ScreenCaptureMonitor>(
+             [this](ScreenCaptureEvent& event) {
+                 // Send event to server
+                 JsonBuilder json;
+                 json.AddString("event_id", GenerateUUID());
+                 json.AddString("event_type", "screen_capture");
+                 json.AddString("event_subtype", event.method);
+                 json.AddString("agent_id", config.agentId);
+                 json.AddString("source_type", "agent");
+                 json.AddString("user_email", event.user + "@" + config.agentName);
+                 json.AddString("description", event.containsSensitiveData
+                     ? "SCREEN CAPTURE BLOCKED: " + event.classification + " data visible in " + event.activeWindow
+                     : "Screen capture detected — no sensitive data");
+                 json.AddString("severity", event.containsSensitiveData ? "high" : "low");
+                 json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
+                 json.AddString("classification_level", event.classification);
+                 json.AddBool("blocked", event.actionTaken == "Block");
+                 json.AddString("timestamp", GetCurrentTimestampISO());
+                 SendEvent(json.Build());
+             },
+             [this](const std::string& level, const std::string& msg) {
+                 if (level == "WARNING") logger.Warning(msg);
+                 else if (level == "ERROR") logger.Error(msg);
+                 else logger.Info(msg);
+             },
+             screenClassifier
+         );
+         screenMonitor->Start();
+         logger.Info("Screen capture monitoring started");
+
+         // ── Print Monitor ──
+         auto printClassifier = [this](const std::string& docName, const std::string& processName) -> std::string {
+             std::string lower = docName;
+             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+             static const std::vector<std::string> restrictedKeywords = {
+                 "restricted", "confidential", "secret", "classified", "sensitive",
+                 "employee", "salary", "payroll", "ssn", "aadhaar", "pan",
+                 "credit card", "bank", "account", "password", "private"
+             };
+             static const std::vector<std::string> internalKeywords = {
+                 "internal", "draft", "budget", "financial", "revenue"
+             };
+             for (const auto& kw : restrictedKeywords) {
+                 if (lower.find(kw) != std::string::npos) return "Restricted";
+             }
+             for (const auto& kw : internalKeywords) {
+                 if (lower.find(kw) != std::string::npos) return "Internal";
+             }
+             return "Public";
+         };
+
+         auto printMonitor = std::make_shared<PrintMonitor>(
+             [this](PrintEvent& event) {
+                 JsonBuilder json;
+                 json.AddString("event_id", GenerateUUID());
+                 json.AddString("event_type", "print");
+                 json.AddString("event_subtype", "print_job");
+                 json.AddString("agent_id", config.agentId);
+                 json.AddString("source_type", "agent");
+                 json.AddString("user_email", event.user + "@" + config.agentName);
+                 json.AddString("description", event.actionTaken == "Block"
+                     ? "PRINT JOB BLOCKED: " + event.documentName + " — " + event.category + " data"
+                     : "Print job: " + event.documentName);
+                 json.AddString("severity", event.actionTaken == "Block" ? "high" : "low");
+                 json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
+                 json.AddString("classification_level", event.category);
+                 json.AddBool("blocked", event.actionTaken == "Block");
+                 json.AddString("file_path", event.documentName);
+                 json.AddString("timestamp", GetCurrentTimestampISO());
+                 SendEvent(json.Build());
+             },
+             [this](const std::string& level, const std::string& msg) {
+                 if (level == "WARNING") logger.Warning(msg);
+                 else if (level == "ERROR") logger.Error(msg);
+                 else logger.Info(msg);
+             },
+             printClassifier
+         );
+         printMonitor->Start();
+         logger.Info("Print monitoring started");
+
          logger.Info("Agent started successfully");
          logger.Info("Press Ctrl+C to stop the agent");
          

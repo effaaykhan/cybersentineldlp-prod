@@ -27,9 +27,11 @@ echo "This may take 30-60 seconds..."
 echo ""
 
 # Compile the agent
-g++ -std=c++17 -O2 agent.cpp -o cybersentinel_agent.exe \
-    -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
-    -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -static
+g++ -std=c++17 -O2 \
+    agent.cpp screen_capture_monitor.cpp print_monitor.cpp screen_recording_monitor.cpp \
+    -o cybersentinel_agent.exe \
+    -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
+    -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool -lpsapi -static
 
 # Check if compilation was successful
 if [ $? -eq 0 ]; then

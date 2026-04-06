@@ -38,6 +38,7 @@
  #include <chrono>
  #include "screen_capture_monitor.h"
  #include "print_monitor.h"
+ #include "screen_recording_monitor.h"
  #include <regex>
  #include <iomanip>
  #include <filesystem>
@@ -2564,6 +2565,49 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          );
          printMonitor->Start();
          logger.Info("Print monitoring started");
+
+         // ── Screen Recording Monitor (isolated module) ──
+         // Detects when a screen-recording tool is running and overlays a
+         // topmost layered black mask whenever sensitive (Confidential /
+         // Restricted) content is in the foreground. Reuses screenClassifier
+         // — does NOT touch keyboard hook, USB, clipboard, or screenshot logic.
+         auto recordingMonitor = std::make_shared<ScreenRecordingMonitor>(
+             [this](ScreenRecordingEvent& evt) {
+                 JsonBuilder json;
+                 json.AddString("event_id", GenerateUUID());
+                 json.AddString("event_type", "SCREEN_RECORDING_DETECTED");
+                 json.AddString("event_subtype", evt.actionTaken);
+                 json.AddString("agent_id", config.agentId);
+                 json.AddString("source_type", "agent");
+                 json.AddString("user_email", evt.user + "@" + config.agentName);
+                 json.AddString("process_name", evt.processName);
+                 json.AddBool("recording_active", evt.recordingActive);
+                 json.AddBool("sensitive_detected", evt.sensitiveDetected);
+                 json.AddString("classification_level", evt.classification);
+                 json.AddString("active_window", evt.activeWindow);
+                 json.AddString("action", evt.actionTaken == "BLUR" ? "blurred" : "allowed");
+                 json.AddString("action_taken", evt.actionTaken);
+                 json.AddBool("blocked", false);  // we never block recording
+                 json.AddBool("evasion", evt.evasion);
+                 json.AddString("severity", evt.sensitiveDetected ? "high" : "low");
+                 json.AddString("description", evt.sensitiveDetected
+                     ? ("SCREEN PROTECTION ENABLED: " + evt.classification +
+                        " content masked during recording by " + evt.processName)
+                     : (evt.recordingActive
+                        ? ("Screen recording active: " + evt.processName)
+                        : ("Screen recording stopped: " + evt.processName)));
+                 json.AddString("timestamp", GetCurrentTimestampISO());
+                 SendEvent(json.Build());
+             },
+             [this](const std::string& level, const std::string& msg) {
+                 if (level == "WARNING") logger.Warning(msg);
+                 else if (level == "ERROR") logger.Error(msg);
+                 else logger.Info(msg);
+             },
+             screenClassifier
+         );
+         recordingMonitor->Start();
+         logger.Info("Screen recording monitor started");
 
          logger.Info("Agent started successfully");
          logger.Info("Press Ctrl+C to stop the agent");

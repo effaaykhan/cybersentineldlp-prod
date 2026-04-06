@@ -147,8 +147,116 @@ foreach ($d in @($INSTALL_DIR, "$DATA_DIR\logs", "$DATA_DIR\quarantine", "$DATA_
 Write-ColorOutput "Directories created" -Type "Success"
 Write-Host ""
 
-# Step 4: Download agent binary
-Write-ColorOutput "Step 4: Downloading agent from GitHub..." -Type "Info"
+# Step 4: Install OCR dependencies (Chocolatey + Tesseract)
+# Required by the screen-recording region masker — Tesseract provides
+# word-level bounding boxes (--psm 6 tsv) so the agent can blur only
+# sensitive regions instead of the entire screen during screen recording.
+Write-ColorOutput "Step 4: Installing OCR dependencies (Chocolatey + Tesseract)..." -Type "Info"
+
+function Test-CommandExists {
+    param([string]$Command)
+    $null = Get-Command $Command -ErrorAction SilentlyContinue
+    return $?
+}
+
+function Install-Chocolatey {
+    Write-ColorOutput "  Chocolatey not found — installing..." -Type "Warning"
+    try {
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        # TLS 1.2 is required by chocolatey.org
+        [System.Net.ServicePointManager]::SecurityProtocol =
+            [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+        # Refresh PATH for this session so `choco` is callable immediately.
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
+        $env:Path    = "$machinePath;$userPath"
+        if (Test-Path "$env:ProgramData\chocolatey\bin") {
+            $env:Path = "$env:ProgramData\chocolatey\bin;$env:Path"
+        }
+
+        if (Test-CommandExists "choco") {
+            Write-ColorOutput "  Chocolatey installed successfully" -Type "Success"
+            return $true
+        } else {
+            Write-ColorOutput "  Chocolatey install ran but 'choco' is not on PATH yet" -Type "Warning"
+            Write-ColorOutput "  You may need to open a new PowerShell window after install completes" -Type "Warning"
+            return $false
+        }
+    } catch {
+        Write-ColorOutput "  Failed to install Chocolatey: $($_.Exception.Message)" -Type "Error"
+        return $false
+    }
+}
+
+function Install-Tesseract {
+    Write-ColorOutput "  Tesseract not found — installing via choco..." -Type "Warning"
+    try {
+        # -y auto-confirms; --no-progress keeps logs clean
+        $proc = Start-Process -FilePath "choco" `
+                              -ArgumentList "install","tesseract","-y","--no-progress" `
+                              -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -ne 0) {
+            Write-ColorOutput "  choco install tesseract exited with code $($proc.ExitCode)" -Type "Warning"
+        }
+
+        # Refresh PATH so `tesseract` is callable in this session.
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
+        $env:Path    = "$machinePath;$userPath"
+
+        # The chocolatey package drops tesseract into Program Files\Tesseract-OCR
+        $tessDir = "C:\Program Files\Tesseract-OCR"
+        if ((Test-Path "$tessDir\tesseract.exe") -and ($env:Path -notlike "*$tessDir*")) {
+            $env:Path = "$tessDir;$env:Path"
+        }
+
+        if (Test-CommandExists "tesseract") {
+            $ver = & tesseract --version 2>&1 | Select-Object -First 1
+            Write-ColorOutput "  Tesseract installed: $ver" -Type "Success"
+            return $true
+        } else {
+            Write-ColorOutput "  Tesseract install ran but 'tesseract' is not on PATH yet" -Type "Warning"
+            Write-ColorOutput "  A reboot or new PowerShell session may be required" -Type "Warning"
+            return $false
+        }
+    } catch {
+        Write-ColorOutput "  Failed to install Tesseract: $($_.Exception.Message)" -Type "Error"
+        return $false
+    }
+}
+
+# 4a. Chocolatey
+if (Test-CommandExists "choco") {
+    $chocoVer = (& choco --version 2>&1 | Select-Object -First 1)
+    Write-ColorOutput "  Chocolatey already installed (v$chocoVer)" -Type "Success"
+    $chocoOk = $true
+} else {
+    $chocoOk = Install-Chocolatey
+}
+
+# 4b. Tesseract (only if choco is now available)
+if ($chocoOk) {
+    if (Test-CommandExists "tesseract") {
+        $tessVer = (& tesseract --version 2>&1 | Select-Object -First 1)
+        Write-ColorOutput "  Tesseract already installed: $tessVer" -Type "Success"
+    } else {
+        $tessOk = Install-Tesseract
+        if (-not $tessOk) {
+            Write-ColorOutput "  Tesseract install incomplete — screen-recording region masking will be disabled until installed" -Type "Warning"
+            Write-ColorOutput "  After this script finishes, run: choco install tesseract -y" -Type "Warning"
+        }
+    }
+} else {
+    Write-ColorOutput "  Skipping Tesseract — Chocolatey is not available" -Type "Warning"
+    Write-ColorOutput "  Install manually from https://github.com/UB-Mannheim/tesseract/wiki, then re-run this script" -Type "Warning"
+}
+
+Write-Host ""
+
+# Step 5: Download agent binary
+Write-ColorOutput "Step 5: Downloading agent from GitHub..." -Type "Info"
 
 $exePath = Join-Path $INSTALL_DIR $EXE_NAME
 $downloadUrl = "$RAW_BASE/agents/endpoint/windows/$EXE_NAME"
@@ -165,15 +273,15 @@ try {
 }
 Write-Host ""
 
-# Step 5: Set environment variable
-Write-ColorOutput "Step 5: Setting environment variables..." -Type "Info"
+# Step 6: Set environment variable
+Write-ColorOutput "Step 6: Setting environment variables..." -Type "Info"
 [Environment]::SetEnvironmentVariable("CYBERSENTINEL_SERVER_URL", $serverURL, "Machine")
 $env:CYBERSENTINEL_SERVER_URL = $serverURL
 Write-ColorOutput "Environment variable set" -Type "Success"
 Write-Host ""
 
-# Step 6: Create configuration file
-Write-ColorOutput "Step 6: Creating configuration file..." -Type "Info"
+# Step 7: Create configuration file
+Write-ColorOutput "Step 7: Creating configuration file..." -Type "Info"
 
 $configPath = Join-Path $INSTALL_DIR $CONFIG_NAME
 $config = @{
@@ -203,8 +311,8 @@ $config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding UTF
 Write-ColorOutput "Configuration created: $configPath" -Type "Success"
 Write-Host ""
 
-# Step 7: Create VBScript launcher for hidden background execution
-Write-ColorOutput "Step 7: Creating background launcher..." -Type "Info"
+# Step 8: Create VBScript launcher for hidden background execution
+Write-ColorOutput "Step 8: Creating background launcher..." -Type "Info"
 
 $vbsPath = Join-Path $INSTALL_DIR "launch_agent.vbs"
 $vbsContent = @"
@@ -215,8 +323,8 @@ $vbsContent | Out-File -FilePath $vbsPath -Encoding ASCII -Force
 Write-ColorOutput "Background launcher created: $vbsPath" -Type "Success"
 Write-Host ""
 
-# Step 8: Configure scheduled task
-Write-ColorOutput "Step 8: Configuring auto-start scheduled task..." -Type "Info"
+# Step 9: Configure scheduled task
+Write-ColorOutput "Step 9: Configuring auto-start scheduled task..." -Type "Info"
 
 try {
     # Remove existing task if present
@@ -267,8 +375,8 @@ try {
 
 Write-Host ""
 
-# Step 9: Start the agent
-Write-ColorOutput "Step 9: Starting the agent..." -Type "Info"
+# Step 10: Start the agent
+Write-ColorOutput "Step 10: Starting the agent..." -Type "Info"
 
 try {
     Start-ScheduledTask -TaskName $TASK_NAME

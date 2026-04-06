@@ -147,13 +147,11 @@ foreach ($d in @($INSTALL_DIR, "$DATA_DIR\logs", "$DATA_DIR\quarantine", "$DATA_
 Write-ColorOutput "Directories created" -Type "Success"
 Write-Host ""
 
-# Step 4: Install OCR + video processing dependencies
-# Chocolatey  → package manager
-# Tesseract   → OCR engine (used by post-recording video redactor)
-# Python 3    → host for the redactor helper script
-# ffmpeg      → muxes original audio back into the redacted video (optional)
-# pip pkgs    → opencv-python (frame I/O) + pytesseract (OCR bindings)
-Write-ColorOutput "Step 4: Installing OCR + video processing dependencies..." -Type "Info"
+# Step 4: Install OCR dependencies (Chocolatey + Tesseract)
+# Tesseract is used by the screen-capture classifier as its Stage 4 OCR
+# fallback — it lets the agent read text from a screenshot when window-
+# text extraction doesn't find anything.
+Write-ColorOutput "Step 4: Installing OCR dependencies (Chocolatey + Tesseract)..." -Type "Info"
 
 function Test-CommandExists {
     param([string]$Command)
@@ -246,88 +244,13 @@ if ($chocoOk) {
     } else {
         $tessOk = Install-Tesseract
         if (-not $tessOk) {
-            Write-ColorOutput "  Tesseract install incomplete — post-recording redaction will be disabled until installed" -Type "Warning"
+            Write-ColorOutput "  Tesseract install incomplete — screenshot OCR fallback will be disabled" -Type "Warning"
             Write-ColorOutput "  After this script finishes, run: choco install tesseract -y" -Type "Warning"
         }
     }
 } else {
     Write-ColorOutput "  Skipping Tesseract — Chocolatey is not available" -Type "Warning"
     Write-ColorOutput "  Install manually from https://github.com/UB-Mannheim/tesseract/wiki, then re-run this script" -Type "Warning"
-}
-
-# 4c. Python 3 (host for the post-recording video redactor)
-if ($chocoOk) {
-    if (Test-CommandExists "python") {
-        $pyVer = (& python --version 2>&1 | Select-Object -First 1)
-        Write-ColorOutput "  Python already installed: $pyVer" -Type "Success"
-    } else {
-        Write-ColorOutput "  Python not found — installing via choco..." -Type "Warning"
-        try {
-            $proc = Start-Process -FilePath "choco" `
-                                  -ArgumentList "install","python","-y","--no-progress" `
-                                  -Wait -PassThru -NoNewWindow
-            if ($proc.ExitCode -ne 0) {
-                Write-ColorOutput "  choco install python exited with code $($proc.ExitCode)" -Type "Warning"
-            }
-            # Refresh PATH so `python` and `pip` are callable in this session.
-            $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-            $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
-            $env:Path    = "$machinePath;$userPath"
-
-            if (Test-CommandExists "python") {
-                $pyVer = (& python --version 2>&1 | Select-Object -First 1)
-                Write-ColorOutput "  Python installed: $pyVer" -Type "Success"
-            } else {
-                Write-ColorOutput "  Python install ran but not on PATH yet — may need a new PowerShell session" -Type "Warning"
-            }
-        } catch {
-            Write-ColorOutput "  Failed to install Python: $($_.Exception.Message)" -Type "Error"
-        }
-    }
-}
-
-# 4d. ffmpeg (optional — used to mux audio back into redacted videos)
-if ($chocoOk) {
-    if (Test-CommandExists "ffmpeg") {
-        Write-ColorOutput "  ffmpeg already installed" -Type "Success"
-    } else {
-        Write-ColorOutput "  ffmpeg not found — installing via choco (optional)..." -Type "Warning"
-        try {
-            Start-Process -FilePath "choco" `
-                          -ArgumentList "install","ffmpeg","-y","--no-progress" `
-                          -Wait -NoNewWindow | Out-Null
-            $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-            $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
-            $env:Path    = "$machinePath;$userPath"
-            if (Test-CommandExists "ffmpeg") {
-                Write-ColorOutput "  ffmpeg installed (audio will be preserved in redacted videos)" -Type "Success"
-            } else {
-                Write-ColorOutput "  ffmpeg install incomplete — redacted videos will be silent" -Type "Warning"
-            }
-        } catch {
-            Write-ColorOutput "  ffmpeg install failed (non-fatal): $($_.Exception.Message)" -Type "Warning"
-        }
-    }
-}
-
-# 4e. Python packages: opencv-python + pytesseract
-if (Test-CommandExists "python") {
-    Write-ColorOutput "  Installing/updating Python packages: opencv-python, pytesseract..." -Type "Info"
-    try {
-        & python -m pip install --upgrade pip --quiet 2>&1 | Out-Null
-        & python -m pip install --quiet opencv-python pytesseract 2>&1 | Out-Null
-        $cvCheck = & python -c "import cv2, pytesseract; print(cv2.__version__)" 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-ColorOutput "  Python deps installed (opencv $cvCheck, pytesseract)" -Type "Success"
-        } else {
-            Write-ColorOutput "  Python package install verification failed: $cvCheck" -Type "Warning"
-        }
-    } catch {
-        Write-ColorOutput "  Failed to install Python packages: $($_.Exception.Message)" -Type "Warning"
-        Write-ColorOutput "  After this script finishes, run: python -m pip install opencv-python pytesseract" -Type "Warning"
-    }
-} else {
-    Write-ColorOutput "  Skipping pip install — Python is not on PATH yet" -Type "Warning"
 }
 
 Write-Host ""
@@ -347,19 +270,6 @@ try {
     Write-ColorOutput "Error downloading agent: $($_.Exception.Message)" -Type "Error"
     Write-ColorOutput "Please check internet connection and GitHub repository access" -Type "Warning"
     exit 1
-}
-
-# Also download the post-recording video redactor Python helper. The agent
-# expects to find it at INSTALL_DIR\dlp_video_redactor.py.
-$scriptUrl  = "$RAW_BASE/agents/endpoint/windows/dlp_video_redactor.py"
-$scriptDest = Join-Path $INSTALL_DIR "dlp_video_redactor.py"
-try {
-    Write-ColorOutput "Downloading video redactor helper: $scriptUrl" -Type "Info"
-    Invoke-WebRequest -Uri $scriptUrl -OutFile $scriptDest -UseBasicParsing
-    Write-ColorOutput "Helper script installed: $scriptDest" -Type "Success"
-} catch {
-    Write-ColorOutput "Failed to download video redactor helper: $($_.Exception.Message)" -Type "Warning"
-    Write-ColorOutput "Post-recording video redaction will not work until the helper is present" -Type "Warning"
 }
 Write-Host ""
 

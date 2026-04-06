@@ -394,9 +394,20 @@ bool VideoRedactor::RunRedactor(const std::string& path,
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
+    // Always echo the helper's captured stdout/stderr into the agent log
+    // (line by line, trimmed) so we can see exactly what it said even on
+    // success. This is critical for diagnosing why redactions might miss.
+    if (m_logger && !stdoutLine.empty()) {
+        std::istringstream iss(stdoutLine);
+        std::string ln;
+        while (std::getline(iss, ln)) {
+            while (!ln.empty() && (ln.back() == '\r' || ln.back() == '\n')) ln.pop_back();
+            if (!ln.empty()) m_logger("INFO", "  [redactor] " + ln);
+        }
+    }
+
     if (exitCode != 0) {
         DeleteFileA(outPath.c_str());
-        // Trim stdout to a single line for the event reason.
         std::string reason = stdoutLine;
         if (reason.size() > 400) reason.resize(400);
         outError = "redactor exited with code " + std::to_string(exitCode) +

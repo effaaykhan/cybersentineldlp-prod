@@ -11,6 +11,7 @@ when ffmpeg is available on PATH.
 
 Usage:
     python dlp_video_redactor.py <input_video> <output_video>
+    python dlp_video_redactor.py --selftest
 
 Exit codes:
     0 = success (output file written, "REDACTED: M/T frames masked" on stdout)
@@ -18,8 +19,15 @@ Exit codes:
     2 = cannot open input
     3 = cannot create writer
     4 = OCR / processing error
+
+Diagnostics:
+    Every invocation appends a detailed log to
+    %PROGRAMDATA%\\CyberSentinel\\logs\\video_redactor.log
+    Use --selftest to verify Python + OpenCV + pytesseract + tesseract.exe
+    are all reachable.
 """
 
+import datetime
 import os
 import re
 import shutil
@@ -28,9 +36,31 @@ import sys
 import tempfile
 import traceback
 
+
+# ─── File logging ────────────────────────────────────────────────────────
+LOG_DIR = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
+                       "CyberSentinel", "logs")
+LOG_PATH = os.path.join(LOG_DIR, "video_redactor.log")
+
+def _log(msg):
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{ts}] [pid={os.getpid()}] {msg}\n"
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+    # Mirror to stderr so the C++ side captures it too.
+    try:
+        print(msg, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
 try:
     import cv2
 except ImportError as e:
+    _log(f"FATAL: opencv-python not installed: {e}")
     print(f"ERROR: opencv-python not installed: {e}", file=sys.stderr)
     sys.exit(4)
 
@@ -38,6 +68,7 @@ try:
     import pytesseract
     from pytesseract import Output
 except ImportError as e:
+    _log(f"FATAL: pytesseract not installed: {e}")
     print(f"ERROR: pytesseract not installed: {e}", file=sys.stderr)
     sys.exit(4)
 
@@ -62,6 +93,9 @@ def _find_tesseract():
 _tess = _find_tesseract()
 if _tess:
     pytesseract.pytesseract.tesseract_cmd = _tess
+    _log(f"Using tesseract.exe: {_tess}")
+else:
+    _log("WARN: tesseract.exe not found in any standard location — relying on PATH")
 
 
 # ─── Sensitive-data patterns (mirrors agent.cpp + screen_recording_monitor) ──
@@ -78,10 +112,15 @@ PATTERNS = [
 ]
 
 # OCR confidence floor — ignore words below this.
-MIN_CONF = 35
+# Tesseract is conservative; 20 catches more matches with acceptable noise.
+MIN_CONF = 20
 
 # Padding (pixels) added around each masked rectangle.
-MASK_PAD = 4
+MASK_PAD = 6
+
+# Sample rate divisor: how many OCR passes per second of video. 4 means
+# OCR every fps/4 frames (~250ms apart). Higher = more accurate but slower.
+SAMPLES_PER_SECOND = 4
 
 
 def find_sensitive_regions(frame):
@@ -212,20 +251,76 @@ def mux_audio(silent_video, original_video, output_video):
         return False
 
 
+def selftest():
+    """Diagnostic — verify every dependency is reachable. Run this manually
+    if redactions aren't happening."""
+    print("=" * 60)
+    print("CyberSentinel DLP Video Redactor — self-test")
+    print("=" * 60)
+    print(f"Python:           {sys.version.split()[0]} ({sys.executable})")
+    print(f"Log file:         {LOG_PATH}")
+    print(f"OpenCV version:   {cv2.__version__}")
+    print(f"pytesseract:      {pytesseract.__version__}")
+    print(f"Tesseract cmd:    {pytesseract.pytesseract.tesseract_cmd}")
+    try:
+        v = pytesseract.get_tesseract_version()
+        print(f"Tesseract ver:    {v}")
+    except Exception as e:
+        print(f"Tesseract ver:    ERROR — {e}")
+        print()
+        print("FAIL: Tesseract is not installed or not on PATH.")
+        print("      Run: choco install tesseract -y")
+        return 4
+    print(f"ffmpeg on PATH:   {has_ffmpeg()}")
+
+    # Synthetic OCR test — create a 600x300 white image with sensitive text.
+    import numpy as np
+    img = np.full((300, 600, 3), 255, dtype=np.uint8)
+    cv2.putText(img, "Aadhaar: 1234 5678 9012", (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+    cv2.putText(img, "Email: test@example.com", (10, 120),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+    cv2.putText(img, "Normal sentence here.", (10, 180),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
+
+    regions = find_sensitive_regions(img)
+    print(f"Synthetic OCR:    {len(regions)} sensitive region(s) detected")
+    for r in regions:
+        print(f"   - {r[4]} at ({r[0]},{r[1]})-({r[2]},{r[3]})")
+
+    if not regions:
+        print()
+        print("FAIL: OCR ran but found no sensitive regions in the synthetic image.")
+        print("      Tesseract is installed but the regex patterns aren't matching.")
+        return 4
+
+    print()
+    print("PASS — all dependencies are reachable and OCR is matching.")
+    return 0
+
+
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] == "--selftest":
+        return selftest()
+
     if len(sys.argv) != 3:
         print(f"Usage: {sys.argv[0]} <input> <output>", file=sys.stderr)
+        print(f"       {sys.argv[0]} --selftest", file=sys.stderr)
         return 1
 
     inp = sys.argv[1]
     out = sys.argv[2]
 
+    _log(f"START: input={inp} output={out}")
+
     if not os.path.isfile(inp):
+        _log(f"FATAL: input not found: {inp}")
         print(f"ERROR: input not found: {inp}", file=sys.stderr)
         return 2
 
     cap = cv2.VideoCapture(inp)
     if not cap.isOpened():
+        _log(f"FATAL: cannot open input {inp}")
         print(f"ERROR: cannot open {inp}", file=sys.stderr)
         return 2
 
@@ -234,30 +329,44 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
+    _log(f"Video: {width}x{height} @ {fps:.1f} fps, {total_frames} frames")
+
     if width <= 0 or height <= 0:
+        _log(f"FATAL: invalid frame size {width}x{height}")
         print(f"ERROR: invalid frame size {width}x{height}", file=sys.stderr)
         cap.release()
         return 2
 
-    # Write the masked frames to a temp silent file first; we'll mux audio
-    # from the original at the end if ffmpeg is available.
+    # Verify Tesseract is callable BEFORE we waste time decoding the video.
+    try:
+        tv = pytesseract.get_tesseract_version()
+        _log(f"Tesseract version: {tv}")
+    except Exception as e:
+        _log(f"FATAL: tesseract not callable: {e}")
+        print(f"ERROR: tesseract not available: {e}", file=sys.stderr)
+        cap.release()
+        return 4
+
     tmp_dir = tempfile.gettempdir()
     silent_path = os.path.join(tmp_dir, f"dlp_silent_{os.getpid()}.mp4")
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(silent_path, fourcc, fps, (width, height))
     if not writer.isOpened():
+        _log(f"FATAL: VideoWriter open failed for {silent_path}")
         print(f"ERROR: cannot open VideoWriter for {silent_path}", file=sys.stderr)
         cap.release()
         return 3
 
-    # Sample every Nth frame for OCR — between samples, reuse the regions
-    # from the most recent OCR. ~2 OCR passes per second.
-    sample_interval = max(1, int(round(fps / 2.0)))
+    sample_interval = max(1, int(round(fps / SAMPLES_PER_SECOND)))
+    _log(f"Sampling every {sample_interval} frames "
+         f"(~{SAMPLES_PER_SECOND} OCR passes per video second)")
 
     current_regions = []
     frame_idx = 0
     masked_frames = 0
+    sample_count = 0
+    total_regions_seen = 0
 
     try:
         while True:
@@ -266,10 +375,15 @@ def main():
                 break
 
             if frame_idx % sample_interval == 0:
+                sample_count += 1
                 try:
                     current_regions = find_sensitive_regions(frame)
+                    if current_regions:
+                        total_regions_seen += len(current_regions)
+                        labels = ",".join(r[4] for r in current_regions)
+                        _log(f"frame {frame_idx}: {len(current_regions)} region(s) [{labels}]")
                 except Exception:
-                    traceback.print_exc(file=sys.stderr)
+                    _log(f"frame {frame_idx}: OCR exception\n{traceback.format_exc()}")
                     current_regions = []
 
             if current_regions:
@@ -283,23 +397,41 @@ def main():
         cap.release()
         writer.release()
 
+    _log(f"Decode complete: {frame_idx} frames processed, "
+         f"{sample_count} OCR samples, {total_regions_seen} total regions, "
+         f"{masked_frames} frames masked")
+
     # Try to preserve audio via ffmpeg.
-    if has_ffmpeg() and mux_audio(silent_path, inp, out):
-        try:
-            os.remove(silent_path)
-        except OSError:
-            pass
+    if has_ffmpeg():
+        _log("ffmpeg present — muxing audio")
+        if mux_audio(silent_path, inp, out):
+            try: os.remove(silent_path)
+            except OSError: pass
+            _log(f"ffmpeg mux OK → {out}")
+        else:
+            _log("ffmpeg mux failed — falling back to silent output")
+            try:
+                shutil.move(silent_path, out)
+            except Exception as e:
+                _log(f"FATAL: move silent → out failed: {e}")
+                print(f"ERROR: failed to move silent output to {out}: {e}", file=sys.stderr)
+                return 4
     else:
-        # No ffmpeg or mux failed — copy the silent file to the output path.
+        _log("ffmpeg not on PATH — output will be silent")
         try:
             shutil.move(silent_path, out)
         except Exception as e:
+            _log(f"FATAL: move silent → out failed: {e}")
             print(f"ERROR: failed to move silent output to {out}: {e}", file=sys.stderr)
             return 4
 
     if not os.path.isfile(out) or os.path.getsize(out) == 0:
+        _log("FATAL: output not produced")
         print("ERROR: output not produced", file=sys.stderr)
         return 4
+
+    out_sz = os.path.getsize(out)
+    _log(f"DONE: {out} ({out_sz} bytes), masked {masked_frames}/{frame_idx} frames")
 
     # The C++ side parses this line.
     print(f"REDACTED: {masked_frames}/{frame_idx} frames masked")
@@ -310,5 +442,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
+        _log(f"UNCAUGHT EXCEPTION:\n{traceback.format_exc()}")
         traceback.print_exc(file=sys.stderr)
         sys.exit(4)

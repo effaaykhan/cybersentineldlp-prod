@@ -19,18 +19,31 @@ struct ScreenRecordingEvent {
     std::string activeWindow;      // foreground window title at the moment of decision
     std::string actionTaken;       // BLUR / ALLOW
     bool        evasion           = false;
+    int         regionsCount      = 0;  // number of sensitive rectangles masked
     std::string timestamp;
+};
+
+// Single sensitive region in *screen* coordinates (virtual desktop space).
+struct SensitiveRegion {
+    int left = 0, top = 0, right = 0, bottom = 0;
+    std::string label;  // matched pattern name (AADHAAR, PAN, CC, ...)
 };
 
 // Isolated screen-recording detector + sensitive-content protection overlay.
 //
-// Design notes (kept intentionally separate from ScreenCaptureMonitor / PrintMonitor):
-//   * Owns its own threads. Does not touch keyboard hooks, USB, clipboard, or
-//     screenshot logic.
-//   * NEVER blocks recording. Only obscures sensitive content with a topmost
-//     layered overlay window while a recording tool is active.
-//   * Reuses the agent's existing classifier callback (window title + process
-//     name → classification level). Classification logic is NOT duplicated.
+// Behaviour:
+//   * Detects active screen-recording tools (process scan).
+//   * NEVER blocks recording.
+//   * While recording is active, captures the virtual screen, OCRs it with
+//     Tesseract in TSV mode (word-level bounding boxes), regex-matches each
+//     line for sensitive patterns (Aadhaar, PAN, CC, SSN, IFSC, secrets),
+//     and pushes the resulting rectangles to a topmost click-through overlay
+//     window which paints small black masks ONLY over those rectangles.
+//   * The rest of the screen is fully transparent — normal screen content
+//     is visible to the user and to the recorder.
+//
+// Owns its own threads. Does not touch keyboard hooks, USB, clipboard, or
+// screenshot logic. No shared mutable state with the rest of the agent.
 class ScreenRecordingMonitor {
 public:
     using EventCallback   = std::function<void(ScreenRecordingEvent& evt)>;
@@ -52,26 +65,34 @@ public:
 private:
     // ── Threads ─────────────────────────────────────────────
     void ProcessDetectionLoop();   // ~2s cadence: enumerate processes, toggle recording state
-    void ContentMonitorLoop();     // ~250ms cadence (only while recording_active): classify foreground
+    void ContentMonitorLoop();     // ~700ms cadence (only while recording_active): OCR + regions
     void OverlayThread();          // dedicated UI thread that owns the overlay window + message pump
 
-    // ── Helpers ─────────────────────────────────────────────
+    // ── Process detection ───────────────────────────────────
     bool IsKnownRecorderName(const std::string& exeNameLower, std::string& matchedOut) const;
     bool LooksLikeEvasiveRecorder(const std::string& exeNameLower,
                                   const std::string& windowTitleLower) const;
 
+    // ── OCR / region detection ──────────────────────────────
+    bool CaptureVirtualScreenBmp(const std::string& outPath,
+                                 int& outOriginX, int& outOriginY,
+                                 int& outW, int& outH);
+    std::vector<SensitiveRegion> RunOcrAndFindRegions(int originX, int originY);
+
+    // ── Helpers ─────────────────────────────────────────────
     std::string GetForegroundWindowTitle();
     std::string GetForegroundProcessName();
     std::string GetCurrentUserName();
     std::string Timestamp();
 
-    void RequestOverlayShow();
+    void UpdateOverlayRegions(const std::vector<SensitiveRegion>& regions);
     void RequestOverlayHide();
     void EmitEvent(const std::string& action,
                    bool sensitive,
                    const std::string& classification,
                    const std::string& activeWindow,
-                   bool evasion);
+                   bool evasion,
+                   int regionsCount);
 
     // ── Window proc (must be static for WinAPI) ─────────────
     static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -96,17 +117,18 @@ private:
 
     // overlay_active — written only by ContentMonitorLoop / overlay thread.
     std::atomic<bool> m_overlayActive{false};
-    std::atomic<bool> m_overlayShouldShow{false};
 
     // Overlay window handle, set by OverlayThread once created.
     std::atomic<HWND> m_overlayHwnd{nullptr};
     DWORD m_overlayThreadId{0};
 
-    // Classification cache to avoid spamming events / re-running OCR every 250ms
-    // when nothing changed. Read/written only by ContentMonitorLoop.
-    std::string m_lastWindowSig;
-    std::string m_lastClassification;
+    // Region buffer shared between content thread (writer) and overlay
+    // thread (reader inside WM_PAINT). Protected by m_regionsMutex.
+    std::mutex                   m_regionsMutex;
+    std::vector<SensitiveRegion> m_regions;
+    int                          m_overlayOriginX = 0;
+    int                          m_overlayOriginY = 0;
 
-    static constexpr UINT WM_DLP_SHOW_OVERLAY = WM_APP + 101;
-    static constexpr UINT WM_DLP_HIDE_OVERLAY = WM_APP + 102;
+    static constexpr UINT WM_DLP_UPDATE_OVERLAY = WM_APP + 101;
+    static constexpr UINT WM_DLP_HIDE_OVERLAY   = WM_APP + 102;
 };

@@ -2589,10 +2589,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("action_taken", evt.actionTaken);
                  json.AddBool("blocked", false);  // we never block recording
                  json.AddBool("evasion", evt.evasion);
+                 json.AddInt("regions_count", evt.regionsCount);
                  json.AddString("severity", evt.sensitiveDetected ? "high" : "low");
                  json.AddString("description", evt.sensitiveDetected
-                     ? ("SCREEN PROTECTION ENABLED: " + evt.classification +
-                        " content masked during recording by " + evt.processName)
+                     ? ("SCREEN PROTECTION ENABLED: " + std::to_string(evt.regionsCount) +
+                        " sensitive region(s) masked during recording by " + evt.processName)
                      : (evt.recordingActive
                         ? ("Screen recording active: " + evt.processName)
                         : ("Screen recording stopped: " + evt.processName)));

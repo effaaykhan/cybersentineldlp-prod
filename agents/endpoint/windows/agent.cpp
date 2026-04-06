@@ -2292,33 +2292,54 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          //   3) File content from disk (if editor with filename in title)
          auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName) -> std::string {
 
-             // Shared: classify any text using regex patterns
-             auto classifyText = [](const std::string& content) -> std::string {
+             // Shared: classify any text using regex patterns.
+             // Logs every matched pattern name + the actual matched text so
+             // we can tell at a glance why a file was flagged.
+             auto classifyText = [this](const std::string& content, const std::string& source) -> std::string {
                  if (content.empty()) return "Public";
                  static const std::vector<std::pair<std::string, std::regex>> patterns = {
-                     {"AADHAAR", std::regex(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)")},
-                     {"PAN", std::regex(R"(\b[A-Z]{5}\d{4}[A-Z]\b)")},
+                     {"AADHAAR",     std::regex(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)")},
+                     {"PAN",         std::regex(R"(\b[A-Z]{5}\d{4}[A-Z]\b)")},
                      {"CREDIT_CARD", std::regex(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)")},
-                     {"SSN", std::regex(R"(\b\d{3}-\d{2}-\d{4}\b)")},
+                     {"SSN",         std::regex(R"(\b\d{3}-\d{2}-\d{4}\b)")},
                      {"PRIVATE_KEY", std::regex(R"(-----BEGIN\s+(RSA\s+)?PRIVATE KEY-----)")},
-                     {"AWS_KEY", std::regex(R"(AKIA[0-9A-Z]{16})")},
-                     {"IFSC", std::regex(R"(\b[A-Z]{4}0[A-Z0-9]{6}\b)")},
+                     {"AWS_KEY",     std::regex(R"(AKIA[0-9A-Z]{16})")},
+                     {"IFSC",        std::regex(R"(\b[A-Z]{4}0[A-Z0-9]{6}\b)")},
                  };
                  float score = 0.0f;
+                 std::vector<std::string> matchedNames;
                  for (const auto& [name, pattern] : patterns) {
                      try {
-                         auto it = std::sregex_iterator(content.begin(), content.end(), pattern);
-                         if (it != std::sregex_iterator()) {
+                         auto it  = std::sregex_iterator(content.begin(), content.end(), pattern);
+                         auto end = std::sregex_iterator();
+                         if (it != end) {
+                             std::string sample = it->str();
+                             if (sample.size() > 60) sample.resize(60);
+                             logger.Warning("CLASSIFIER_MATCH [" + source + "] pattern=" + name +
+                                            " matched=\"" + sample + "\"");
+                             matchedNames.push_back(name);
                              if (name == "CREDIT_CARD" || name == "SSN" || name == "AADHAAR" ||
                                  name == "PRIVATE_KEY" || name == "AWS_KEY") score += 0.9f;
                              else if (name == "PAN" || name == "IFSC") score += 0.7f;
                          }
                      } catch (...) {}
                  }
-                 if (score >= 0.8f) return "Restricted";
-                 if (score >= 0.6f) return "Confidential";
-                 if (score >= 0.3f) return "Internal";
-                 return "Public";
+                 std::string result;
+                 if (score >= 0.8f)      result = "Restricted";
+                 else if (score >= 0.6f) result = "Confidential";
+                 else if (score >= 0.3f) result = "Internal";
+                 else                    result = "Public";
+                 if (!matchedNames.empty()) {
+                     std::string joined;
+                     for (size_t i = 0; i < matchedNames.size(); ++i) {
+                         if (i) joined += ",";
+                         joined += matchedNames[i];
+                     }
+                     logger.Info("CLASSIFIER_VERDICT [" + source + "] score=" +
+                                 std::to_string(score) + " patterns=[" + joined +
+                                 "] => " + result);
+                 }
+                 return result;
              };
 
              // ── Stage 1: Window title keywords (microseconds) ──
@@ -2371,7 +2392,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
                  if (allText.length() > 10) {
                      logger.Debug("Screen text extracted: " + std::to_string(allText.length()) + " chars from window");
-                     std::string result = classifyText(allText);
+                     std::string result = classifyText(allText, "stage2-wm_gettext:" + windowTitle);
                      if (result != "Public") return result;
                  }
              }
@@ -2400,7 +2421,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                                      f.read(buf.data(), buf.size());
                                      std::string content(buf.data(), f.gcount());
                                      f.close();
-                                     std::string result = classifyText(content);
+                                     std::string result = classifyText(content, "stage3-file:" + path);
                                      if (result != "Public") return result;
                                  }
                              } catch (...) {}
@@ -2491,7 +2512,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                              if (ocrText.length() > 10) {
                                  logger.Debug("Tesseract OCR (foreground window) extracted " +
                                               std::to_string(ocrText.length()) + " chars");
-                                 std::string result = classifyText(ocrText);
+                                 std::string result = classifyText(ocrText, "stage4-ocr:" + windowTitle);
                                  if (result != "Public") {
                                      logger.Info("OCR detected sensitive content in foreground window: " + result);
                                      return result;

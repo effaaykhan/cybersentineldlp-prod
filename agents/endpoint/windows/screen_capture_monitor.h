@@ -38,8 +38,9 @@ public:
     static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
 
 private:
-    void HookThread();           // Thread that runs the keyboard hook message loop
-    void ProcessMonitorThread(); // Thread that monitors capture tool processes
+    void HookThread();             // Thread that runs the keyboard hook message loop
+    void ProcessMonitorThread();   // Thread that monitors capture tool processes
+    void ContentScanThread();      // Background OCR — maintains m_screenIsSensitive
     std::string GetActiveWindowTitle();
     std::string GetForegroundProcessName();
     std::string GetTimestamp();
@@ -51,7 +52,14 @@ private:
     ClassifyCallback m_classifier;
     std::thread m_hookThread;
     std::thread m_processThread;
+    std::thread m_scanThread;
     std::atomic<bool> m_running{false};
+
+    // Continuously updated by ContentScanThread. The keyboard hook ONLY
+    // swallows PrintScreen / Win+Shift+S when this flag is true; otherwise
+    // the key is passed to Windows unchanged and the screenshot happens
+    // normally.
+    std::atomic<bool> m_screenIsSensitive{false};
 
     // Static instance pointer for the hook callback
     static ScreenCaptureMonitor* s_instance;

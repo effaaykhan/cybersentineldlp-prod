@@ -28,7 +28,7 @@ echo ""
 
 # Compile the agent
 g++ -std=c++17 -O2 \
-    agent.cpp screen_capture_monitor.cpp print_monitor.cpp screen_recording_monitor.cpp \
+    agent.cpp screen_capture_monitor.cpp print_monitor.cpp screen_recording_monitor.cpp video_redactor.cpp \
     -o cybersentinel_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool -lpsapi -static

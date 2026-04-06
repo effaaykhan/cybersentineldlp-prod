@@ -39,6 +39,7 @@
  #include "screen_capture_monitor.h"
  #include "print_monitor.h"
  #include "screen_recording_monitor.h"
+ #include "video_redactor.h"
  #include <regex>
  #include <iomanip>
  #include <filesystem>
@@ -2566,11 +2567,99 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          printMonitor->Start();
          logger.Info("Print monitoring started");
 
-         // ── Screen Recording Monitor (isolated module) ──
-         // Detects when a screen-recording tool is running and overlays a
-         // topmost layered black mask whenever sensitive (Confidential /
-         // Restricted) content is in the foreground. Reuses screenClassifier
-         // — does NOT touch keyboard hook, USB, clipboard, or screenshot logic.
+         // ── Screen Recording Monitor + Post-recording Video Redactor ──
+         // The recording monitor only detects when a recorder process is
+         // active and emits start/stop events — it does NOT touch the screen
+         // during recording. When a recorder stops, the video redactor wakes
+         // up and post-processes any newly-saved video file in the watched
+         // output directories: each frame is OCR'd, sensitive regions are
+         // covered with opaque black rectangles, and the original file is
+         // atomically replaced with the redacted version.
+
+         // 1. Build the watch-directory list (default save locations of OBS,
+         //    Snipping Tool, Game Bar, Camtasia, Bandicam, ShareX, ScreenRec).
+         std::string userProfile;
+         {
+             char buf[MAX_PATH] = {0};
+             DWORD n = GetEnvironmentVariableA("USERPROFILE", buf, MAX_PATH);
+             if (n > 0 && n < MAX_PATH) userProfile = buf;
+         }
+         std::vector<std::string> watchDirs;
+         if (!userProfile.empty()) {
+             watchDirs.push_back(userProfile + "\\Videos");
+             watchDirs.push_back(userProfile + "\\Videos\\Captures");
+             watchDirs.push_back(userProfile + "\\Videos\\Screen Recordings");
+             watchDirs.push_back(userProfile + "\\Documents\\Camtasia Studio");
+             watchDirs.push_back(userProfile + "\\Documents\\Bandicam");
+             watchDirs.push_back(userProfile + "\\Documents\\ShareX\\Screenshots");
+             watchDirs.push_back(userProfile + "\\Documents\\ScreenRec");
+             watchDirs.push_back(userProfile + "\\Desktop");
+         }
+
+         // 2. Resolve the python helper script that ships next to the agent.
+         std::string pythonExe   = "python";  // expect on PATH after installer
+         std::string scriptPath;
+         {
+             char modPath[MAX_PATH] = {0};
+             GetModuleFileNameA(nullptr, modPath, MAX_PATH);
+             std::string mp(modPath);
+             size_t slash = mp.find_last_of("\\/");
+             if (slash != std::string::npos) {
+                 scriptPath = mp.substr(0, slash) + "\\dlp_video_redactor.py";
+             }
+         }
+
+         auto videoRedactor = std::make_shared<VideoRedactor>(
+             watchDirs, pythonExe, scriptPath,
+             [this](VideoRedactionEvent& evt) {
+                 JsonBuilder json;
+                 json.AddString("event_id", GenerateUUID());
+                 json.AddString("event_type", "VIDEO_REDACTION");
+                 json.AddString("event_subtype", evt.status);
+                 json.AddString("agent_id", config.agentId);
+                 json.AddString("source_type", "agent");
+                 json.AddString("user_email", evt.user + "@" + config.agentName);
+                 json.AddString("file_path", evt.originalPath);
+                 json.AddString("status", evt.status);
+                 json.AddString("reason", evt.reason);
+                 json.AddInt("frames_masked", evt.framesMasked);
+                 json.AddInt("frames_total", evt.framesTotal);
+                 json.AddInt("original_bytes", static_cast<int>(evt.originalBytes));
+                 json.AddInt("redacted_bytes", static_cast<int>(evt.redactedBytes));
+                 json.AddString("severity",
+                     evt.status == "success" ? "high" :
+                     evt.status == "failed"  ? "high" : "low");
+                 json.AddString("action",
+                     evt.status == "success" ? "redacted" :
+                     evt.status == "failed"  ? "error"    : "observed");
+                 json.AddBool("blocked", false);
+                 std::string desc;
+                 if (evt.status == "success") {
+                     desc = "Saved recording redacted: " + evt.originalPath +
+                            " (" + std::to_string(evt.framesMasked) + "/" +
+                            std::to_string(evt.framesTotal) + " frames masked)";
+                 } else if (evt.status == "failed") {
+                     desc = "Video redaction FAILED for " + evt.originalPath + " — " + evt.reason;
+                 } else if (evt.status == "processing") {
+                     desc = "Redacting saved recording: " + evt.originalPath;
+                 } else if (evt.status == "detected") {
+                     desc = "New saved recording detected: " + evt.originalPath;
+                 } else {
+                     desc = "Video redaction " + evt.status + ": " + evt.originalPath;
+                 }
+                 json.AddString("description", desc);
+                 json.AddString("timestamp", GetCurrentTimestampISO());
+                 SendEvent(json.Build());
+             },
+             [this](const std::string& level, const std::string& msg) {
+                 if (level == "WARNING") logger.Warning(msg);
+                 else if (level == "ERROR") logger.Error(msg);
+                 else logger.Info(msg);
+             }
+         );
+         videoRedactor->Start();
+         logger.Info("Video redactor started");
+
          auto recordingMonitor = std::make_shared<ScreenRecordingMonitor>(
              [this](ScreenRecordingEvent& evt) {
                  JsonBuilder json;
@@ -2582,21 +2671,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("user_email", evt.user + "@" + config.agentName);
                  json.AddString("process_name", evt.processName);
                  json.AddBool("recording_active", evt.recordingActive);
-                 json.AddBool("sensitive_detected", evt.sensitiveDetected);
-                 json.AddString("classification_level", evt.classification);
-                 json.AddString("active_window", evt.activeWindow);
-                 json.AddString("action", evt.actionTaken == "BLUR" ? "blurred" : "allowed");
+                 json.AddString("action", evt.actionTaken == "STARTED" ? "started" : "stopped");
                  json.AddString("action_taken", evt.actionTaken);
-                 json.AddBool("blocked", false);  // we never block recording
-                 json.AddBool("evasion", evt.evasion);
-                 json.AddInt("regions_count", evt.regionsCount);
-                 json.AddString("severity", evt.sensitiveDetected ? "high" : "low");
-                 json.AddString("description", evt.sensitiveDetected
-                     ? ("SCREEN PROTECTION ENABLED: " + std::to_string(evt.regionsCount) +
-                        " sensitive region(s) masked during recording by " + evt.processName)
-                     : (evt.recordingActive
-                        ? ("Screen recording active: " + evt.processName)
-                        : ("Screen recording stopped: " + evt.processName)));
+                 json.AddBool("blocked", false);
+                 json.AddString("severity", "medium");
+                 json.AddString("description", evt.actionTaken == "STARTED"
+                     ? ("Screen recording started by " + evt.processName +
+                        " — saved file will be redacted post-recording")
+                     : ("Screen recording stopped: " + evt.processName +
+                        " — video redactor armed"));
                  json.AddString("timestamp", GetCurrentTimestampISO());
                  SendEvent(json.Build());
              },
@@ -2604,11 +2687,21 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  if (level == "WARNING") logger.Warning(msg);
                  else if (level == "ERROR") logger.Error(msg);
                  else logger.Info(msg);
-             },
-             screenClassifier
+             }
          );
+         // Wire the lifecycle callbacks so the redactor opens its acceptance
+         // window the moment a recording transitions.
+         {
+             auto vrPtr = videoRedactor;  // capture by value
+             recordingMonitor->OnRecordingStarted([vrPtr](const std::string& proc) {
+                 vrPtr->NotifyRecordingStarted(proc);
+             });
+             recordingMonitor->OnRecordingStopped([vrPtr](const std::string& proc) {
+                 vrPtr->NotifyRecordingStopped(proc);
+             });
+         }
          recordingMonitor->Start();
-         logger.Info("Screen recording monitor started");
+         logger.Info("Screen recording monitor started (process detection only)");
 
          logger.Info("Agent started successfully");
          logger.Info("Press Ctrl+C to stop the agent");

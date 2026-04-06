@@ -40,10 +40,15 @@ public:
     void Stop();
     bool IsRunning() const { return m_running.load(); }
 
-    // Optional callbacks invoked when the detector observes a transition.
-    // Used by VideoRedactor to widen its file-watch acceptance window.
+    // Lifecycle hooks used by VideoRedactor.
+    // * Started / Stopped fire on state transitions (edge-triggered).
+    // * Active fires on EVERY detection cycle while a recorder process is
+    //   running, so the redactor's acceptance window is continuously
+    //   refreshed even when the recorder app (e.g. snippingtool.exe on
+    //   Win11) stays resident between recordings.
     void OnRecordingStarted(LifecycleCallback cb) { m_onStartedCb = std::move(cb); }
     void OnRecordingStopped(LifecycleCallback cb) { m_onStoppedCb = std::move(cb); }
+    void OnRecordingActive (LifecycleCallback cb) { m_onActiveCb  = std::move(cb); }
 
 private:
     void ProcessDetectionLoop();   // ~2s cadence — enumerate processes, toggle state
@@ -58,6 +63,7 @@ private:
     LogCallback       m_logger;
     LifecycleCallback m_onStartedCb;
     LifecycleCallback m_onStoppedCb;
+    LifecycleCallback m_onActiveCb;
 
     std::thread       m_processThread;
     std::atomic<bool> m_running{false};

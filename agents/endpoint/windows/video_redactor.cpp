@@ -119,8 +119,28 @@ void VideoRedactor::Stop() {
 void VideoRedactor::NotifyRecordingStarted(const std::string& processName) {
     // Pre-arm so a video file that appears slightly before our process scan
     // catches the recorder shutdown is still accepted.
-    m_armedUntilMs.store(NowMs() + kPreArmedMs + kArmedWindowMs);
-    if (m_logger) m_logger("INFO", "VIDEO_REDACTOR_ARMED: recording started (" + processName + ")");
+    long long wasArmedUntil = m_armedUntilMs.load();
+    long long now           = NowMs();
+    m_armedUntilMs.store(now + kPreArmedMs + kArmedWindowMs);
+
+    // Throttle logging — this is now called every 2s while a recorder is
+    // resident, so we only log on the transition from unarmed → armed
+    // and then roughly once a minute thereafter.
+    bool wasUnarmed = (now > wasArmedUntil);
+    static std::atomic<long long> lastLogMs{0};
+    long long last = lastLogMs.load();
+    if (wasUnarmed || (now - last) > 60000) {
+        lastLogMs.store(now);
+        if (m_logger) {
+            if (wasUnarmed) {
+                m_logger("INFO", "VIDEO_REDACTOR_ARMED: recording active (" + processName +
+                                 "), acceptance window = " +
+                                 std::to_string(kArmedWindowMs / 1000) + "s");
+            } else {
+                m_logger("INFO", "VIDEO_REDACTOR_REFRESHED: recording still active (" + processName + ")");
+            }
+        }
+    }
 }
 
 void VideoRedactor::NotifyRecordingStopped(const std::string& processName) {
@@ -214,6 +234,32 @@ bool VideoRedactor::IsVideoFile(const std::string& path) const {
 }
 
 void VideoRedactor::EnqueueFile(const std::string& path) {
+    // Skip our own temporary output files outright.
+    if (path.size() > 15 &&
+        path.compare(path.size() - 15, 15, ".dlp_redact.tmp") == 0) {
+        return;
+    }
+
+    // Self-redaction loop guard — any file we just successfully processed
+    // is on the m_justWrote blocklist for ~5 minutes. This catches the
+    // MoveFileEx-triggered MODIFIED event that would otherwise re-queue
+    // our own output.
+    {
+        std::lock_guard<std::mutex> lk(m_justWroteMutex);
+        auto cutoff = std::chrono::steady_clock::now() - std::chrono::minutes(5);
+        m_justWrote.erase(
+            std::remove_if(m_justWrote.begin(), m_justWrote.end(),
+                [cutoff](const auto& p) { return p.second < cutoff; }),
+            m_justWrote.end());
+        for (const auto& [wrotePath, _] : m_justWrote) {
+            if (wrotePath == path) {
+                if (m_logger) m_logger("INFO",
+                    "VIDEO_FILE_SKIPPED: " + path + " — recently processed by redactor");
+                return;
+            }
+        }
+    }
+
     // Acceptance window — only consider files that appeared close to a real
     // recording event. Falls back to "always armed" if NotifyRecording* was
     // never wired (defensive default of 0 means always-rejected, so callers
@@ -433,9 +479,25 @@ bool VideoRedactor::RunRedactor(const std::string& path,
         return false;
     }
 
+    // Register the target path on the blocklist BEFORE the replace so the
+    // watcher's MODIFIED event for our own write is already suppressed by
+    // the time it arrives.
+    {
+        std::lock_guard<std::mutex> lk(m_justWroteMutex);
+        m_justWrote.emplace_back(path, std::chrono::steady_clock::now());
+    }
+
     // Atomically replace the original. MoveFileEx with REPLACE_EXISTING.
     if (!MoveFileExA(outPath.c_str(), path.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        // Remove the blocklist entry since the move failed.
+        {
+            std::lock_guard<std::mutex> lk(m_justWroteMutex);
+            m_justWrote.erase(
+                std::remove_if(m_justWrote.begin(), m_justWrote.end(),
+                    [&path](const auto& p) { return p.first == path; }),
+                m_justWrote.end());
+        }
         outError = "MoveFileEx replace failed: " + std::to_string(GetLastError());
         DeleteFileA(outPath.c_str());
         return false;

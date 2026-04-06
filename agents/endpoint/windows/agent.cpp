@@ -2586,6 +2586,9 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          }
          std::vector<std::string> watchDirs;
          if (!userProfile.empty()) {
+             // Dedicated recording output directories. Desktop is intentionally
+             // NOT watched — users drop all kinds of video files there, and
+             // our own manual-test outputs would fire self-redaction loops.
              watchDirs.push_back(userProfile + "\\Videos");
              watchDirs.push_back(userProfile + "\\Videos\\Captures");
              watchDirs.push_back(userProfile + "\\Videos\\Screen Recordings");
@@ -2593,7 +2596,6 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              watchDirs.push_back(userProfile + "\\Documents\\Bandicam");
              watchDirs.push_back(userProfile + "\\Documents\\ShareX\\Screenshots");
              watchDirs.push_back(userProfile + "\\Documents\\ScreenRec");
-             watchDirs.push_back(userProfile + "\\Desktop");
          }
 
          // 2. Resolve the python helper script that ships next to the agent.
@@ -2690,7 +2692,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              }
          );
          // Wire the lifecycle callbacks so the redactor opens its acceptance
-         // window the moment a recording transitions.
+         // window the moment a recording transitions AND keeps extending it
+         // for as long as the recorder process stays resident.
          {
              auto vrPtr = videoRedactor;  // capture by value
              recordingMonitor->OnRecordingStarted([vrPtr](const std::string& proc) {
@@ -2698,6 +2701,13 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              });
              recordingMonitor->OnRecordingStopped([vrPtr](const std::string& proc) {
                  vrPtr->NotifyRecordingStopped(proc);
+             });
+             // Fires every 2s while any recorder process is running. Keeps
+             // the acceptance window continuously refreshed — critical for
+             // tools like Win11 Snipping Tool that stay resident between
+             // recordings.
+             recordingMonitor->OnRecordingActive([vrPtr](const std::string& proc) {
+                 vrPtr->NotifyRecordingStarted(proc);
              });
          }
          recordingMonitor->Start();

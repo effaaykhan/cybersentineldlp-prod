@@ -124,7 +124,17 @@ void ScreenRecordingMonitor::ProcessDetectionLoop() {
             if (m_logger) m_logger("WARNING", "SCREEN_RECORDING_STARTED: " + matchedProc);
             EmitEvent("STARTED");
             if (m_onStartedCb) try { m_onStartedCb(matchedProc); } catch (...) {}
-        } else if (!foundRecorder && wasActive) {
+        }
+
+        // Keep refreshing the redactor's acceptance window for as long as
+        // the recorder process is resident. Some tools (Win11 Snipping
+        // Tool) never exit between recordings, so the one-shot STARTED
+        // callback is insufficient.
+        if (foundRecorder && m_onActiveCb) {
+            try { m_onActiveCb(matchedProc); } catch (...) {}
+        }
+
+        if (!foundRecorder && wasActive) {
             std::string lastProc;
             {
                 std::lock_guard<std::mutex> lk(m_recProcMutex);

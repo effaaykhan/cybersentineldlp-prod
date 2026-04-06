@@ -109,4 +109,12 @@ private:
     std::mutex                                       m_seenMutex;
     std::vector<std::pair<std::string,
                           std::chrono::steady_clock::time_point>> m_recentlySeen;
+
+    // Self-redaction loop guard. When MoveFileEx replaces the original with
+    // our masked output, ReadDirectoryChangesW fires a MODIFIED event for
+    // that same path and we'd re-queue it. Files on this list are skipped
+    // for the configured TTL.
+    std::mutex                                       m_justWroteMutex;
+    std::vector<std::pair<std::string,
+                          std::chrono::steady_clock::time_point>> m_justWrote;
 };

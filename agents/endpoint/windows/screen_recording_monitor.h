@@ -6,6 +6,7 @@
 #include <atomic>
 #include <vector>
 #include <mutex>
+#include <chrono>
 
 // Event emitted when a screen recording is detected.
 // Reused per-state-change (started/stopped/protection toggled).
@@ -27,6 +28,13 @@ struct ScreenRecordingEvent {
 struct SensitiveRegion {
     int left = 0, top = 0, right = 0, bottom = 0;
     std::string label;  // matched pattern name (AADHAAR, PAN, CC, ...)
+};
+
+// A sticky region keeps a sensitive box visible for a short TTL after the
+// last OCR detection so transient OCR misses don't cause the mask to flicker.
+struct StickyRegion {
+    SensitiveRegion region;
+    std::chrono::steady_clock::time_point lastSeen;
 };
 
 // Isolated screen-recording detector + sensitive-content protection overlay.
@@ -74,10 +82,11 @@ private:
                                   const std::string& windowTitleLower) const;
 
     // ── OCR / region detection ──────────────────────────────
-    bool CaptureVirtualScreenBmp(const std::string& outPath,
-                                 int& outOriginX, int& outOriginY,
-                                 int& outW, int& outH);
-    std::vector<SensitiveRegion> RunOcrAndFindRegions(int originX, int originY);
+    bool CaptureForegroundWindowBmp(HWND hwnd,
+                                    const std::string& outPath,
+                                    int& outOriginX, int& outOriginY,
+                                    int& outW, int& outH);
+    std::vector<SensitiveRegion> OcrForegroundWindow(HWND hwnd);
 
     // ── Helpers ─────────────────────────────────────────────
     std::string GetForegroundWindowTitle();
@@ -112,8 +121,15 @@ private:
     // read by ContentMonitorLoop. Atomic + mutex for the string.
     std::atomic<bool> m_recordingActive{false};
     std::atomic<bool> m_evasionFlagged{false};
+    std::atomic<bool> m_firstOcrPending{false};   // set true on each recording start
     std::mutex        m_recProcMutex;
     std::string       m_recordingProcess;
+
+    // Foreground window tracking + sticky regions (anti-flicker, anti-leak).
+    HWND m_lastForegroundHwnd = nullptr;
+    bool m_lastWindowHadSensitive = false;
+    std::mutex                  m_stickyMutex;
+    std::vector<StickyRegion>   m_stickyRegions;
 
     // overlay_active — written only by ContentMonitorLoop / overlay thread.
     std::atomic<bool> m_overlayActive{false};

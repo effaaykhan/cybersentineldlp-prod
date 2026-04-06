@@ -2410,75 +2410,98 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  }
              }
 
-             // ── Stage 4: Tesseract OCR — capture screen, extract ALL visible text ──
-             // Catches sensitive data from ANY source: browsers, PDFs, images, etc.
+             // ── Stage 4: Tesseract OCR on the FOREGROUND WINDOW RECT ──
+             // Scoped to the currently-active window only — NOT the full
+             // desktop. This prevents a hidden/background window with
+             // stale sensitive content (or Tesseract noise on wallpaper /
+             // icons) from poisoning the classification of the window the
+             // user is actually looking at.
+             //
              // Requires: choco install tesseract -y (on Windows endpoint)
-             try {
-                 std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
-                 std::string tempBmp = tempDir + "\\cs_ocr_screen.bmp";
-                 std::string tempTxt = tempDir + "\\cs_ocr_result";
+             if (fgWnd) {
+                 try {
+                     RECT wr{};
+                     if (GetWindowRect(fgWnd, &wr)) {
+                         int x = wr.left, y = wr.top;
+                         int w = wr.right  - wr.left;
+                         int h = wr.bottom - wr.top;
 
-                 // Capture entire screen to BMP
-                 HDC hScreenDC = GetDC(NULL);
-                 int w = GetSystemMetrics(SM_CXSCREEN);
-                 int h = GetSystemMetrics(SM_CYSCREEN);
-                 HDC hMemDC = CreateCompatibleDC(hScreenDC);
-                 HBITMAP hBmp = CreateCompatibleBitmap(hScreenDC, w, h);
-                 HGDIOBJ old = SelectObject(hMemDC, hBmp);
-                 BitBlt(hMemDC, 0, 0, w, h, hScreenDC, 0, 0, SRCCOPY);
+                         // Clamp to virtual screen to avoid weirdness.
+                         int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                         int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                         int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                         int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                         if (x < vx) { w -= (vx - x); x = vx; }
+                         if (y < vy) { h -= (vy - y); y = vy; }
+                         if (x + w > vx + vw) w = (vx + vw) - x;
+                         if (y + h > vy + vh) h = (vy + vh) - y;
 
-                 BITMAPINFOHEADER bi = {};
-                 bi.biSize = sizeof(bi); bi.biWidth = w; bi.biHeight = -h;
-                 bi.biPlanes = 1; bi.biBitCount = 24; bi.biCompression = BI_RGB;
-                 int rowSz = ((w * 3 + 3) & ~3);
-                 bi.biSizeImage = rowSz * h;
-                 std::vector<BYTE> px(bi.biSizeImage);
-                 GetDIBits(hMemDC, hBmp, 0, h, px.data(), (BITMAPINFO*)&bi, DIB_RGB_COLORS);
+                         if (w > 16 && h > 16) {
+                             std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
+                             std::string tempBmp = tempDir + "\\cs_ocr_fg.bmp";
+                             std::string tempTxt = tempDir + "\\cs_ocr_fg_result";
 
-                 BITMAPFILEHEADER bf = {};
-                 bf.bfType = 0x4D42;
-                 bf.bfOffBits = sizeof(bf) + sizeof(bi);
-                 bf.bfSize = bf.bfOffBits + bi.biSizeImage;
+                             HDC hScreenDC = GetDC(NULL);
+                             HDC hMemDC    = CreateCompatibleDC(hScreenDC);
+                             HBITMAP hBmp  = CreateCompatibleBitmap(hScreenDC, w, h);
+                             HGDIOBJ old   = SelectObject(hMemDC, hBmp);
+                             BitBlt(hMemDC, 0, 0, w, h, hScreenDC, x, y, SRCCOPY);
 
-                 HANDLE hF = CreateFileA(tempBmp.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-                 if (hF != INVALID_HANDLE_VALUE) {
-                     DWORD wr;
-                     WriteFile(hF, &bf, sizeof(bf), &wr, NULL);
-                     WriteFile(hF, &bi, sizeof(bi), &wr, NULL);
-                     WriteFile(hF, px.data(), bi.biSizeImage, &wr, NULL);
-                     CloseHandle(hF);
-                 }
-                 SelectObject(hMemDC, old);
-                 DeleteObject(hBmp); DeleteDC(hMemDC); ReleaseDC(NULL, hScreenDC);
+                             BITMAPINFOHEADER bi = {};
+                             bi.biSize = sizeof(bi); bi.biWidth = w; bi.biHeight = -h;
+                             bi.biPlanes = 1; bi.biBitCount = 24; bi.biCompression = BI_RGB;
+                             int rowSz = ((w * 3 + 3) & ~3);
+                             bi.biSizeImage = rowSz * h;
+                             std::vector<BYTE> px(bi.biSizeImage);
+                             GetDIBits(hMemDC, hBmp, 0, h, px.data(), (BITMAPINFO*)&bi, DIB_RGB_COLORS);
 
-                 // Run Tesseract OCR (outputs to tempTxt.txt)
-                 std::string tessCmd = "tesseract \"" + tempBmp + "\" \"" + tempTxt + "\" --psm 3 -l eng 2>nul";
-                 int tessResult = system(tessCmd.c_str());
+                             BITMAPFILEHEADER bf = {};
+                             bf.bfType = 0x4D42;
+                             bf.bfOffBits = sizeof(bf) + sizeof(bi);
+                             bf.bfSize = bf.bfOffBits + bi.biSizeImage;
 
-                 std::string ocrText;
-                 std::string ocrFile = tempTxt + ".txt";
-                 if (tessResult == 0) {
-                     std::ifstream ifs(ocrFile);
-                     if (ifs.is_open()) {
-                         std::stringstream ss; ss << ifs.rdbuf();
-                         ocrText = ss.str();
-                         ifs.close();
+                             HANDLE hF = CreateFileA(tempBmp.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+                             if (hF != INVALID_HANDLE_VALUE) {
+                                 DWORD wrBytes;
+                                 WriteFile(hF, &bf, sizeof(bf), &wrBytes, NULL);
+                                 WriteFile(hF, &bi, sizeof(bi), &wrBytes, NULL);
+                                 WriteFile(hF, px.data(), bi.biSizeImage, &wrBytes, NULL);
+                                 CloseHandle(hF);
+                             }
+                             SelectObject(hMemDC, old);
+                             DeleteObject(hBmp); DeleteDC(hMemDC); ReleaseDC(NULL, hScreenDC);
+
+                             std::string tessCmd = "tesseract \"" + tempBmp + "\" \"" + tempTxt + "\" --psm 6 -l eng 2>nul";
+                             int tessResult = system(tessCmd.c_str());
+
+                             std::string ocrText;
+                             std::string ocrFile = tempTxt + ".txt";
+                             if (tessResult == 0) {
+                                 std::ifstream ifs(ocrFile);
+                                 if (ifs.is_open()) {
+                                     std::stringstream ss; ss << ifs.rdbuf();
+                                     ocrText = ss.str();
+                                     ifs.close();
+                                 }
+                             }
+
+                             DeleteFileA(tempBmp.c_str());
+                             DeleteFileA(ocrFile.c_str());
+
+                             if (ocrText.length() > 10) {
+                                 logger.Debug("Tesseract OCR (foreground window) extracted " +
+                                              std::to_string(ocrText.length()) + " chars");
+                                 std::string result = classifyText(ocrText);
+                                 if (result != "Public") {
+                                     logger.Info("OCR detected sensitive content in foreground window: " + result);
+                                     return result;
+                                 }
+                             }
+                         }
                      }
+                 } catch (...) {
+                     logger.Debug("Tesseract OCR unavailable — install with: choco install tesseract -y");
                  }
-
-                 DeleteFileA(tempBmp.c_str());
-                 DeleteFileA(ocrFile.c_str());
-
-                 if (ocrText.length() > 10) {
-                     logger.Debug("Tesseract OCR extracted " + std::to_string(ocrText.length()) + " chars");
-                     std::string result = classifyText(ocrText);
-                     if (result != "Public") {
-                         logger.Info("OCR detected sensitive content on screen: " + result);
-                         return result;
-                     }
-                 }
-             } catch (...) {
-                 logger.Debug("Tesseract OCR unavailable — install with: choco install tesseract -y");
              }
 
              return "Public";

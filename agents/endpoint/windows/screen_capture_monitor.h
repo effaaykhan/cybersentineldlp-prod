@@ -65,6 +65,14 @@ private:
     // Stops the dialog from being spammed when the user mashes PrintScreen.
     std::atomic<long long> m_lastPopupMs{0};
 
+    // Sticky-block guard — once we've blocked a screenshot, force-block
+    // every screenshot attempt for the next ~5 seconds regardless of what
+    // the scanner thread says. This eliminates the race where the DLP
+    // popup steals focus, the scanner classifies the popup as Public,
+    // clears m_screenIsSensitive, and the user's next PrintScreen press
+    // slips through before the scanner re-runs on the actual content.
+    std::atomic<long long> m_lastBlockMs{0};
+
     // Static instance pointer for the hook callback
     static ScreenCaptureMonitor* s_instance;
     static HHOOK s_keyboardHook;

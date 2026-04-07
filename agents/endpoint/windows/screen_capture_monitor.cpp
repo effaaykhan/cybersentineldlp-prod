@@ -198,10 +198,19 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
                          isPrintScreen ? "printscreen"     :
                                          "win_shift_s";
 
-    // Check the flag set by ContentScanThread. Fast — one atomic load.
+    // Decision: block if EITHER the scanner currently says sensitive
+    // OR we blocked something in the last 5 seconds (sticky guard).
+    // The sticky guard handles the popup-steals-focus race: after a
+    // block the popup MessageBox briefly becomes the foreground window
+    // and the scanner could clear the flag while it's classified, so
+    // we honour the recent-block grace period instead.
     bool sensitive = s_instance->m_screenIsSensitive.load();
+    long long nowCheckMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    long long lastBlockMs = s_instance->m_lastBlockMs.load();
+    bool recentBlock = (nowCheckMs - lastBlockMs) < 5000;
 
-    if (!sensitive) {
+    if (!sensitive && !recentBlock) {
         // Normal content on screen — let Windows handle the screenshot
         // exactly as it would on an unmanaged machine.
         if (s_instance->m_logger) s_instance->m_logger("INFO",
@@ -216,14 +225,19 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
     }
 
     // Sensitive content is on screen — swallow the key and warn the user.
+    const char* reason = sensitive ? "sensitive content currently on screen"
+                                   : "sticky-block grace window after recent block";
     if (s_instance->m_logger) s_instance->m_logger("WARNING",
-        "SCREEN_CAPTURE_BLOCKED: " + method + " — sensitive content currently on screen");
+        "SCREEN_CAPTURE_BLOCKED: " + method + " — " + reason);
+
+    // Update the sticky-block timestamp so subsequent presses within the
+    // grace window are also blocked.
+    s_instance->m_lastBlockMs.store(nowCheckMs);
 
     // Cooldown — only one popup per 3s. Without this, mashing PrintScreen
     // produces a stack of dialogs and gives the impression that even
     // normal screenshots are being blocked.
-    long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+    long long nowMs = nowCheckMs;
     long long lastMs = s_instance->m_lastPopupMs.load();
     bool showPopup = (nowMs - lastMs) > 3000;
     if (showPopup) {

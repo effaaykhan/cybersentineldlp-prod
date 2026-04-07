@@ -2397,6 +2397,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  EnumData data{&allText};
 
                  EnumChildWindows(fgWnd, [](HWND hwnd, LPARAM lParam) -> BOOL {
+                     // CRITICAL: skip hidden child windows. Win11 Notepad
+                     // (and any tabbed editor) keeps every tab's edit
+                     // control as a child of the same top-level window;
+                     // only the active tab is visible. Without this guard
+                     // we'd read sensitive data from BACKGROUND tabs the
+                     // user can't even see and incorrectly classify the
+                     // foreground tab as sensitive.
+                     if (!IsWindowVisible(hwnd)) return TRUE;
+
                      EnumData* d = (EnumData*)lParam;
                      int len = (int)SendMessageA(hwnd, WM_GETTEXTLENGTH, 0, 0);
                      if (len > 0 && len < 500000) {

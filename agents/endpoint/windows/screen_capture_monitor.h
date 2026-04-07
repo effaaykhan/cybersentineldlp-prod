@@ -61,6 +61,10 @@ private:
     // normally.
     std::atomic<bool> m_screenIsSensitive{false};
 
+    // Cooldown — only show ONE blocked-screenshot popup per N milliseconds.
+    // Stops the dialog from being spammed when the user mashes PrintScreen.
+    std::atomic<long long> m_lastPopupMs{0};
+
     // Static instance pointer for the hook callback
     static ScreenCaptureMonitor* s_instance;
     static HHOOK s_keyboardHook;

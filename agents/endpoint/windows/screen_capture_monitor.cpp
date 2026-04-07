@@ -119,64 +119,31 @@ void ScreenCaptureMonitor::TerminateProcessByName(const std::string& processName
 }
 
 void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
+    // EVENT-ONLY: this used to also clear the clipboard and show its own
+    // MessageBox. The keyboard hook now handles enforcement (clipboard +
+    // popup), so doing it again here would produce TWO popups for every
+    // blocked screenshot. We only emit the event for the dashboard.
+
     std::string windowTitle = GetActiveWindowTitle();
     std::string processName = GetForegroundProcessName();
 
-    std::string classification = "Public";
-    if (m_classifier) classification = m_classifier(windowTitle, processName);
+    bool isSensitive   = m_screenIsSensitive.load();
+    std::string classification = isSensitive ? "Restricted" : "Public";
+    std::string action         = isSensitive ? "Block"      : "Allow";
 
-    if (m_logger) m_logger("INFO", "SCREEN_CONTEXT_CLASSIFIED: " + classification +
-                           " | Window: " + windowTitle);
-
-    bool isSensitive = (classification == "Restricted" || classification == "Confidential");
-    std::string action = isSensitive ? "Block" : "Allow";
-
-    if (m_logger) m_logger("INFO", "SCREEN_POLICY_DECISION: " + action +
-                           " (classification=" + classification + ")");
-
-    if (isSensitive) {
-        // Clear clipboard to remove any screenshot that got through
-        if (OpenClipboard(NULL)) {
-            EmptyClipboard();
-            CloseClipboard();
-        }
-        // Show popup on TOP of the sensitive window
-        HWND fgWindow = GetForegroundWindow();
-        std::thread([fgWindow]() {
-            // Force our popup to the absolute foreground
-            DWORD fgThread = GetWindowThreadProcessId(fgWindow, NULL);
-            DWORD curThread = GetCurrentThreadId();
-            AttachThreadInput(curThread, fgThread, TRUE);
-            SetForegroundWindow(fgWindow);
-
-            MessageBoxA(fgWindow,
-                "Screenshot blocked by CyberSentinel DLP.\n\n"
-                "The active window contains sensitive/restricted data.\n"
-                "Screenshots are not allowed for this page.",
-                "CyberSentinel DLP - Screenshot Blocked",
-                MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
-
-            AttachThreadInput(curThread, fgThread, FALSE);
-        }).detach();
-
-        if (m_logger) m_logger("WARNING", "SCREEN_ACTION_ENFORCED: BLOCKED " + method +
-                               " — " + classification + " data visible in: " + windowTitle);
-    }
-
-    // Build and send event
     char username[256] = {0};
     DWORD userSize = sizeof(username);
     GetUserNameA(username, &userSize);
 
     ScreenCaptureEvent event;
-    event.method = method;
-    event.processName = processName;
-    event.activeWindow = windowTitle;
-    event.user = username;
-    event.classification = classification;
+    event.method                = method;
+    event.processName           = processName;
+    event.activeWindow          = windowTitle;
+    event.user                  = username;
+    event.classification        = classification;
     event.containsSensitiveData = isSensitive;
-    event.actionTaken = action;
-    event.timestamp = GetTimestamp();
+    event.actionTaken           = action;
+    event.timestamp             = GetTimestamp();
 
     if (m_callback) m_callback(event);
 }
@@ -252,24 +219,37 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
     if (s_instance->m_logger) s_instance->m_logger("WARNING",
         "SCREEN_CAPTURE_BLOCKED: " + method + " — sensitive content currently on screen");
 
-    std::thread([method]() {
+    // Cooldown — only one popup per 3s. Without this, mashing PrintScreen
+    // produces a stack of dialogs and gives the impression that even
+    // normal screenshots are being blocked.
+    long long nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    long long lastMs = s_instance->m_lastPopupMs.load();
+    bool showPopup = (nowMs - lastMs) > 3000;
+    if (showPopup) {
+        s_instance->m_lastPopupMs.store(nowMs);
+    }
+
+    std::thread([method, showPopup]() {
         if (!s_instance) return;
 
         // Defensive: clear clipboard in case anything slipped through.
         if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
 
-        HWND fgWnd = GetForegroundWindow();
-        if (fgWnd) {
-            DWORD fgThread  = GetWindowThreadProcessId(fgWnd, NULL);
-            DWORD curThread = GetCurrentThreadId();
-            AttachThreadInput(curThread, fgThread, TRUE);
-            MessageBoxA(fgWnd,
-                "Sensitive content detected. Screenshot blocked.\n\n"
-                "CyberSentinel DLP detected restricted/confidential data\n"
-                "on screen. Screenshots are not allowed for this window.",
-                "CyberSentinel DLP - Screenshot Blocked",
-                MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
-            AttachThreadInput(curThread, fgThread, FALSE);
+        if (showPopup) {
+            HWND fgWnd = GetForegroundWindow();
+            if (fgWnd) {
+                DWORD fgThread  = GetWindowThreadProcessId(fgWnd, NULL);
+                DWORD curThread = GetCurrentThreadId();
+                AttachThreadInput(curThread, fgThread, TRUE);
+                MessageBoxA(fgWnd,
+                    "Sensitive content detected. Screenshot blocked.\n\n"
+                    "CyberSentinel DLP detected restricted/confidential data\n"
+                    "on screen. Screenshots are not allowed for this window.",
+                    "CyberSentinel DLP - Screenshot Blocked",
+                    MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL);
+                AttachThreadInput(curThread, fgThread, FALSE);
+            }
         }
 
         s_instance->HandleCaptureAttempt(method);

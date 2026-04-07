@@ -2292,10 +2292,28 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          //   3) File content from disk (if editor with filename in title)
          auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName) -> std::string {
 
+             // Luhn checksum — eliminates random 16-digit sequences (IMEIs,
+             // serial numbers, GSTIN suffixes) from being mis-classified as
+             // credit cards. Real PANs always pass Luhn.
+             auto luhnValid = [](const std::string& s) -> bool {
+                 std::string digits;
+                 for (char c : s) if (c >= '0' && c <= '9') digits += c;
+                 if (digits.size() < 13 || digits.size() > 19) return false;
+                 int sum = 0;
+                 bool alt = false;
+                 for (int i = (int)digits.size() - 1; i >= 0; --i) {
+                     int d = digits[i] - '0';
+                     if (alt) { d *= 2; if (d > 9) d -= 9; }
+                     sum += d;
+                     alt = !alt;
+                 }
+                 return (sum % 10) == 0;
+             };
+
              // Shared: classify any text using regex patterns.
              // Logs every matched pattern name + the actual matched text so
              // we can tell at a glance why a file was flagged.
-             auto classifyText = [this](const std::string& content, const std::string& source) -> std::string {
+             auto classifyText = [this, luhnValid](const std::string& content, const std::string& source) -> std::string {
                  if (content.empty()) return "Public";
                  static const std::vector<std::pair<std::string, std::regex>> patterns = {
                      {"AADHAAR",     std::regex(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)")},
@@ -2312,9 +2330,22 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      try {
                          auto it  = std::sregex_iterator(content.begin(), content.end(), pattern);
                          auto end = std::sregex_iterator();
-                         if (it != end) {
-                             std::string sample = it->str();
+                         bool fired = false;
+                         std::string sample;
+                         for (; it != end; ++it) {
+                             std::string m = it->str();
+                             // CREDIT_CARD: drop matches that don't pass Luhn.
+                             // This kills the most common false positive
+                             // (any 16 digits in a row).
+                             if (name == "CREDIT_CARD" && !luhnValid(m)) {
+                                 continue;
+                             }
+                             fired = true;
+                             sample = m;
                              if (sample.size() > 60) sample.resize(60);
+                             break;
+                         }
+                         if (fired) {
                              logger.Warning("CLASSIFIER_MATCH [" + source + "] pattern=" + name +
                                             " matched=\"" + sample + "\"");
                              matchedNames.push_back(name);

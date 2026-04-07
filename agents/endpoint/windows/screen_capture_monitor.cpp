@@ -258,12 +258,54 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
     return 1; // swallow — no screenshot taken
 }
 
+// Returns true if the foreground window is a "transient" window that
+// doesn't represent user content — taskbar, desktop, start menu, system
+// tray, or our own DLP popup. The scanner MUST ignore these and keep
+// the previous sensitivity flag, otherwise:
+//   * Clicking the taskbar would unblock screenshots even though the
+//     sensitive content is still visible behind it.
+//   * The "Screenshot Blocked" popup steals focus when shown — if the
+//     scanner classified the popup itself as Public it would clear the
+//     flag and the next PrintScreen press would slip through.
+static bool IsTransientForegroundWindow(HWND hwnd) {
+    if (!hwnd) return true;
+
+    // Skip windows owned by our own process (the DLP popup MessageBox).
+    DWORD fgPid = 0;
+    GetWindowThreadProcessId(hwnd, &fgPid);
+    if (fgPid == GetCurrentProcessId()) return true;
+
+    char cls[256] = {0};
+    if (GetClassNameA(hwnd, cls, sizeof(cls)) > 0) {
+        // Known shell / system window classes that should never count as
+        // user content.
+        static const std::set<std::string> transient = {
+            "Shell_TrayWnd",                     // primary taskbar
+            "Shell_SecondaryTrayWnd",            // secondary monitor taskbar
+            "Progman",                           // desktop
+            "WorkerW",                           // desktop wallpaper layer
+            "Windows.UI.Core.CoreWindow",        // start menu, search, action center
+            "Windows.UI.Input.InputSite.WindowClass",
+            "ApplicationFrameWindow",            // empty UWP frame (rare)
+            "Button",                            // start button
+            "DV2ControlHost",                    // start menu legacy
+            "Xaml_WindowedPopupClass",           // floating UI popups
+        };
+        if (transient.count(cls)) return true;
+    }
+    return false;
+}
+
 /*
  * Content scanner — runs continuously while the monitor is active.
  * Polls the foreground window roughly every second, classifies it via
  * the agent's screenClassifier (which does the full multi-stage OCR),
- * and updates the m_screenIsSensitive atomic. Cheap cache by HWND +
- * title so we don't re-run OCR on an unchanged window.
+ * and updates the m_screenIsSensitive atomic.
+ *
+ * IMPORTANT: when the foreground is a transient/system window (taskbar,
+ * desktop, our own popup, etc.) we LEAVE m_screenIsSensitive unchanged.
+ * Whatever the user's last real application window was decided still
+ * applies, because that content is still visible on screen.
  */
 void ScreenCaptureMonitor::ContentScanThread() {
     HWND        lastHwnd  = nullptr;
@@ -272,6 +314,18 @@ void ScreenCaptureMonitor::ContentScanThread() {
 
     while (m_running) {
         HWND fg = GetForegroundWindow();
+
+        // Transient foreground (taskbar, popup, desktop, start menu) →
+        // do not touch the flag. This is the entire fix for both the
+        // "popup steals focus and unblocks itself" bug and the
+        // "click taskbar to bypass" bug.
+        if (IsTransientForegroundWindow(fg)) {
+            for (int i = 0; i < 10 && m_running; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            continue;
+        }
+
         std::string title = GetActiveWindowTitle();
 
         std::string classification;

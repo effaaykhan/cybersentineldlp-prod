@@ -13,7 +13,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/cybersentinel-06
+  IMAGE_PREFIX: ghcr.io/effaaykhan
 
 jobs:
   build-and-push:

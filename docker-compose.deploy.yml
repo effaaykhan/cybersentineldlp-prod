@@ -95,7 +95,7 @@ services:
 
   # DLP Manager (FastAPI Backend)
   manager:
-    image: ghcr.io/cybersentinel-06/dlp-server:latest
+    image: ghcr.io/effaaykhan/dlp-manager:latest
     container_name: cybersentinel-manager
     networks:
       - cybersentinel-net
@@ -150,7 +150,7 @@ services:
 
   # Celery Worker
   celery-worker:
-    image: ghcr.io/cybersentinel-06/dlp-server:latest
+    image: ghcr.io/effaaykhan/dlp-manager:latest
     container_name: cybersentinel-celery-worker
     networks:
       - cybersentinel-net
@@ -193,7 +193,7 @@ services:
 
   # Celery Beat
   celery-beat:
-    image: ghcr.io/cybersentinel-06/dlp-server:latest
+    image: ghcr.io/effaaykhan/dlp-manager:latest
     container_name: cybersentinel-celery-beat
     networks:
       - cybersentinel-net
@@ -234,7 +234,7 @@ services:
 
   # Dashboard (React + Nginx)
   dashboard:
-    image: ghcr.io/cybersentinel-06/dlp-dashboard:latest
+    image: ghcr.io/effaaykhan/dlp-dashboard:latest
     container_name: cybersentinel-dashboard
     networks:
       - cybersentinel-net

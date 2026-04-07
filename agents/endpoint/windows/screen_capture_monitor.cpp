@@ -199,18 +199,17 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
                                          "win_shift_s";
 
     // Decision: block if EITHER the scanner currently says sensitive
-    // OR we blocked something in the last 5 seconds (sticky guard).
-    // The sticky guard handles the popup-steals-focus race: after a
-    // block the popup MessageBox briefly becomes the foreground window
-    // and the scanner could clear the flag while it's classified, so
-    // we honour the recent-block grace period instead.
-    bool sensitive = s_instance->m_screenIsSensitive.load();
+    // OR a previous block is still in its "grace" state. The grace flag
+    // is cleared by the scanner the moment it re-classifies a real
+    // (non-transient) foreground window, so it covers the popup-race
+    // window without unfairly blocking screenshots taken AFTER the user
+    // has moved focus to a genuinely non-sensitive window.
+    bool sensitive   = s_instance->m_screenIsSensitive.load();
+    bool grace       = s_instance->m_blockGraceActive.load();
     long long nowCheckMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    long long lastBlockMs = s_instance->m_lastBlockMs.load();
-    bool recentBlock = (nowCheckMs - lastBlockMs) < 5000;
 
-    if (!sensitive && !recentBlock) {
+    if (!sensitive && !grace) {
         // Normal content on screen — let Windows handle the screenshot
         // exactly as it would on an unmanaged machine.
         if (s_instance->m_logger) s_instance->m_logger("INFO",
@@ -226,13 +225,13 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
 
     // Sensitive content is on screen — swallow the key and warn the user.
     const char* reason = sensitive ? "sensitive content currently on screen"
-                                   : "sticky-block grace window after recent block";
+                                   : "block grace pending re-classification";
     if (s_instance->m_logger) s_instance->m_logger("WARNING",
         "SCREEN_CAPTURE_BLOCKED: " + method + " — " + reason);
 
-    // Update the sticky-block timestamp so subsequent presses within the
-    // grace window are also blocked.
-    s_instance->m_lastBlockMs.store(nowCheckMs);
+    // Activate the grace flag. Cleared by ContentScanThread on its next
+    // real (non-transient) classification cycle.
+    s_instance->m_blockGraceActive.store(true);
 
     // Cooldown — only one popup per 3s. Without this, mashing PrintScreen
     // produces a stack of dialogs and gives the impression that even
@@ -361,6 +360,14 @@ void ScreenCaptureMonitor::ContentScanThread() {
         bool nowSensitive = (classification == "Restricted" ||
                              classification == "Confidential");
         bool wasSensitive = m_screenIsSensitive.exchange(nowSensitive);
+
+        // We just produced a fresh classification on a real foreground
+        // window — the post-block grace can be released now. From this
+        // point forward the actual flag value (nowSensitive) decides.
+        if (m_blockGraceActive.exchange(false) && m_logger) {
+            m_logger("INFO", "SCREEN_BLOCK_GRACE_CLEARED: re-classified foreground as " +
+                             classification + " | Window: " + title);
+        }
 
         if (nowSensitive != wasSensitive && m_logger) {
             if (nowSensitive) {

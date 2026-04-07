@@ -65,13 +65,18 @@ private:
     // Stops the dialog from being spammed when the user mashes PrintScreen.
     std::atomic<long long> m_lastPopupMs{0};
 
-    // Sticky-block guard — once we've blocked a screenshot, force-block
-    // every screenshot attempt for the next ~5 seconds regardless of what
-    // the scanner thread says. This eliminates the race where the DLP
-    // popup steals focus, the scanner classifies the popup as Public,
-    // clears m_screenIsSensitive, and the user's next PrintScreen press
-    // slips through before the scanner re-runs on the actual content.
-    std::atomic<long long> m_lastBlockMs{0};
+    // Block grace — set true whenever the hook blocks a screenshot.
+    // Cleared by ContentScanThread the moment it produces a fresh
+    // classification on a real (non-transient) foreground window.
+    // While true, every screenshot attempt is force-blocked regardless
+    // of the m_screenIsSensitive flag. This eliminates the race where
+    // the DLP popup steals focus and the scanner clears the flag
+    // before it has had a chance to re-classify the user's actual
+    // current window. As soon as the scanner sees a real window after
+    // the block, the grace clears and the actual flag value takes over
+    // — so switching to a normal window after a block correctly
+    // allows screenshots of that normal window.
+    std::atomic<bool> m_blockGraceActive{false};
 
     // Static instance pointer for the hook callback
     static ScreenCaptureMonitor* s_instance;

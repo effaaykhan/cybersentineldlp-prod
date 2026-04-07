@@ -150,7 +150,7 @@ fi
 mkdir -p "${INSTALL_DIR}/data"
 
 # ─── 7. Pull pre-built images and start ───────────────────────────────
-say "Pulling pre-built images from ghcr.io/effaaykhan ..."
+say "Pulling pre-built images from ghcr.io/${GITHUB_REPO} ..."
 docker compose -f "${COMPOSE_FILE}" pull
 
 say "Starting all services in detached mode"

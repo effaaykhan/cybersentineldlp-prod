@@ -13,7 +13,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/effaaykhan
+  # Repo-scoped path. The default GITHUB_TOKEN can ONLY push to packages
+  # under ghcr.io/<owner>/<repo>/... — user-namespace pushes
+  # (ghcr.io/<owner>/...) require a PAT with write:packages scope.
+  # github.repository expands to "effaaykhan/cybersentineldlp-prod".
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 jobs:
   build-and-push:

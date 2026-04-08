@@ -105,7 +105,15 @@ if [ ! -f "${ENV_FILE}" ]; then
     REDIS_PASSWORD="$(gen_secret 24)"
     OPENSEARCH_PASSWORD="$(gen_secret 24)"
 
-    # Use python or sed for safe in-place substitution
+    # Derive a reasonable default origin from the host's first IP so the
+    # API's CORS allowlist is not left wide open and does not need to be
+    # hand-edited on every install. Operators can tighten it later.
+    HOST_IP_GUESS="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
+    CORS_JSON_DEFAULT="[\"http://${HOST_IP_GUESS}\",\"https://${HOST_IP_GUESS}\",\"http://localhost\",\"http://127.0.0.1\"]"
+    ALLOWED_HOSTS_DEFAULT="${HOST_IP_GUESS},localhost,127.0.0.1"
+
+    # Safe in-place substitution. `|` as the sed delimiter so the JSON
+    # bracket/quote characters don't need extra escaping.
     sed -i \
         -e "s|change-this-to-a-random-secret-key-min-32-chars|${SECRET_KEY}|" \
         -e "s|change-this-to-a-random-jwt-secret-min-32-chars|${JWT_SECRET}|" \
@@ -114,8 +122,11 @@ if [ ! -f "${ENV_FILE}" ]; then
         -e "s|change-this-strong-mongodb-password|${MONGODB_PASSWORD}|" \
         -e "s|change-this-strong-redis-password|${REDIS_PASSWORD}|" \
         -e "s|change-this-strong-opensearch-password|${OPENSEARCH_PASSWORD}|" \
+        -e "s|^CORS_ORIGINS=.*|CORS_ORIGINS=${CORS_JSON_DEFAULT}|" \
+        -e "s|^ALLOWED_HOSTS=.*|ALLOWED_HOSTS=${ALLOWED_HOSTS_DEFAULT}|" \
         "${ENV_FILE}"
 
+    chown root:root "${ENV_FILE}"
     chmod 600 "${ENV_FILE}"
     say "${ENV_FILE} created with mode 600 (root only)"
 else
@@ -128,14 +139,26 @@ fi
 # files don't exist, so we drop a self-signed pair if the operator hasn't
 # provided real certs.
 mkdir -p "${INSTALL_DIR}/certs"
+chmod 700 "${INSTALL_DIR}/certs"
 if [ ! -f "${INSTALL_DIR}/certs/fullchain.pem" ] || [ ! -f "${INSTALL_DIR}/certs/privkey.pem" ]; then
     say "Generating self-signed TLS certificate (replace with real cert later)"
     if command -v openssl >/dev/null 2>&1; then
-        openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+        # Stronger key (RSA 4096), explicit SAN entries so modern
+        # browsers don't reject the cert outright, and the operator's
+        # hostname baked in if we can resolve it.
+        HOSTNAME_CN="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo cybersentinel.local)"
+        HOST_IP_SAN="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
+        openssl req -x509 -nodes -newkey rsa:4096 -days 825 \
             -keyout "${INSTALL_DIR}/certs/privkey.pem" \
             -out    "${INSTALL_DIR}/certs/fullchain.pem" \
-            -subj "/CN=cybersentinel.local" >/dev/null 2>&1
+            -subj "/CN=${HOSTNAME_CN}/O=CyberSentinel DLP/OU=self-signed" \
+            -addext "subjectAltName=DNS:${HOSTNAME_CN},DNS:cybersentinel.local,DNS:localhost,IP:127.0.0.1,IP:${HOST_IP_SAN}" \
+            -addext "keyUsage=digitalSignature,keyEncipherment" \
+            -addext "extendedKeyUsage=serverAuth" \
+            >/dev/null 2>&1
+        chown root:root "${INSTALL_DIR}/certs/privkey.pem" "${INSTALL_DIR}/certs/fullchain.pem"
         chmod 600 "${INSTALL_DIR}/certs/privkey.pem"
+        chmod 644 "${INSTALL_DIR}/certs/fullchain.pem"
     else
         # No openssl — drop empty placeholders just so the bind-mount succeeds.
         : > "${INSTALL_DIR}/certs/fullchain.pem"

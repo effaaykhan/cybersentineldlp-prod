@@ -467,17 +467,35 @@ async def validate_regex(
 ) -> Dict[str, Any]:
     """
     Validate a regex pattern and optionally test it against sample content.
-    Returns whether the pattern is valid, any matches found, and performance info.
+
+    SECURITY: Evaluates user-supplied regex against user-supplied content,
+    which is a textbook ReDoS vector. To mitigate:
+      * Pattern length is capped (1k chars).
+      * Test content is capped (100k chars).
+      * Execution runs in a worker thread with a hard wall-clock timeout
+        (3s). If the pattern is catastrophic-backtracking, the thread is
+        abandoned and we return a clear error instead of pinning a CPU.
+      * Only authenticated admins can reach this endpoint.
     """
     import re as _re
     import time
+    import asyncio
+    import concurrent.futures
+
+    # Length caps
+    if request.pattern and len(request.pattern) > 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Regex pattern too long (max 1024 chars).",
+        )
+    test_content = (request.test_content or "")[:100_000]
 
     flags = 0
     for flag_name in (request.flags or []):
         if hasattr(_re, flag_name):
             flags |= getattr(_re, flag_name)
 
-    # Validate compilation
+    # Validate compilation first (fast, no ReDoS risk).
     try:
         compiled = _re.compile(request.pattern, flags)
     except _re.error as e:
@@ -490,18 +508,32 @@ async def validate_regex(
 
     result: Dict[str, Any] = {"valid": True, "error": None, "matches": [], "match_count": 0}
 
-    # Test against content if provided
-    if request.test_content:
+    # Test against content if provided — bounded by a hard timeout so a
+    # pathological pattern can never hang the API worker.
+    if test_content:
+        def _run():
+            return compiled.findall(test_content)
+
+        loop = asyncio.get_running_loop()
         start = time.monotonic()
         try:
-            matches = compiled.findall(request.test_content[:100_000])  # cap at 100K
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                matches = await asyncio.wait_for(
+                    loop.run_in_executor(pool, _run),
+                    timeout=3.0,
+                )
             elapsed_ms = (time.monotonic() - start) * 1000
-            # Show first 20 matches for preview
             result["matches"] = [str(m) for m in matches[:20]]
             result["match_count"] = len(matches)
             result["elapsed_ms"] = round(elapsed_ms, 2)
+        except asyncio.TimeoutError:
+            result["valid"] = True  # compiled OK, just catastrophic
+            result["error"] = (
+                "Execution timed out after 3s — pattern is likely "
+                "catastrophic backtracking (ReDoS). Reject or rewrite."
+            )
         except Exception as e:
-            result["valid"] = True  # Pattern is valid, execution failed
+            result["valid"] = True
             result["error"] = f"Execution error: {e}"
 
     return result

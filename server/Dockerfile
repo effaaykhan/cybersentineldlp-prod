@@ -6,13 +6,14 @@ FROM python:3.11-slim as builder
 WORKDIR /app
 
 # Install system dependencies required for building Python packages
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libpq-dev \
     wget \
     pkg-config \
     libhdf5-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and constraints
@@ -36,9 +37,10 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from builder
@@ -61,17 +63,13 @@ USER dlpuser
 # Expose port (default 55000, can be overridden)
 EXPOSE 55000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-55000}/health || exit 1
-
 # Set default number of workers
 ENV UVICORN_WORKERS=${UVICORN_WORKERS:-4}
 ENV PORT=55000
 
-# Health check
+# Single health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Run application
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-55000} --workers ${UVICORN_WORKERS}
+# Run application (exec form so signals propagate correctly)
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-55000} --workers ${UVICORN_WORKERS}"]

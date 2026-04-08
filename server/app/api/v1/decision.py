@@ -178,14 +178,22 @@ async def make_decision(
 @router.post("/events/batch", response_model=BatchEventResponse)
 async def ingest_batch_events(
     request: BatchEventRequest,
+    http_request: Request,
 ):
     """
     **Batch event upload.**
 
-    Agent batches events and sends them periodically.
-    Events are stored in MongoDB with minimal processing.
-    Heavy processing (classification, policy eval) happens asynchronously.
+    SECURITY: Requires a valid X-Agent-Key header. Without this check an
+    unauthenticated caller could flood MongoDB with forged events,
+    poison SIEM dashboards, or drown real detections.
+
+    Agent batches events and sends them periodically. Events are stored
+    in MongoDB with minimal processing. Heavy processing (classification,
+    policy eval) happens asynchronously.
     """
+    from app.api.v1.agents import verify_agent_key
+    await verify_agent_key(http_request)
+
     db = get_mongodb()
     events_collection = db["dlp_events"]
 
@@ -240,6 +248,7 @@ async def ingest_batch_events(
 
 @router.get("/policies/sync", response_model=PolicySyncResponse)
 async def sync_policies(
+    http_request: Request,
     agent_id: str,
     platform: str = "windows",
     current_version: Optional[str] = None,
@@ -248,12 +257,20 @@ async def sync_policies(
     """
     **Delta policy sync for agents.**
 
+    SECURITY: Requires a valid X-Agent-Key header. The policy bundle
+    contains regex patterns, keyword lists, protected folder IDs and
+    detection thresholds — i.e. the full playbook for evading DLP.
+    It must not be handed out anonymously.
+
     Agent sends its current policy version. Server returns:
     - If version matches: empty delta (no changes)
     - If version differs: full policy bundle
 
     Agents should call this periodically (e.g., every 60 seconds).
     """
+    from app.api.v1.agents import verify_agent_key
+    await verify_agent_key(http_request)
+
     from app.services.policy_service import PolicyService
     from app.policies.agent_policy_transformer import AgentPolicyTransformer
 
@@ -367,6 +384,7 @@ async def _build_versioned_bundle(
 
 @router.get("/policy/latest", response_model=PolicyLatestResponse)
 async def get_policy_latest(
+    http_request: Request,
     platform: str = Query("windows", description="Agent platform"),
     agent_id: Optional[str] = Query(None, description="Agent ID for scoped policies"),
     db: AsyncSession = Depends(get_db),
@@ -374,10 +392,15 @@ async def get_policy_latest(
     """
     **GET /policy/latest** — Lightweight version check.
 
+    SECURITY: Requires a valid X-Agent-Key header.
+
     Agent calls this periodically to check if a newer policy bundle is available.
     Returns only version + checksum (no policy payload).
     Agent compares with its local version and downloads only if newer.
     """
+    from app.api.v1.agents import verify_agent_key
+    await verify_agent_key(http_request)
+
     bundle = await _build_versioned_bundle(db, platform, agent_id)
 
     return PolicyLatestResponse(
@@ -390,6 +413,7 @@ async def get_policy_latest(
 
 @router.get("/policy/download", response_model=PolicyDownloadResponse)
 async def download_policy_bundle(
+    http_request: Request,
     version: Optional[int] = Query(None, description="Specific version to download (latest if omitted)"),
     platform: str = Query("windows", description="Agent platform"),
     agent_id: Optional[str] = Query(None, description="Agent ID for scoped policies"),
@@ -397,6 +421,9 @@ async def download_policy_bundle(
 ):
     """
     **GET /policy/download** — Full policy bundle download.
+
+    SECURITY: Requires a valid X-Agent-Key header. Full policy bundle
+    contains the detection playbook; never return anonymously.
 
     Agent calls this after discovering a newer version via /policy/latest.
     Returns the complete policy bundle with checksum for integrity validation.
@@ -407,6 +434,9 @@ async def download_policy_bundle(
     3. Load into memory
     4. Swap policy pointer atomically
     """
+    from app.api.v1.agents import verify_agent_key
+    await verify_agent_key(http_request)
+
     bundle = await _build_versioned_bundle(db, platform, agent_id)
 
     # Version mismatch check (requested specific version but it's not current)

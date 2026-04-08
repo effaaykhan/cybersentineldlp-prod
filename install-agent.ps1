@@ -255,21 +255,61 @@ if ($chocoOk) {
 
 Write-Host ""
 
-# Step 5: Download agent binary
+# Step 5: Download agent binary (with SHA-256 integrity check)
 Write-ColorOutput "Step 5: Downloading agent from GitHub..." -Type "Info"
 
-$exePath = Join-Path $INSTALL_DIR $EXE_NAME
-$downloadUrl = "$RAW_BASE/agents/endpoint/windows/$EXE_NAME"
+$exePath      = Join-Path $INSTALL_DIR $EXE_NAME
+$downloadUrl  = "$RAW_BASE/agents/endpoint/windows/$EXE_NAME"
+$sumUrl       = "$RAW_BASE/agents/endpoint/windows/$EXE_NAME.sha256"
 
 try {
-    Write-ColorOutput "Downloading from: $downloadUrl" -Type "Info"
+    Write-ColorOutput "Downloading binary: $downloadUrl" -Type "Info"
     Invoke-WebRequest -Uri $downloadUrl -OutFile $exePath -UseBasicParsing
     $fileSize = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
-    Write-ColorOutput "Downloaded successfully ($fileSize MB)" -Type "Success"
+    Write-ColorOutput "Binary downloaded ($fileSize MB)" -Type "Success"
 } catch {
     Write-ColorOutput "Error downloading agent: $($_.Exception.Message)" -Type "Error"
     Write-ColorOutput "Please check internet connection and GitHub repository access" -Type "Warning"
     exit 1
+}
+
+# SECURITY: verify the binary's SHA-256 against the sidecar file checked
+# into the repo. If the sidecar is not yet published (first-time rollout),
+# emit a clear warning but continue — the operator can gate deployment on
+# signed releases once the sidecar is in place.
+$expectedHash = $null
+try {
+    Write-ColorOutput "Fetching integrity manifest: $sumUrl" -Type "Info"
+    $expectedHash = (Invoke-WebRequest -Uri $sumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0].ToUpper()
+} catch {
+    Write-ColorOutput "WARNING: no SHA-256 sidecar at $sumUrl — skipping integrity check." -Type "Warning"
+    Write-ColorOutput "  Create one at repo root/.../cybersentinel_agent.exe.sha256 to gate installs." -Type "Warning"
+}
+
+if ($expectedHash) {
+    $actualHash = (Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToUpper()
+    if ($actualHash -ne $expectedHash) {
+        Write-ColorOutput "CRITICAL: SHA-256 mismatch — refusing to install a tampered binary." -Type "Error"
+        Write-ColorOutput "  expected: $expectedHash" -Type "Error"
+        Write-ColorOutput "  actual  : $actualHash"   -Type "Error"
+        Remove-Item $exePath -Force -ErrorAction SilentlyContinue
+        exit 2
+    }
+    Write-ColorOutput "SHA-256 verified: $actualHash" -Type "Success"
+}
+
+# Optional: Authenticode signature check. Only warn if unsigned so
+# unsigned dev builds still install; flip to `exit 3` once a signing
+# cert is provisioned.
+try {
+    $sig = Get-AuthenticodeSignature -FilePath $exePath
+    if ($sig.Status -eq 'Valid') {
+        Write-ColorOutput "Authenticode signature OK (signer: $($sig.SignerCertificate.Subject))" -Type "Success"
+    } else {
+        Write-ColorOutput "WARNING: Authenticode status = $($sig.Status). Binary is not code-signed." -Type "Warning"
+    }
+} catch {
+    Write-ColorOutput "Authenticode check skipped: $($_.Exception.Message)" -Type "Warning"
 }
 Write-Host ""
 

@@ -105,13 +105,49 @@ async def register(
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
     """
     User login with email and password
     Returns access and refresh tokens
+
+    SECURITY: dedicated rate limiter bucketed by (client_ip + username)
+    via Redis. 10 failed attempts in a 5-minute window (per key) triggers
+    a 429 until the window expires. This is on TOP of the global
+    RateLimitMiddleware and is specifically designed to blunt credential
+    stuffing and slow-and-low brute force.
     """
+    # ── Rate limit BEFORE touching the DB ─────────────────────────────
+    client_ip = request.client.host if request.client else "unknown"
+    username = (form_data.username or "").strip().lower()
+    rl_key = f"login_fail:{client_ip}:{username}"
+    try:
+        cache = get_cache()
+        failed = await cache.get(rl_key)
+        if failed is not None:
+            try:
+                failed = int(failed)
+            except (TypeError, ValueError):
+                failed = 0
+            if failed >= 10:
+                logger.warning(
+                    "Login rate limit hit",
+                    ip=client_ip, username=username, failed=failed,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many failed login attempts. Try again in a few minutes.",
+                    headers={"Retry-After": "300"},
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        # Redis unreachable → fail open on the limiter, the global
+        # middleware still caps overall throughput.
+        pass
+
     # Create user service
     user_service = UserService(db)
 
@@ -123,11 +159,26 @@ async def login(
 
     if not user:
         logger.warning("Login failed - invalid credentials", email=form_data.username)
+        # Increment the failed-attempts counter with a 5-minute TTL.
+        try:
+            cache = get_cache()
+            current = await cache.incr(rl_key)
+            if current == 1:
+                await cache.expire(rl_key, 300)  # 5 minutes
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # Successful login → clear the counter for this (ip, username).
+    try:
+        cache = get_cache()
+        await cache.delete(rl_key)
+    except Exception:
+        pass
 
     # Check if password change is required
     if getattr(user, "must_change_password", False):
@@ -230,9 +281,15 @@ async def refresh_token(
 async def change_password(
     request: ChangePasswordRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Change user password. No JWT required — authenticates via username + current password.
+    Change the authenticated user's password.
+
+    SECURITY: A valid JWT is required. The `username` field in the
+    request body is IGNORED — the password is always rotated for the
+    token bearer. This prevents unauthenticated brute-force of
+    `current_password` against arbitrary accounts.
     """
     if request.new_password != request.new_password_confirm:
         raise HTTPException(
@@ -249,15 +306,16 @@ async def change_password(
 
     user_service = UserService(db)
 
-    # Verify identity via current credentials
+    # Re-verify the current password for the authenticated user only.
+    # The username from the request body is NOT trusted.
     user = await user_service.authenticate_user(
-        email=request.username,
+        email=current_user.email,
         password=request.current_password,
     )
-    if not user:
+    if not user or str(user.id) != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Current username or password is incorrect",
+            detail="Current password is incorrect",
         )
 
     # Update password

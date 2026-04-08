@@ -6,7 +6,7 @@ Standalone classification service — accepts raw content and returns label + ma
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, Field, ConfigDict
 import structlog
 
@@ -100,6 +100,7 @@ class ClassifiedFile(BaseModel):
 @router.post("/classify", response_model=ClassifyResponse)
 async def classify_content(
     request: ClassifyRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_db),
 ):
     """
@@ -110,9 +111,15 @@ async def classify_content(
     - **matched_rules**: which rules fired and why
     - **confidence_score**: aggregated 0.0–1.0
 
-    No authentication required so that agents and internal micro-services
-    can call this without a JWT.
+    SECURITY: Requires a valid X-Agent-Key header. Previously this
+    endpoint was intentionally anonymous, which let external callers
+    (a) use it as an oracle to tune exfiltration so it lands as
+    "Public" and (b) DoS the server via arbitrarily large `content`
+    against expensive regex rules.
     """
+    from app.api.v1.agents import verify_agent_key
+    await verify_agent_key(http_request)
+
     engine = ClassificationEngine(session)
     result = await engine.classify_content(request.content, request.context)
 
@@ -174,8 +181,14 @@ async def list_detection_patterns(
 @router.get("/labels")
 async def list_labels(
     session: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """List all data labels (Public, Internal, Confidential, Restricted, plus custom)."""
+    """
+    List all data labels (Public, Internal, Confidential, Restricted, plus custom).
+
+    SECURITY: Requires a valid JWT. Previously anonymous — leaked the
+    internal label taxonomy to anyone probing the API.
+    """
     from sqlalchemy import select
     from app.models.data_label import DataLabel
 

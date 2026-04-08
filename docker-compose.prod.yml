@@ -22,8 +22,11 @@ services:
       - opensearch_data:/usr/share/opensearch/data
     networks:
       - cybersentinel
-    ports:
-      - "9200:9200"
+    # SECURITY: data tier is reachable only on the internal docker
+    # network. No host port binding — operators who need local ops
+    # access should use `docker compose exec` or bind to 127.0.0.1.
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -51,8 +54,9 @@ services:
       - mongodb_config:/data/configdb
     networks:
       - cybersentinel
-    ports:
-      - "27017:27017"
+    security_opt:
+      - no-new-privileges:true
+    # ports intentionally omitted — database tier is internal only
     deploy:
       resources:
         limits:
@@ -80,8 +84,9 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - cybersentinel
-    ports:
-      - "5432:5432"
+    security_opt:
+      - no-new-privileges:true
+    # ports intentionally omitted — internal only
     deploy:
       resources:
         limits:
@@ -105,8 +110,9 @@ services:
       - redis_data:/data
     networks:
       - cybersentinel
-    ports:
-      - "6379:6379"
+    security_opt:
+      - no-new-privileges:true
+    # ports intentionally omitted — internal only
     deploy:
       resources:
         limits:
@@ -165,8 +171,8 @@ services:
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRATION=3600
 
-      # CORS
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      # CORS — explicit allowlist only. No wildcard default.
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
 
       # Timezone (display only — storage is always UTC)
       - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
@@ -193,6 +199,8 @@ services:
         condition: service_healthy
     networks:
       - cybersentinel
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -212,18 +220,27 @@ services:
   dashboard:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest
     container_name: cybersentinel-dashboard
+    # nginx inside the container runs as the unprivileged `nginx` user
+    # and listens on 3000 (non-privileged port). The host port 80 is
+    # forwarded to container:3000 so end users still access it at /.
+    # TLS termination, if enabled, should be done by an external
+    # reverse proxy (Traefik, Let's Encrypt cert-manager, Caddy) or by
+    # adding a mounted nginx-ssl.conf.
     ports:
-      - "80:80"
-      - "443:443"
+      - "80:3000"
     volumes:
-      # Mount TLS certificates (optional — HTTP-only mode if absent)
-      # For Let's Encrypt: /etc/letsencrypt/live/your.domain/
+      # Mount TLS certificates as read-only so a future nginx-ssl.conf
+      # can pick them up. The bind mount must resolve — install.sh
+      # generates a self-signed pair if the operator hasn't provided
+      # real ones.
       - ${TLS_CERT_PATH:-./certs}/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
       - ${TLS_CERT_PATH:-./certs}/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
     depends_on:
       - manager
     networks:
       - cybersentinel
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -232,7 +249,7 @@ services:
         reservations:
           memory: 64M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -287,6 +304,8 @@ services:
         condition: service_healthy
     networks:
       - cybersentinel
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -334,6 +353,8 @@ services:
         condition: service_healthy
     networks:
       - cybersentinel
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:

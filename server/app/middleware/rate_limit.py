@@ -25,10 +25,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         # Get client IP
         client_ip = request.client.host
+        path = request.url.path
+        method = request.method
 
-        # Skip rate limiting for health checks and agent endpoints (heartbeat, registration)
-        if request.url.path in ["/health", "/ready", "/metrics"] or \
-           "/agents" in request.url.path and request.method in ["PUT", "POST"]:
+        # Skip rate limiting for health checks and for the dedicated
+        # agent heartbeat / event-push endpoints (which legitimately
+        # fire at high frequency from many clients).
+        #
+        # SECURITY NOTE: the previous version used
+        #   `path in [...] or "/agents" in path and method in [...]`
+        # which (a) had an operator-precedence trap between `or`/`and`
+        # and (b) used unbounded substring matching, so paths like
+        # `/api/v1/policies/agents-test` or `/api/v1/rules/tagents` got
+        # a blanket bypass. The fix uses an anchored `startswith`
+        # comparison against the API prefix, with explicit parentheses.
+        AGENT_PREFIXES = (
+            "/api/v1/agents/",   # heartbeat, registration, policy sync
+            "/api/v1/events/",   # event ingestion
+            "/api/v1/decision/", # real-time classification decisions
+        )
+        if path in ("/health", "/ready", "/metrics"):
+            return await call_next(request)
+        if method in ("POST", "PUT", "PATCH") and any(
+            path.startswith(prefix) for prefix in AGENT_PREFIXES
+        ):
             return await call_next(request)
 
         try:

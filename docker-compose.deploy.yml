@@ -9,11 +9,12 @@ services:
     container_name: cybersentinel-postgres
     networks:
       - cybersentinel-net
-    ports:
-      - "5432:5432"
+    # SECURITY: data tier is internal only — no host port binding.
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: dlp_user
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: cybersentinel_dlp
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
     volumes:
@@ -32,11 +33,11 @@ services:
     container_name: cybersentinel-mongodb
     networks:
       - cybersentinel-net
-    ports:
-      - "27017:27017"
+    security_opt:
+      - no-new-privileges:true
     environment:
       MONGO_INITDB_ROOT_USERNAME: dlp_user
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:?MONGODB_PASSWORD must be set}
       MONGO_INITDB_DATABASE: cybersentinel_dlp
     volumes:
       - mongodb_data:/data/db
@@ -53,9 +54,9 @@ services:
     container_name: cybersentinel-redis
     networks:
       - cybersentinel-net
-    ports:
-      - "6379:6379"
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    security_opt:
+      - no-new-privileges:true
+    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     volumes:
       - redis_data:/data
     healthcheck:
@@ -71,14 +72,16 @@ services:
     container_name: cybersentinel-opensearch
     networks:
       - cybersentinel-net
-    ports:
-      - "9200:9200"
-      - "9600:9600"
+    # SECURITY: OpenSearch security plugin is ENABLED.
+    # 9200/9600 are internal only — no host port exposure.
+    security_opt:
+      - no-new-privileges:true
     environment:
       - discovery.type=single-node
       - bootstrap.memory_lock=false
       - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
-      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD must be set}
+      - plugins.security.disabled=false
     ulimits:
       nofile:
         soft: 65536
@@ -86,7 +89,7 @@ services:
     volumes:
       - opensearch_data:/usr/share/opensearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsSk -u admin:${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD must be set} https://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
@@ -122,7 +125,7 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD must be set}
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
@@ -174,7 +177,7 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD must be set}
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID:-}
@@ -217,7 +220,7 @@ services:
       - OPENSEARCH_HOST=opensearch
       - OPENSEARCH_PORT=9200
       - OPENSEARCH_USER=admin
-      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-CyberSentinel2025!}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD must be set}
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID:-}

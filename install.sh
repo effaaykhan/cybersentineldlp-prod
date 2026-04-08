@@ -219,22 +219,39 @@ say "Env file    : ${INSTALL_DIR}/${ENV_FILE} (mode 600)"
 say "Certs       : ${INSTALL_DIR}/certs/  (self-signed unless replaced)"
 echo
 c_blue "Endpoints:"
-echo "  Dashboard   : https://${HOST_IP}/         (or http://${HOST_IP}/)"
-echo "  Manager API : http://${HOST_IP}:55000"
-echo "  API Docs    : http://${HOST_IP}:55000/api/v1/docs"
+echo "  Dashboard      : http://${HOST_IP}/"
+echo "  Manager API    : http://${HOST_IP}:55000"
+echo "  API Docs       : http://${HOST_IP}:55000/api/v1/docs"
+echo "  Health probe   : http://${HOST_IP}:55000/health"
+echo
+c_yellow "  NOTE: TLS termination is NOT enabled by default. The dashboard"
+c_yellow "        nginx serves plain HTTP on port 80. For HTTPS, front the"
+c_yellow "        deployment with Caddy / Traefik / nginx-proxy + Let's"
+c_yellow "        Encrypt, or mount a custom nginx-ssl.conf into the dashboard"
+c_yellow "        container. Self-signed certs are generated in ${INSTALL_DIR}/certs/"
+c_yellow "        for that purpose."
 echo
 c_blue "First-login credentials:"
 echo "  Username : admin"
 if [ -n "${ADMIN_PASS}" ]; then
     echo "  Password : ${ADMIN_PASS}"
 else
-    echo "  Password : run \`docker logs cybersentinel-manager 2>&1 | grep generated_password\`"
+    echo "  Password : (run the command below to read it from the manager log)"
+    echo "             docker logs cybersentinel-manager 2>&1 | grep generated_password"
 fi
-c_yellow "  → Change this password on first login."
+c_yellow "  → Change this password on first login (Settings → Profile → Change Password)."
+echo
+c_blue "Database tier (internal-only — no host port binding):"
+echo "  postgres / mongodb / redis / opensearch are reachable only on the"
+echo "  internal docker network. Use 'docker compose exec <svc>' for ops."
 echo
 c_blue "Useful commands:"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} ps"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs -f manager"
-echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} pull && docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} up -d   # update"
-echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} down                                                              # stop"
+echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} pull && \\"
+echo "    docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} up -d   # rolling update"
+echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} down       # stop everything"
+echo
+c_blue "Next: install agents on endpoints (run on Windows boxes):"
+echo "  powershell -ExecutionPolicy Bypass -Command \"irm ${RAW_BASE}/install-agent.ps1 | iex\""
 echo

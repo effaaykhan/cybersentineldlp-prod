@@ -1,6 +1,24 @@
-# CyberSentinel DLP Agent - Installation Script
-# Requires Administrator privileges
-# Usage: powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
+# CyberSentinel DLP Agent — Windows installation script
+# Requires Administrator privileges.
+#
+# Usage (one-liner):
+#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
+#
+# What this script does:
+#   1. Validates server connectivity (IP or DNS hostname).
+#   2. Cleans previous installs (scheduled task, service, running process).
+#   3. Installs Chocolatey + Tesseract for the screenshot OCR fallback
+#      (only if missing).
+#   4. Downloads cybersentinel_agent.exe from the repo, verifies its
+#      SHA-256 against the sidecar manifest in the repo, and refuses to
+#      install if the hash doesn't match.
+#   5. Optional Authenticode signature check (warn-only until an EV
+#      signing cert is provisioned).
+#   6. Writes agent_config.json + a hidden VBScript launcher.
+#   7. Registers a Windows Scheduled Task that runs at logon + startup.
+#   8. Starts the agent.
+#
+# Tested on: Windows 10 22H2, Windows 11 23H2/24H2, Windows Server 2019/2022.
 
 #Requires -RunAsAdministrator
 
@@ -29,10 +47,23 @@ function Write-ColorOutput {
     }
 }
 
-function Test-IPAddress {
-    param([string]$IP)
-    if ($IP -eq "localhost" -or $IP -eq "") { return $true }
-    return $IP -match '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+function Test-ServerHost {
+    # Accept either an IPv4 literal, "localhost", or an RFC1123 hostname
+    # / FQDN. Operators in real environments use names like
+    # `dlp.corp.local`, not just IPs.
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+    if ($Value -eq "localhost") { return $true }
+    if ($Value -match '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$') {
+        return $true
+    }
+    # RFC1123 hostname / FQDN: labels of 1-63 alnum/hyphen, dot-separated,
+    # total length <= 253. Each label can't start or end with a hyphen.
+    if ($Value.Length -le 253 -and `
+        $Value -match '^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$') {
+        return $true
+    }
+    return $false
 }
 
 function Test-PositiveInteger {
@@ -53,12 +84,12 @@ Write-ColorOutput "Step 1: Configuration Setup" -Type "Info"
 Write-Host ""
 
 do {
-    $serverIP = Read-Host "Enter server IP address (default: localhost)"
+    $serverIP = Read-Host "Enter server IP or hostname (default: localhost)"
     if ([string]::IsNullOrWhiteSpace($serverIP)) { $serverIP = "localhost" }
-    if (-not (Test-IPAddress $serverIP)) {
-        Write-ColorOutput "Invalid IP address format. Please try again." -Type "Error"
+    if (-not (Test-ServerHost $serverIP)) {
+        Write-ColorOutput "Invalid host. Use an IPv4 literal, 'localhost', or an RFC1123 hostname/FQDN." -Type "Error"
     }
-} while (-not (Test-IPAddress $serverIP))
+} while (-not (Test-ServerHost $serverIP))
 
 $serverURL = "http://${serverIP}:55000/api/v1"
 Write-ColorOutput "Server URL: $serverURL" -Type "Success"

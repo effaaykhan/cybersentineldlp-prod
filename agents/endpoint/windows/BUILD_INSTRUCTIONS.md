@@ -105,11 +105,16 @@ The executable should be around 3-4 MB.
    Start-Service CyberSentinelAgent
    ```
 
-### Option 2: Use Upgrade Script
+### Option 2: re-run the canonical one-liner installer
+
 ```powershell
-.\Upgrade-CyberSentinelAgent.ps1
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
 ```
-Then select option 1 (Update Agent Executable) and provide the path to the new executable.
+
+This is the recommended path. The installer cleans the previous
+install in Step 2 and verifies the downloaded binary against its
+SHA-256 sidecar. See [`DEPLOYMENT.md`](../../../DEPLOYMENT.md) for the
+full walkthrough.
 
 ## Testing the New Functionality
 

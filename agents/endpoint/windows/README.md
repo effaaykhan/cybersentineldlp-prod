@@ -110,32 +110,30 @@ g++ -std=c++23 -O2 agent.cpp -o cybersentinel_agent.exe \
 
 ## 🔄 Updating the Agent
 
-Use the update script to update the agent executable or configuration:
+The canonical install / update path is the one-liner installer at the
+repo root:
 
 ```powershell
-# Run as Administrator
-.\Upgrade-CyberSentinelAgent.ps1
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
 ```
 
-**Update Options:**
-1. Update Agent Executable (downloads from releases)
-2. Update Configuration (modify agent_config.json)
-3. Update Both
-4. View Current Configuration
-5. Exit
+It's safe to re-run on a host that already has the agent — Step 2 of
+the script cleans the existing scheduled task / process before
+re-installing. The downloaded binary is verified against its SHA-256
+sidecar before it ever runs.
+
+For just hot-swapping the binary without rerunning the full installer,
+see the "Re-install / update an existing endpoint" section of
+[`DEPLOYMENT.md`](../../../DEPLOYMENT.md).
 
 ## 🗑️ Uninstallation
 
-Run the uninstall script as Administrator:
-
 ```powershell
-.\Uninstall-CyberSentinelAgent.ps1
+Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "CyberSentinel DLP Agent" -Confirm:$false
+Remove-Item "C:\Program Files\CyberSentinel" -Recurse -Force
+Remove-Item "C:\ProgramData\CyberSentinel" -Recurse -Force
 ```
-
-**Uninstall Options:**
-1. Delete all files and directory (recommended)
-2. Keep configuration file and logs
-3. Keep everything (only remove service)
 
 ## 📁 File Structure
 

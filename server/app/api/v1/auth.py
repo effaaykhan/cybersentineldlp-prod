@@ -61,10 +61,24 @@ class ChangePasswordRequest(BaseModel):
 async def register(
     user_data: UserRegister,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Register a new user
+    Register a new user (admin-only).
+
+    SECURITY: Open self-registration is disabled. New accounts must be
+    created by an existing admin. Without this guard, any anonymous
+    attacker could register a VIEWER account and read every DLP event,
+    policy, classification hit, clipboard capture, and file path in the
+    system, since the authorization layer has no per-tenant scoping.
     """
+    # Only admins can provision new accounts.
+    if str(getattr(current_user, "role", "")).upper() != "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only administrators can register new users.",
+        )
+
     # Validate password strength
     if not validate_password_strength(user_data.password):
         raise HTTPException(
@@ -86,7 +100,12 @@ async def register(
             role="VIEWER",  # Default role for new users
         )
 
-        logger.info("User registered", user_id=str(user.id))
+        logger.info(
+            "User registered by admin",
+            admin_id=str(current_user.id),
+            new_user_id=str(user.id),
+            new_user_email=user.email,
+        )
 
         return {
             "message": "User registered successfully",

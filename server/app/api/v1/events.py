@@ -545,7 +545,7 @@ async def get_events(
     limit: int = Query(100, ge=1, le=1000),
     severity: Optional[str] = None,
     source: Optional[str] = None,
-    search: Optional[str] = Query(None, description="Search keyword for filtering events"),
+    search: Optional[str] = Query(None, max_length=200, description="Search keyword for filtering events"),
     start_time: Optional[datetime] = Query(
         None,
         description="Filter events with timestamp >= this ISO datetime (UTC)",
@@ -554,10 +554,14 @@ async def get_events(
         None,
         description="Filter events with timestamp <= this ISO datetime (UTC)",
     ),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
 ):
     """
     Get DLP events with pagination and filtering.
+
+    SECURITY: Requires analyst role — these records contain clipboard
+    content, file paths, and user emails, and must not be enumerable
+    by self-registered VIEWER accounts.
 
     Supports:
     - severity filter
@@ -574,8 +578,16 @@ async def get_events(
     if source:
         query_filter["source"] = source
     if search:
-        # Perform case-insensitive text search across multiple fields
-        search_pattern = {"$regex": search, "$options": "i"}
+        # SECURITY: The incoming `search` term is user-controlled and
+        # used to build a Mongo `$regex` query. Without escaping, a
+        # crafted pattern like `(a+)+$` can pin a mongod worker (ReDoS)
+        # and a crafted anchored pattern can be used as a timing oracle
+        # to enumerate documents. We escape all regex metacharacters so
+        # the search is treated as a literal substring. `$options: "i"`
+        # keeps the match case-insensitive.
+        import re as _re
+        escaped = _re.escape(search)
+        search_pattern = {"$regex": escaped, "$options": "i"}
         query_filter["$or"] = [
             {"event_type": search_pattern},
             {"description": search_pattern},
@@ -683,10 +695,12 @@ async def get_events(
 @router.get("/{event_id}", response_model=DLPEvent)
 async def get_event(
     event_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
 ):
     """
-    Get specific DLP event by ID
+    Get specific DLP event by ID. Requires analyst role — individual
+    event records include file paths, clipboard captures, and email
+    addresses that must not be enumerable by VIEWERs.
     """
     db = get_mongodb()
     event = await db.dlp_events.find_one({"id": event_id})

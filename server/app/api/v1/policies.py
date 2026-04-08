@@ -314,10 +314,14 @@ async def get_policies(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     enabled_only: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    # ... (Implementation same as read_file)
+    """
+    SECURITY: requires analyst role. Policy bundles include conditions,
+    actions, agent_ids, and compliance tags — the full DLP enforcement
+    playbook. Must not be readable by VIEWERs.
+    """
     policy_service = PolicyService(db)
     policies = await policy_service.get_all_policies(
         skip=skip,
@@ -356,7 +360,7 @@ async def get_policies(
 @router.get("/{policy_id}")
 async def get_policy(
     policy_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     # ... (Implementation same as read_file)

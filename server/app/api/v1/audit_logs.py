@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.core.database import get_db
 from app.services.audit_service import AuditService
 
@@ -41,11 +41,15 @@ async def list_audit_logs(
     end_date: Optional[datetime] = Query(None, description="Filter to date"),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """
     List audit logs with optional filters.
+
+    SECURITY: admin role required. Audit logs include every admin
+    action and login event across all users; must not be readable by
+    VIEWERs or analysts.
     """
     svc = AuditService(db)
     logs = await svc.get_logs(
@@ -79,7 +83,7 @@ async def list_audit_logs(
 
 @router.get("/actions", response_model=List[str])
 async def list_audit_actions(
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     """

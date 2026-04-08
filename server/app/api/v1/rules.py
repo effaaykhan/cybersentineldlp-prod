@@ -211,11 +211,15 @@ async def list_rules(
     severity: Optional[str] = Query(None, description="Filter by severity"),
     skip: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
     session: AsyncSession = Depends(get_db),
 ):
     """
     List classification rules with optional filters.
+
+    SECURITY: requires analyst role. The full rule list contains regex
+    patterns, keyword lists, and severities — i.e. the DLP detection
+    playbook. It must not be readable by VIEWERs.
     """
     service = RuleService(session)
 
@@ -233,7 +237,7 @@ async def list_rules(
 
 @router.get("/statistics")
 async def get_rule_statistics(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
     session: AsyncSession = Depends(get_db),
 ):
     """
@@ -247,7 +251,7 @@ async def get_rule_statistics(
 @router.get("/{rule_id}", response_model=RuleResponse)
 async def get_rule(
     rule_id: UUID,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
     session: AsyncSession = Depends(get_db),
 ):
     """

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field, ConfigDict
 import structlog
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.core.database import get_db
 from app.services.fingerprint_service import FingerprintService
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,9 +54,11 @@ class FingerprintOut(BaseModel):
 async def add_fingerprint(
     body: FingerprintCreate,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
 ):
-    """Register a known file fingerprint (hash)."""
+    """Register a known file fingerprint (hash). Requires analyst role —
+    a malicious VIEWER could otherwise add false fingerprints to bypass
+    detection."""
     svc = FingerprintService(db)
 
     existing = await svc.get_by_hash(body.hash)
@@ -77,7 +79,7 @@ async def add_fingerprint(
 async def add_fingerprint_from_content(
     body: FingerprintFromContent,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
 ):
     """Compute a SHA-256 hash from raw content and register it."""
     svc = FingerprintService(db)
@@ -128,7 +130,7 @@ async def list_fingerprints(
 async def delete_fingerprint(
     fingerprint_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
 ):
     """Delete a fingerprint by ID."""
     svc = FingerprintService(db)

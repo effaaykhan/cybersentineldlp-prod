@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field, ConfigDict
 import structlog
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.core.database import get_db
 from app.services.scan_service import ScanService
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,9 +54,9 @@ class ScanResultOut(BaseModel):
 async def create_scan_job(
     body: ScanJobCreate,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
 ):
-    """Create a new data-discovery scan job."""
+    """Create a new data-discovery scan job. Requires analyst role."""
     svc = ScanService(db)
     job = await svc.create_job(body.target)
     await db.commit()

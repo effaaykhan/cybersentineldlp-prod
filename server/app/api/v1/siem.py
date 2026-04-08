@@ -3,12 +3,14 @@ SIEM Integration API Endpoints
 Manage SIEM connectors and event forwarding
 """
 
+import ipaddress
+import socket
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.integrations.siem.integration_service import siem_service
 from app.integrations.siem.elk_connector import ELKConnector
 from app.integrations.siem.splunk_connector import SplunkConnector
@@ -17,6 +19,73 @@ from app.core.observability import StructuredLogger
 
 router = APIRouter()
 logger = StructuredLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SSRF guard for SIEM connector hosts
+#
+# Without this, any admin (or any authenticated user on a mis-configured
+# deployment) could register a connector pointed at:
+#   * 169.254.169.254 — AWS / GCP / Azure instance metadata
+#   * 127.0.0.1 / ::1 — internal services on the manager host
+#   * 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 — LAN hosts
+#   * fe80::/10 — IPv6 link-local
+# and use the /test and /forward-event endpoints to probe internal
+# networks, exfiltrate metadata credentials, or pivot.
+# ═══════════════════════════════════════════════════════════════════════
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),       # link-local + metadata
+    ipaddress.ip_network("100.64.0.0/10"),         # carrier-grade NAT
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("224.0.0.0/4"),           # multicast
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),              # IPv6 ULA
+    ipaddress.ip_network("fe80::/10"),             # IPv6 link-local
+]
+
+
+def _assert_safe_siem_host(host: str) -> None:
+    """Resolve `host` and reject any address that lives in a blocked
+    network range. Raises HTTPException(400) on rejection."""
+    if not host or len(host) > 253:
+        raise HTTPException(status_code=400, detail="Invalid host.")
+
+    # Resolve every A/AAAA record so DNS rebinding against a single
+    # public-looking hostname that also resolves to 127.0.0.1 is caught.
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail=f"Cannot resolve host: {host}")
+
+    seen: set = set()
+    for info in infos:
+        ip_str = info[4][0]
+        if ip_str in seen:
+            continue
+        seen.add(ip_str)
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid IP resolved: {ip_str}")
+        for net in _BLOCKED_NETWORKS:
+            if ip in net:
+                logger.logger.warning(
+                    "siem_connector_blocked_host",
+                    host=host, resolved=ip_str, network=str(net),
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"SIEM connector host {host} resolves to {ip_str} "
+                        f"which is in the blocked network {net}. "
+                        f"Loopback, link-local, metadata, and RFC1918 "
+                        f"targets are not allowed."
+                    ),
+                )
 
 
 class SIEMConnectorConfig(BaseModel):
@@ -39,12 +108,13 @@ class SIEMConnectorConfig(BaseModel):
 
 @router.get("/connectors")
 async def list_connectors(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("admin"))
 ):
     """
-    List all registered SIEM connectors
+    List all registered SIEM connectors.
 
-    **Returns:** List of connectors with status
+    SECURITY: admin role required. Connector records contain host/port
+    plus credential fingerprints; must not be exposed to ordinary users.
     """
     try:
         connectors = siem_service.list_connectors()
@@ -67,27 +137,23 @@ async def list_connectors(
 @router.post("/connectors")
 async def register_connector(
     config: SIEMConnectorConfig,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("admin"))
 ):
     """
-    Register a new SIEM connector
+    Register a new SIEM connector.
 
-    **Request Body:**
-    ```json
-    {
-      "name": "Production ELK",
-      "siem_type": "elk",
-      "host": "elasticsearch.company.com",
-      "port": 9200,
-      "username": "elastic",
-      "password": "password",
-      "use_ssl": true,
-      "index_prefix": "dlp-events"
-    }
-    ```
-
-    **Returns:** Registration result
+    SECURITY:
+      * Admin role required.
+      * `host` is DNS-resolved and rejected if it lands in any blocked
+        network (loopback, link-local, metadata, RFC1918, IPv6 ULA).
+        Prevents the connector from being used as an SSRF primitive
+        against the cloud metadata service or internal LAN.
     """
+    # ── SSRF guard ──────────────────────────────────────────────
+    _assert_safe_siem_host(config.host)
+    if not (1 <= config.port <= 65535):
+        raise HTTPException(status_code=400, detail="Port out of range.")
+
     try:
         # Create connector based on type
         if config.siem_type.lower() == "elk":
@@ -159,7 +225,7 @@ async def register_connector(
 @router.delete("/connectors/{connector_name}")
 async def unregister_connector(
     connector_name: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("admin"))
 ):
     """
     Unregister a SIEM connector
@@ -200,7 +266,7 @@ async def unregister_connector(
 @router.post("/connectors/{connector_name}/test")
 async def test_connector(
     connector_name: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("admin"))
 ):
     """
     Test a SIEM connector connection
@@ -235,7 +301,7 @@ async def test_connector(
 
 @router.get("/connectors/health")
 async def health_check_all(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("admin"))
 ):
     """
     Perform health check on all SIEM connectors
@@ -264,7 +330,7 @@ async def health_check_all(
 async def forward_event_to_siems(
     event: Dict[str, Any] = Body(...),
     connector_name: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("analyst"))
 ):
     """
     Forward a single event to SIEM(s)
@@ -329,7 +395,7 @@ async def forward_event_to_siems(
 async def forward_batch_to_siems(
     events: List[Dict[str, Any]] = Body(...),
     connector_name: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role("analyst"))
 ):
     """
     Forward a batch of events to SIEM(s)

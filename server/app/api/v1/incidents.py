@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.core.database import get_db
 from app.services.incident_service import IncidentService
 
@@ -183,10 +183,10 @@ async def get_incident(
 @router.post("/", response_model=IncidentOut, status_code=status.HTTP_201_CREATED)
 async def create_incident(
     body: IncidentCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new incident"""
+    """Create a new incident. Requires analyst role."""
     svc = IncidentService(db)
     incident = await svc.create_incident(
         event_id=body.event_id,
@@ -210,10 +210,10 @@ async def create_incident(
 async def update_incident(
     incident_id: UUID,
     body: IncidentUpdate,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update incident status and/or assignment"""
+    """Update incident status and/or assignment. Requires analyst role."""
     svc = IncidentService(db)
     incident = await svc.update_incident(
         incident_id=incident_id,
@@ -238,7 +238,7 @@ async def update_incident(
 async def add_comment(
     incident_id: UUID,
     body: CommentCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     """Add a comment to an incident"""

@@ -22,11 +22,16 @@ grouped by severity and referenced by file path + line where applicable.
 
 ## Summary
 
-| Severity | Found | Fixed in this commit | Deferred |
+Audit was applied in two passes. The first commit (`b3c485f`) covered
+the infra / dependency / first-pass DAST findings. The second commit
+addressed additional API-surface findings that surfaced in the final
+two scanner reports.
+
+| Severity | Found | Fixed | Deferred |
 |---|---|---|---|
 | CRITICAL | 6 | 6 | 0 |
-| HIGH     | 14 | 11 | 3 |
-| MEDIUM   | 12 | 5 | 7 |
+| HIGH     | 22 | 19 | 3 |
+| MEDIUM   | 14 | 8 | 6 |
 | LOW      | 5 | 0 | 5 |
 
 Deferred items are tracked at the bottom of this file with a rationale.
@@ -174,6 +179,70 @@ chown + chmod pass on key/cert. Install dir certs directory is now
 ### H-11 — `install.sh` doesn't chown the generated .env
 **File:** `install.sh`
 **Fix:** `chown root:root` added before the `chmod 600`.
+
+### H-12 — SIEM connector SSRF
+**File:** `server/app/api/v1/siem.py`
+**Fix:** New `_assert_safe_siem_host()` helper resolves the operator-
+supplied host via `socket.getaddrinfo` and rejects every address that
+falls inside `127.0.0.0/8`, RFC1918 (`10/8`, `172.16/12`, `192.168/16`),
+`169.254.0.0/16` (link-local + cloud metadata), `100.64.0.0/10`,
+`224.0.0.0/4`, `::1/128`, `fc00::/7`, `fe80::/10`. Catches DNS
+rebinding by checking *all* resolved addresses, not just the first.
+Connector register/list/test/delete now also require admin role; the
+forward-event/forward-batch endpoints require analyst.
+
+### H-13 — Open self-registration `/auth/register`
+**File:** `server/app/api/v1/auth.py`
+**Fix:** Endpoint now requires an admin JWT. Without per-tenant
+scoping in the data layer, an anonymous self-registration was a
+direct read of every event/policy/clipboard capture in the system.
+
+### H-14 — `/api/v1/agents/{id}/policy/evaluate` was unauthenticated
+**File:** `server/app/api/v1/agents.py`
+**Fix:** Added `await verify_agent_key(http_request)`. Was a free
+classification oracle and a CPU-DoS vector.
+
+### H-15 — Mongo `$regex` injection in events search
+**File:** `server/app/api/v1/events.py`
+**Fix:** The `search` query parameter is now `re.escape`'d before
+being placed inside `$regex`, so an attacker cannot inject regex
+metacharacters that cause ReDoS or be used as a timing oracle. Also
+capped at 200 chars and tightened the role to analyst.
+
+### H-16 — IDOR / role tightening across multiple routers
+**Files:** `server/app/api/v1/{events,incidents,alerts,policies,rules,
+audit_logs,fingerprints,scans,siem}.py`
+**Fix:** Read endpoints that returned sensitive PII or detection
+playbooks now require analyst (or admin for audit_logs and SIEM).
+Write endpoints for incidents/alerts/fingerprints/scans require
+analyst. The previous behaviour let any self-registered VIEWER
+read every event, policy, rule, audit log, and SIEM connector
+host/credential, and modify state freely. Per-tenant scoping is
+still a separate refactor (D-11) — the role tightening here is the
+immediate mitigation.
+
+### H-17 — Hardcoded LAN IP fallback in agent.cpp
+**File:** `agents/endpoint/windows/agent.cpp:325-340`
+**Fix:** `ParseUrl()` no longer falls back to `192.168.1.63` on
+parse failure. Host is cleared instead, and the print statement at
+line ~6813 now shows `localhost`.
+
+### H-18 — No CSP in `index.html` (only nginx provides one)
+**File:** `dashboard/index.html`
+**Fix:** Added `<meta http-equiv="Content-Security-Policy">` mirroring
+the nginx config so the SPA enforces CSP even when served by `vite
+preview`, `npm start`, or any deployment that doesn't use this exact
+nginx config. Also added `X-Content-Type-Options` and `Referrer-
+Policy` meta tags.
+
+### H-19 — Dead-code routers `events_new.py` / `agents_new.py`
+**Files (deleted):** `server/app/api/v1/agents_new.py`,
+`server/app/api/v1/events_new.py`
+**Fix:** Both files contained `optional_auth`-gated event-insertion
+paths (`agents_new.py:333` builds tokens as raw f-strings with no
+signing). They were not mounted in `__init__.py` or `main.py` today,
+but if anyone re-mounted them later they would be a glaring auth
+bypass. Removed entirely.
 
 ---
 

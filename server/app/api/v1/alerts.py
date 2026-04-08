@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 import structlog
 
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.core.database import get_mongodb
 
 logger = structlog.get_logger()
@@ -187,7 +187,7 @@ async def get_alerts(
 @router.post("/{alert_id}/acknowledge")
 async def acknowledge_alert(
     alert_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
 ):
     """
     Acknowledge an alert
@@ -225,7 +225,7 @@ async def acknowledge_alert(
 @router.post("/{alert_id}/resolve")
 async def resolve_alert(
     alert_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("analyst")),
 ):
     """
     Resolve an alert

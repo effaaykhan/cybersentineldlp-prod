@@ -648,10 +648,17 @@ class PolicyEvaluationResponse(BaseModel):
 async def evaluate_policy_realtime(
     agent_id: str,
     request: PolicyEvaluationRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """
     Real-time policy evaluation for agent-side enforcement.
+
+    SECURITY: Requires a valid X-Agent-Key header. Previously this was
+    anonymous — which both let external callers use it as a
+    classification oracle to tune exfiltration so it lands as "Public",
+    and let them DoS the classification engine with arbitrarily large
+    file contents since the endpoint is expensive.
 
     Agent calls this BEFORE allowing a file transfer or action.
     Server classifies content and evaluates policies, then returns
@@ -659,6 +666,8 @@ async def evaluate_policy_realtime(
 
     This enables content-aware blocking based on sensitive data detection.
     """
+    await verify_agent_key(http_request)
+
     try:
         # 1. Classify the file content using ClassificationEngine
         classification_engine = ClassificationEngine(db)

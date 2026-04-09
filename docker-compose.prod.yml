@@ -337,7 +337,15 @@ services:
   celery-beat:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest
     container_name: cybersentinel-celery-beat
-    command: celery -A app.tasks beat --loglevel=info
+    # --pidfile and --schedule both point at /tmp which is always
+    # writable by any container user. Previously beat tried to write
+    # the schedule file to its CWD (/app) under the unprivileged
+    # dlpuser and the healthcheck was polling for a pidfile beat
+    # never created — both silent failure modes.
+    command: >-
+      celery -A app.tasks beat --loglevel=info
+      --pidfile=/tmp/celerybeat.pid
+      --schedule=/tmp/celerybeat-schedule
     environment:
       # Redis
       - REDIS_HOST=redis

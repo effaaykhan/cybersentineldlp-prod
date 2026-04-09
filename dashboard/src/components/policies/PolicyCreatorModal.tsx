@@ -144,18 +144,26 @@ export default function PolicyCreatorModal({
     editingPolicy?.config || (policyType ? getDefaultConfig(policyType) : getDefaultConfig('clipboard_monitoring'))
   )
   const [classificationPolicy, setClassificationPolicy] = useState<ClassificationPolicy>(() => {
-    if (editingPolicy?.conditions && editingPolicy?.actions) {
-      return {
-        conditions: editingPolicy.conditions,
-        actions: editingPolicy.actions
-      }
-    }
+    // DEFENSIVE: even after transformApiPolicyToFrontend there's no
+    // guarantee the incoming policy has the exact {match,rules}+object
+    // shape this form needs. Coerce into the expected structure rather
+    // than dereferencing `.conditions.match` on a potentially-malformed
+    // value (which used to blank the screen).
+    const rawC: any = editingPolicy?.conditions
+    const rawA: any = editingPolicy?.actions
     return {
       conditions: {
-        match: 'all',
-        rules: []
+        match: (rawC && !Array.isArray(rawC) && rawC.match) || 'all',
+        rules: Array.isArray(rawC?.rules)
+          ? rawC.rules
+          : Array.isArray(rawC)
+            ? rawC
+            : [],
       },
-      actions: {}
+      actions:
+        rawA && typeof rawA === 'object' && !Array.isArray(rawA)
+          ? rawA
+          : {},
     }
   })
 
@@ -165,21 +173,34 @@ export default function PolicyCreatorModal({
       if (editingPolicy) {
         setStep(1)
         setPolicyType(editingPolicy.type || 'classification_aware_policy')
-        setPolicyName(editingPolicy.name)
+        setPolicyName(editingPolicy.name || '')
         setDescription(editingPolicy.description || '')
         setSeverity(editingPolicy.severity || 'medium')
-        setPriority(editingPolicy.priority)
-        setEnabled(editingPolicy.enabled)
+        setPriority(editingPolicy.priority ?? 100)
+        setEnabled(editingPolicy.enabled ?? true)
         setAgentId(editingPolicy.agentIds?.[0] || '')
         if (editingPolicy.config) {
           setConfig(editingPolicy.config)
         }
-        if (editingPolicy.conditions && editingPolicy.actions) {
-          setClassificationPolicy({
-            conditions: editingPolicy.conditions,
-            actions: editingPolicy.actions
-          })
-        }
+        // Same defensive coercion as the initial useState — never
+        // trust that `conditions` is {match,rules} or that `actions`
+        // is an object, because the API serializer may send a list.
+        const rawC: any = editingPolicy.conditions
+        const rawA: any = editingPolicy.actions
+        setClassificationPolicy({
+          conditions: {
+            match: (rawC && !Array.isArray(rawC) && rawC.match) || 'all',
+            rules: Array.isArray(rawC?.rules)
+              ? rawC.rules
+              : Array.isArray(rawC)
+                ? rawC
+                : [],
+          },
+          actions:
+            rawA && typeof rawA === 'object' && !Array.isArray(rawA)
+              ? rawA
+              : {},
+        })
       } else {
         // Reset for new policy
         setStep(1)

@@ -348,9 +348,53 @@ export const getSeverityColorLight = (severity: string): {
 }
 
 /**
- * Transform API policy response to frontend Policy format
+ * Transform API policy response to frontend Policy format.
+ *
+ * SHAPE MISMATCH NOTE:
+ *   The backend serializer at server/app/api/v1/policies.py returns
+ *     conditions: a flat LIST of rules  (from policy.conditions.get('rules', []))
+ *     actions:    a LIST of {type, parameters} objects
+ *
+ *   But the React edit form (ClassificationPolicyForm) expects
+ *     conditions: { match: 'all' | 'any', rules: [...] }
+ *     actions:    { alert?: {...}, block?: {...}, quarantine?: {...} }
+ *
+ *   Without this reshape, clicking "Edit" on any classification-aware
+ *   policy caused the form to dereference `.conditions.match` on an
+ *   array → TypeError → blank white screen.
  */
 export const transformApiPolicyToFrontend = (apiPolicy: any): Policy => {
+  // ── conditions: list-of-rules → { match, rules } ─────────────────
+  let conditions: any
+  if (Array.isArray(apiPolicy.conditions)) {
+    conditions = {
+      match: (apiPolicy.conditions_match as 'all' | 'any') || 'all',
+      rules: apiPolicy.conditions,
+    }
+  } else if (apiPolicy.conditions && typeof apiPolicy.conditions === 'object') {
+    // Already in {match, rules} shape — pass through, defensively fill blanks.
+    conditions = {
+      match: apiPolicy.conditions.match || 'all',
+      rules: Array.isArray(apiPolicy.conditions.rules)
+        ? apiPolicy.conditions.rules
+        : [],
+    }
+  } else {
+    conditions = { match: 'all', rules: [] }
+  }
+
+  // ── actions: list of {type, parameters} → { alert, block, quarantine, ... } ──
+  let actions: Record<string, any> = {}
+  if (Array.isArray(apiPolicy.actions)) {
+    for (const entry of apiPolicy.actions) {
+      if (entry && typeof entry === 'object' && entry.type) {
+        actions[entry.type] = entry.parameters ?? {}
+      }
+    }
+  } else if (apiPolicy.actions && typeof apiPolicy.actions === 'object') {
+    actions = apiPolicy.actions
+  }
+
   return {
     id: apiPolicy.id || '',
     name: apiPolicy.name || '',
@@ -365,16 +409,55 @@ export const transformApiPolicyToFrontend = (apiPolicy: any): Policy => {
     violations: 0, // TODO: Get from stats endpoint
     lastViolation: undefined, // TODO: Get from stats endpoint
     config: apiPolicy.config || getDefaultConfig(apiPolicy.type as PolicyType),
-    conditions: apiPolicy.conditions || {},
-    actions: apiPolicy.actions || {},
+    conditions,
+    actions,
     agentIds: apiPolicy.agent_ids || [],
   }
 }
 
 /**
- * Transform frontend Policy format to API request format
+ * Transform frontend Policy format to API request format.
+ *
+ * Reverses the reshape above so POST/PUT bodies match what the
+ * backend Policy model and transform_frontend_config_to_backend()
+ * helper expect.
  */
 export const transformFrontendPolicyToApi = (policy: Partial<Policy>): any => {
+  // ── conditions: { match, rules } → list-of-rules ─────────────────
+  // We send back `{rules: [...], match: ...}` as a dict so the backend
+  // preserves both the rule list and the match mode. The backend
+  // serializer on GET reads .conditions.get('rules', []) so this
+  // round-trips cleanly.
+  let conditionsPayload: any = { match: 'all', rules: [] }
+  const fc: any = policy.conditions
+  if (fc && typeof fc === 'object' && !Array.isArray(fc)) {
+    conditionsPayload = {
+      match: fc.match || 'all',
+      rules: Array.isArray(fc.rules) ? fc.rules : [],
+    }
+  } else if (Array.isArray(fc)) {
+    conditionsPayload = { match: 'all', rules: fc }
+  }
+
+  // ── actions: { alert, block, quarantine } → { alert: {...}, block: {...} } ──
+  // The backend Policy.actions column stores a dict keyed by action
+  // type, so we can pass the frontend shape through directly as long
+  // as we strip falsy entries (the form component uses `!!policy.
+  // actions.alert` to decide whether an action is active).
+  const actionsPayload: Record<string, any> = {}
+  const fa: any = policy.actions
+  if (fa && typeof fa === 'object' && !Array.isArray(fa)) {
+    for (const [key, value] of Object.entries(fa)) {
+      if (value) actionsPayload[key] = value
+    }
+  } else if (Array.isArray(fa)) {
+    for (const entry of fa) {
+      if (entry && typeof entry === 'object' && entry.type) {
+        actionsPayload[entry.type] = entry.parameters ?? {}
+      }
+    }
+  }
+
   return {
     name: policy.name || '',
     description: policy.description || '',
@@ -384,9 +467,8 @@ export const transformFrontendPolicyToApi = (policy: Partial<Policy>): any => {
     enabled: policy.enabled ?? true,
     config: policy.config,
     agent_ids: policy.agentIds || [],
-    // Pass through conditions and actions for classification-aware policies
-    conditions: policy.conditions || [],
-    actions: policy.actions || [],
+    conditions: conditionsPayload,
+    actions: actionsPayload,
     compliance_tags: [],
   }
 }

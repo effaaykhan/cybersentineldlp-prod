@@ -249,10 +249,15 @@ services:
         reservations:
           memory: 64M
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3000/"]
+      # nginx:alpine ships BusyBox wget. `--spider` sends a HEAD-like
+      # request and does NOT write to stdout, which avoids permission
+      # issues when running as the non-root `nginx` user. `-q` keeps
+      # BusyBox's default diagnostic chatter off.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 15s
     restart: unless-stopped
 
   # Celery Worker
@@ -291,6 +296,12 @@ services:
       # JWT & Security
       - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
       - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
+
+      # CORS — celery-worker imports the same Settings class as the
+      # manager, so it also needs this. Without it, pydantic-settings
+      # raises ValidationError on startup and the worker exits with
+      # code 2 and keeps restarting.
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
     volumes:
       - ./server/logs:/var/log/cybersentinel
     depends_on:
@@ -348,6 +359,10 @@ services:
       # JWT & Security
       - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
       - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
+
+      # CORS — celery-beat imports the same Settings class (see note
+      # on celery-worker above). Required to avoid startup crash loop.
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
     depends_on:
       redis:
         condition: service_healthy

@@ -221,13 +221,13 @@ services:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest
     container_name: cybersentinel-dashboard
     # nginx inside the container runs as the unprivileged `nginx` user
-    # and listens on 3000 (non-privileged port). The host port 80 is
-    # forwarded to container:3000 so end users still access it at /.
+    # and listens on 3000 (non-privileged port). The host port is
+    # configurable via DASHBOARD_HOST_PORT in .env — default 3023.
     # TLS termination, if enabled, should be done by an external
     # reverse proxy (Traefik, Let's Encrypt cert-manager, Caddy) or by
     # adding a mounted nginx-ssl.conf.
     ports:
-      - "80:3000"
+      - "${DASHBOARD_HOST_PORT:-3023}:3000"
     volumes:
       # Mount TLS certificates as read-only so a future nginx-ssl.conf
       # can pick them up. The bind mount must resolve — install.sh

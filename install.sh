@@ -218,8 +218,13 @@ say "Compose file: ${INSTALL_DIR}/${COMPOSE_FILE}"
 say "Env file    : ${INSTALL_DIR}/${ENV_FILE} (mode 600)"
 say "Certs       : ${INSTALL_DIR}/certs/  (self-signed unless replaced)"
 echo
+# Dashboard host port comes from .env (DASHBOARD_HOST_PORT). Fall back
+# to the compose default so the banner matches what's actually bound.
+DASH_PORT=$(grep -E '^DASHBOARD_HOST_PORT=' "${INSTALL_DIR}/${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | head -1)
+DASH_PORT="${DASH_PORT:-3023}"
+
 c_blue "Endpoints:"
-echo "  Dashboard      : http://${HOST_IP}/"
+echo "  Dashboard      : http://${HOST_IP}:${DASH_PORT}/"
 echo "  Manager API    : http://${HOST_IP}:55000"
 echo "  API Docs       : http://${HOST_IP}:55000/api/v1/docs"
 echo "  Health probe   : http://${HOST_IP}:55000/health"

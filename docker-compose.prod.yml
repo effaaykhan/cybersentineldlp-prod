@@ -266,7 +266,7 @@ services:
   celery-worker:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest
     container_name: cybersentinel-celery-worker
-    command: celery -A app.celery.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A app.tasks worker --loglevel=info --concurrency=4
     environment:
       # OpenSearch
       - OPENSEARCH_HOST=opensearch
@@ -327,7 +327,7 @@ services:
         reservations:
           memory: 256M
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery.celery_app inspect ping -d celery@$$HOSTNAME"]
+      test: ["CMD-SHELL", "celery -A app.tasks inspect ping -d celery@$$HOSTNAME"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -337,7 +337,7 @@ services:
   celery-beat:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest
     container_name: cybersentinel-celery-beat
-    command: celery -A app.celery.celery_app beat --loglevel=info
+    command: celery -A app.tasks beat --loglevel=info
     environment:
       # Redis
       - REDIS_HOST=redis

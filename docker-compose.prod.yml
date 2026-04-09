@@ -347,6 +347,18 @@ services:
       --pidfile=/tmp/celerybeat.pid
       --schedule=/tmp/celerybeat-schedule
     environment:
+      # OpenSearch — celery-beat imports the full Settings class via
+      # `from app.core.config import settings`, which requires every
+      # mandatory field to be present at import time. Without these
+      # five OPENSEARCH_* vars, pydantic raises ValidationError and
+      # beat exits code 2 in a restart loop.
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
+      - OPENSEARCH_USE_SSL=true
+      - OPENSEARCH_VERIFY_CERTS=false
+
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379

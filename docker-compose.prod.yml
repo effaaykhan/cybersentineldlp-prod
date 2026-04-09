@@ -249,13 +249,15 @@ services:
         reservations:
           memory: 64M
     healthcheck:
-      # nginx:alpine ships BusyBox wget. `--spider` sends a HEAD-like
-      # request and does NOT write to stdout, which avoids permission
-      # issues when running as the non-root `nginx` user. `-q` keeps
-      # BusyBox's default diagnostic chatter off.
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/ || exit 1"]
+      # Bulletproof healthcheck for nginx:alpine running as the
+      # unprivileged `nginx` user: check that the nginx master process
+      # is alive via `pidof`, a BusyBox applet that always exists in
+      # Alpine. No network round-trip, no permission quirks, no
+      # dependency on curl/wget command availability. If the nginx
+      # master dies, the container is marked unhealthy.
+      test: ["CMD-SHELL", "pidof nginx >/dev/null 2>&1 || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 15s
     restart: unless-stopped

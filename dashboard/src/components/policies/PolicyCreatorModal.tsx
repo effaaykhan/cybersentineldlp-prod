@@ -129,8 +129,14 @@ export default function PolicyCreatorModal({
   onSave, 
   editingPolicy 
 }: PolicyCreatorModalProps) {
-  const [step, setStep] = useState(1)
-  const [policyType, setPolicyType] = useState<PolicyType | null>(editingPolicy?.type || null)
+  // When editing, skip step 1 (type selection) and go straight to step 2
+  // (configuration). The policy type can't be changed for an existing
+  // policy anyway, and landing on step 1 with a visually-selected-but-
+  // internally-null type confuses users into clicking the tile again.
+  const [step, setStep] = useState(editingPolicy ? 2 : 1)
+  const [policyType, setPolicyType] = useState<PolicyType | null>(
+    editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null)
+  )
   const [policyName, setPolicyName] = useState(editingPolicy?.name || '')
   const [description, setDescription] = useState(editingPolicy?.description || '')
   const [severity, setSeverity] = useState<'low' | 'medium' | 'high' | 'critical'>(
@@ -171,7 +177,7 @@ export default function PolicyCreatorModal({
   useEffect(() => {
     if (isOpen) {
       if (editingPolicy) {
-        setStep(1)
+        setStep(2) // skip type selection — can't change type for existing policy
         setPolicyType(editingPolicy.type || 'classification_aware_policy')
         setPolicyName(editingPolicy.name || '')
         setDescription(editingPolicy.description || '')

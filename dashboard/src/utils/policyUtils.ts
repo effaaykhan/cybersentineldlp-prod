@@ -423,39 +423,44 @@ export const transformApiPolicyToFrontend = (apiPolicy: any): Policy => {
  * helper expect.
  */
 export const transformFrontendPolicyToApi = (policy: Partial<Policy>): any => {
-  // ── conditions: { match, rules } → list-of-rules ─────────────────
-  // We send back `{rules: [...], match: ...}` as a dict so the backend
-  // preserves both the rule list and the match mode. The backend
-  // serializer on GET reads .conditions.get('rules', []) so this
-  // round-trips cleanly.
-  let conditionsPayload: any = { match: 'all', rules: [] }
+  // ── conditions: { match, rules } → List[PolicyCondition] ──────────
+  //
+  // The backend PolicyUpsert model declares:
+  //   conditions: Optional[List[PolicyCondition]] = []
+  // where PolicyCondition = {field, operator, value}.
+  //
+  // The frontend edit form stores conditions as {match, rules: [...]}.
+  // We extract just the `rules` array, which IS the list of
+  // PolicyCondition dicts. Sending the wrapper object ({match, rules})
+  // instead of the list causes pydantic to reject with
+  //   422 "input should be a valid list".
+  let conditionsList: any[] = []
   const fc: any = policy.conditions
   if (fc && typeof fc === 'object' && !Array.isArray(fc)) {
-    conditionsPayload = {
-      match: fc.match || 'all',
-      rules: Array.isArray(fc.rules) ? fc.rules : [],
-    }
+    // Frontend shape: {match, rules: [...]}
+    conditionsList = Array.isArray(fc.rules) ? fc.rules : []
   } else if (Array.isArray(fc)) {
-    conditionsPayload = { match: 'all', rules: fc }
+    conditionsList = fc
   }
 
-  // ── actions: { alert, block, quarantine } → { alert: {...}, block: {...} } ──
-  // The backend Policy.actions column stores a dict keyed by action
-  // type, so we can pass the frontend shape through directly as long
-  // as we strip falsy entries (the form component uses `!!policy.
-  // actions.alert` to decide whether an action is active).
-  const actionsPayload: Record<string, any> = {}
+  // ── actions: { alert: {...}, block: {...} } → List[PolicyAction] ──
+  //
+  // The backend declares:
+  //   actions: Optional[List[PolicyAction]] = []
+  // where PolicyAction = {type: str, parameters: dict}.
+  //
+  // The frontend edit form stores actions as {alert: {...}, block: {...}}.
+  // We convert each truthy entry back into {type, parameters}.
+  let actionsList: any[] = []
   const fa: any = policy.actions
   if (fa && typeof fa === 'object' && !Array.isArray(fa)) {
     for (const [key, value] of Object.entries(fa)) {
-      if (value) actionsPayload[key] = value
-    }
-  } else if (Array.isArray(fa)) {
-    for (const entry of fa) {
-      if (entry && typeof entry === 'object' && entry.type) {
-        actionsPayload[entry.type] = entry.parameters ?? {}
+      if (value) {
+        actionsList.push({ type: key, parameters: value })
       }
     }
+  } else if (Array.isArray(fa)) {
+    actionsList = fa
   }
 
   return {
@@ -467,8 +472,8 @@ export const transformFrontendPolicyToApi = (policy: Partial<Policy>): any => {
     enabled: policy.enabled ?? true,
     config: policy.config,
     agent_ids: policy.agentIds || [],
-    conditions: conditionsPayload,
-    actions: actionsPayload,
+    conditions: conditionsList,
+    actions: actionsList,
     compliance_tags: [],
   }
 }

@@ -10,7 +10,20 @@ interface ClipboardPolicyFormProps {
   onChange: (config: ClipboardConfig) => void
 }
 
-export default function ClipboardPolicyForm({ config, onChange }: ClipboardPolicyFormProps) {
+export default function ClipboardPolicyForm({ config: rawConfig, onChange }: ClipboardPolicyFormProps) {
+  // Defensive: some clipboard policies were saved with a different
+  // config shape (monitoredEvents/contentTypes/dataTypes instead of
+  // patterns.predefined/custom). Normalize so the form never crashes
+  // on missing nested properties.
+  const config: ClipboardConfig = {
+    ...rawConfig,
+    patterns: {
+      predefined: rawConfig?.patterns?.predefined ?? [],
+      custom: rawConfig?.patterns?.custom ?? [],
+    },
+    action: rawConfig?.action ?? 'alert',
+  }
+
   const [customRegex, setCustomRegex] = useState('')
   const [customDescription, setCustomDescription] = useState('')
   const [testText, setTestText] = useState('')

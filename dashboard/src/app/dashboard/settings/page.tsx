@@ -1,4 +1,5 @@
 'use client'
+import { extractErrorDetail } from '@/utils/errorUtils'
 
 import { useState } from 'react'
 import DashboardLayout from '@/components/layout/DashboardLayout'
@@ -17,7 +18,7 @@ export default function SettingsPage() {
       window.open(auth_url, '_blank', 'noopener,noreferrer')
       toast.success('Opened Google consent screen in a new tab')
     } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Failed to start Google Drive auth')
+      toast.error(extractErrorDetail(error, 'Failed to start Google Drive auth'))
     } finally {
       setIsConnectingDrive(false)
     }
@@ -30,7 +31,7 @@ export default function SettingsPage() {
       window.open(auth_url, '_blank', 'noopener,noreferrer')
       toast.success('Opened OneDrive consent screen in a new tab')
     } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Failed to start OneDrive auth')
+      toast.error(extractErrorDetail(error, 'Failed to start OneDrive auth'))
     } finally {
       setIsConnectingOneDrive(false)
     }

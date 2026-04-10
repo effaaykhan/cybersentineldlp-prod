@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { useMutation } from '@tanstack/react-query'
 import { X, TestTube, AlertTriangle, CheckCircle } from 'lucide-react'
 import { testRules, type RuleTestResponse } from '@/lib/rules-api'
@@ -20,7 +21,7 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
       setResult(data)
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to test rules')
+      toast.error(extractErrorDetail(error, 'Failed to test rules'))
     },
   })
 

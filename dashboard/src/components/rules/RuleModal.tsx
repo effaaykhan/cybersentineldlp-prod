@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { useMutation } from '@tanstack/react-query'
 import { X, Plus, Trash2 } from 'lucide-react'
 import { createRule, updateRule, type Rule, type RuleCreate } from '@/lib/rules-api'
@@ -85,7 +86,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
       onClose()
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to create rule')
+      toast.error(extractErrorDetail(error, 'Failed to create rule'))
     },
   })
 
@@ -98,7 +99,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
       onClose()
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to update rule')
+      toast.error(extractErrorDetail(error, 'Failed to update rule'))
     },
   })
 

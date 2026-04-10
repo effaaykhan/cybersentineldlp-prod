@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { Folder, ChevronRight, Check, Loader2, AlertCircle, Plus } from 'lucide-react'
 import { listOneDriveFolders } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -44,17 +45,10 @@ export default function ProtectedFolderSelector({
       const response = await listOneDriveFolders(connectionId, parentId)
       setFolders(response.files || [])
     } catch (err: any) {
-      // Extract error message from API response
-      // FastAPI returns errors as { detail: "message" }
-      let errorMessage = 'Failed to load folders. Please try again.'
-      
-      if (err?.response?.data?.detail) {
-        errorMessage = err.response.data.detail
-      } else if (err?.response?.data?.message) {
-        errorMessage = err.response.data.message
-      } else if (err?.message) {
-        errorMessage = err.message
-      }
+      // Extract error message safely — detail can be a string or a
+      // pydantic v2 array [{type,loc,msg,input,url}] which would crash
+      // React if rendered directly.
+      const errorMessage = extractErrorDetail(err, 'Failed to load folders. Please try again.')
       
       setError(errorMessage)
       console.error('OneDrive folder loading error:', {

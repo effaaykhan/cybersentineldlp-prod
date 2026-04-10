@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/lib/store/auth'
 import { changePassword } from '@/lib/api'
@@ -44,7 +45,7 @@ export default function LoginForm() {
       await login(email, password)
       navigate('/dashboard')
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Invalid credentials'
+      const errorMessage = extractErrorDetail(err, 'Invalid credentials')
       setError(errorMessage)
     } finally {
       setLoading(false)
@@ -68,7 +69,7 @@ export default function LoginForm() {
       resetForm()
       setTimeout(() => setMode('login'), 2000)
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to change password'
+      const errorMessage = extractErrorDetail(err, 'Failed to change password')
       setError(errorMessage)
     } finally {
       setLoading(false)

@@ -1,4 +1,5 @@
 'use client'
+import { extractErrorDetail } from '@/utils/errorUtils'
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -874,7 +875,7 @@ export default function EventsPage() {
       refetch()
       refetchStats()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to clear events')
+      toast.error(extractErrorDetail(error, 'Failed to clear events'))
     }
   }
 
@@ -982,7 +983,7 @@ export default function EventsPage() {
             response: error?.response?.data,
             stack: error?.stack
           })
-          pollingResults.push(`OneDrive polling failed: ${error?.response?.data?.detail || error?.message || 'Unknown error'}`)
+          pollingResults.push(`OneDrive polling failed: ${extractErrorDetail(error, 'Unknown error')}`)
         }
       } else {
         console.log('DEBUG: No OneDrive policies found. Policies:', policies.map(p => ({ type: p?.type, enabled: p?.enabled })))
@@ -996,7 +997,7 @@ export default function EventsPage() {
       }
     } catch (error: any) {
       console.error('Manual refresh error:', error)
-      toast.error(error?.response?.data?.detail || error?.message || 'Failed to refresh events')
+      toast.error(extractErrorDetail(error, 'Failed to refresh events'))
     } finally {
       setIsRefreshing(false)
     }

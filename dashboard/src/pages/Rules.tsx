@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Plus, Edit, Trash2, Power, PowerOff, TestTube, Search, Filter } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
@@ -42,7 +43,7 @@ export default function Rules() {
       queryClient.invalidateQueries({ queryKey: ['rule-statistics'] })
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to delete rule')
+      toast.error(extractErrorDetail(error, 'Failed to delete rule'))
     },
   })
 
@@ -56,7 +57,7 @@ export default function Rules() {
       queryClient.invalidateQueries({ queryKey: ['rule-statistics'] })
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.detail || 'Failed to toggle rule')
+      toast.error(extractErrorDetail(error, 'Failed to toggle rule'))
     },
   })
 

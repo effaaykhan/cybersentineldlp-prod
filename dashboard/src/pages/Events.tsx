@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen } from 'lucide-react'
@@ -759,7 +760,7 @@ export default function Events() {
       toast.success(`Successfully cleared ${result.deleted_count} events`)
       refetch()
     } catch (error: any) {
-      toast.error(error.response?.data?.detail || 'Failed to clear events')
+      toast.error(extractErrorDetail(error, 'Failed to clear events'))
     }
   }
 
@@ -867,7 +868,7 @@ export default function Events() {
             response: error?.response?.data,
             stack: error?.stack
           })
-          pollingResults.push(`OneDrive polling failed: ${error?.response?.data?.detail || error?.message || 'Unknown error'}`)
+          pollingResults.push(`OneDrive polling failed: ${extractErrorDetail(error, 'Unknown error')}`)
         }
       } else {
         console.log('DEBUG: No OneDrive policies found. Policies:', policies.map(p => ({ type: p?.type, enabled: p?.enabled })))
@@ -881,7 +882,7 @@ export default function Events() {
       }
     } catch (error: any) {
       console.error('Manual refresh error:', error)
-      toast.error(error?.response?.data?.detail || error?.message || 'Failed to refresh events')
+      toast.error(extractErrorDetail(error, 'Failed to refresh events'))
     } finally {
       setIsRefreshing(false)
     }

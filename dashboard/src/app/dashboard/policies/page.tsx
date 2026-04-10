@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Shield, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
 import PolicyCreatorModal from '@/components/policies/PolicyCreatorModal'
@@ -101,7 +102,7 @@ export default function PoliciesPage() {
       setEditingPolicy(null)
     },
     onError: (error: any) => {
-      toast.error(error?.response?.data?.detail || 'Failed to create policy')
+      toast.error(extractErrorDetail(error, 'Failed to create policy'))
     },
   })
 
@@ -119,7 +120,7 @@ export default function PoliciesPage() {
       setEditingPolicy(null)
     },
     onError: (error: any) => {
-      toast.error(error?.response?.data?.detail || 'Failed to update policy')
+      toast.error(extractErrorDetail(error, 'Failed to update policy'))
     },
   })
 
@@ -170,7 +171,7 @@ export default function PoliciesPage() {
       toast.success(`Policy ${variables.enabled ? 'activated' : 'deactivated'} successfully!`)
     },
     onError: (error: any) => {
-      toast.error(error?.response?.data?.detail || 'Failed to toggle policy status')
+      toast.error(extractErrorDetail(error, 'Failed to toggle policy status'))
     },
   })
 
@@ -183,7 +184,7 @@ export default function PoliciesPage() {
       toast.success('Policy deleted successfully!')
     },
     onError: (error: any) => {
-      toast.error(error?.response?.data?.detail || 'Failed to delete policy')
+      toast.error(extractErrorDetail(error, 'Failed to delete policy'))
     },
   })
 
@@ -209,7 +210,7 @@ export default function PoliciesPage() {
       toast.success('Policy bundles refresh triggered. Agents will sync within ~60s.')
     },
     onError: (error: any) => {
-      toast.error(error?.response?.data?.detail || 'Failed to refresh policy bundles')
+      toast.error(extractErrorDetail(error, 'Failed to refresh policy bundles'))
     },
   })
 

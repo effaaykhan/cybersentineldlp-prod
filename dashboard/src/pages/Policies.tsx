@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, ChevronUp, AlertTriangle, Ban, Bell, Eye, Loader2, RefreshCcw } from 'lucide-react'
 import { getPolicies, enablePolicy, disablePolicy, deletePolicy, createPolicy } from '@/lib/api'
@@ -126,7 +127,7 @@ function CreatePolicyModal({ onClose, onCreated }: { onClose: () => void; onCrea
       onCreated()
       onClose()
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail || 'Failed to create policy')
+      toast.error(extractErrorDetail(e, 'Failed to create policy'))
     } finally {
       setSubmitting(false)
     }

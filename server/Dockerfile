@@ -20,6 +20,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 COPY constraints.txt .
 
+# Make pip resilient to flaky networks — the ML stack downloads include
+# tensorflow (~475MB) and torch (~800MB). A read-timeout on one chunk
+# used to abort the entire build and wipe ~3 minutes of progress.
+#
+#   PIP_DEFAULT_TIMEOUT=600 → 10 minutes before pip gives up on a read
+#   PIP_RETRIES=10          → automatic retry of failed downloads
+ENV PIP_DEFAULT_TIMEOUT=600 \
+    PIP_RETRIES=10 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip==24.0 setuptools wheel && \
     pip install --no-cache-dir --constraint constraints.txt -r requirements.txt

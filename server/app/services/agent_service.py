@@ -234,7 +234,7 @@ class AgentService:
         await self.db.commit()
         return True
 
-    async def get_online_agents(self, threshold_minutes: int = 5) -> List[Agent]:
+    async def get_online_agents(self, threshold_minutes: int = 2) -> List[Agent]:
         """
         Get agents that have sent heartbeat within threshold
 
@@ -253,7 +253,7 @@ class AgentService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_offline_agents(self, threshold_minutes: int = 5) -> List[Agent]:
+    async def get_offline_agents(self, threshold_minutes: int = 2) -> List[Agent]:
         """
         Get agents that haven't sent heartbeat within threshold
 
@@ -272,7 +272,7 @@ class AgentService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def update_offline_agents(self, threshold_minutes: int = 5) -> int:
+    async def update_offline_agents(self, threshold_minutes: int = 2) -> int:
         """
         Mark agents as offline if they haven't sent heartbeat
 

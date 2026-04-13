@@ -23,8 +23,8 @@ from app.core.cache import get_cache, CacheService
 logger = structlog.get_logger()
 router = APIRouter()
 
-# Agent is considered dead if no heartbeat received in 5 minutes
-AGENT_TIMEOUT_MINUTES = 5
+# Agent is considered dead if no heartbeat received in 2 minutes
+AGENT_TIMEOUT_MINUTES = 2
 
 
 async def verify_agent_key(request: Request) -> Optional[str]:

@@ -35,8 +35,8 @@ async def get_dashboard_overview(
     # Total agents
     total_agents = await agents_collection.count_documents({})
 
-    # Active agents (agents with heartbeat within last 5 minutes)
-    AGENT_TIMEOUT_MINUTES = 5
+    # Active agents (agents with heartbeat within last 2 minutes)
+    AGENT_TIMEOUT_MINUTES = 2
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
     cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
 
@@ -129,8 +129,8 @@ async def get_agents_stats(
     db = get_mongodb()
     agents_collection = db["agents"]
 
-    # Agent is considered active if heartbeat within 5 minutes
-    AGENT_TIMEOUT_MINUTES = 5
+    # Agent is considered active if heartbeat within 2 minutes
+    AGENT_TIMEOUT_MINUTES = 2
     cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
     cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
 

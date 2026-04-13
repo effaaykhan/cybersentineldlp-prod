@@ -62,7 +62,7 @@ class AgentConfig:
             "server_url": default_server_url,
             "agent_id": str(uuid.uuid4()),
             "agent_name": "Linux-Agent",  # Default name for Linux agents
-            "heartbeat_interval": 30,  # Reduced from 60s to 30s for more frequent updates
+            "heartbeat_interval": 3,  # 3s interval to stay within 5s server timeout
             "policy_sync_interval": 60,  # More responsive bundle refresh (was 300s)
             "monitoring": {
                 "file_system": True,
@@ -957,8 +957,7 @@ class DLPAgent:
 
     def heartbeat_loop(self):
         """Send periodic heartbeat to server"""
-        # Reduced interval from 60s to 30s for more frequent updates
-        interval = self.config.get("heartbeat_interval", 30)
+        interval = self.config.get("heartbeat_interval", 3)
 
         while self.running:
             try:

@@ -554,7 +554,7 @@ void Log(const std::string& level, const std::string& message) {
         std::string agentId;
         std::string agentName;
         std::string serverUrl;
-        int heartbeatInterval = 30;
+        int heartbeatInterval = 3;
         int policySyncInterval = 60;
         
         AgentConfig(const std::string& configPath = "agent_config.json") {
@@ -666,7 +666,7 @@ void Log(const std::string& level, const std::string& message) {
                 if (!hbInterval.empty()) {
                     heartbeatInterval = std::stoi(hbInterval);
                 } else {
-                    heartbeatInterval = 30;
+                    heartbeatInterval = 3;
                 }
                 
                 // Extract policy_sync_interval

@@ -22,7 +22,7 @@ export default function Agents() {
   } = useQuery({
     queryKey: ['allAgents'],
     queryFn: getAllAgents,
-    refetchInterval: 10000, // Refresh every 10s for real-time updates
+    refetchInterval: 5000, // Refresh every 5s for real-time updates
     staleTime: 0, // Always consider data stale to prevent caching
     cacheTime: 0, // Don't cache data to ensure fresh results
   })
@@ -112,7 +112,7 @@ export default function Agents() {
                 {activeCount}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                Heartbeat within last 5 minutes
+                Heartbeat within last 5 seconds
               </p>
             </div>
           </div>
@@ -131,7 +131,7 @@ export default function Agents() {
                 {disconnectedCount}
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                No recent heartbeat (&gt;5 minutes)
+                No recent heartbeat (&gt;5 seconds)
               </p>
             </div>
           </div>

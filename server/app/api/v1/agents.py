@@ -23,8 +23,8 @@ from app.core.cache import get_cache, CacheService
 logger = structlog.get_logger()
 router = APIRouter()
 
-# Agent is considered dead if no heartbeat received in 2 minutes
-AGENT_TIMEOUT_MINUTES = 2
+# Agent is considered dead if no heartbeat received in 5 seconds
+AGENT_TIMEOUT_SECONDS = 5
 
 
 async def verify_agent_key(request: Request) -> Optional[str]:
@@ -115,9 +115,9 @@ async def list_agents(
     agents_collection = db["agents"]
 
     # Calculate cutoff time for active agents (timezone-aware UTC)
-    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
     # Also create a naive version for comparing with legacy naive datetimes in MongoDB
-    cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+    cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 
     # Build query filter - show agents with recent heartbeat (handle both aware and naive datetimes)
     query: Dict[str, Any] = {
@@ -171,8 +171,8 @@ async def list_all_agents(
     agents_collection = db["agents"]
 
     # Calculate cutoff time for active agents
-    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
-    cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
+    cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 
     # Get all agents
     agents_cursor = agents_collection.find({}).sort("last_seen", -1)
@@ -481,8 +481,8 @@ async def get_agents_summary(
     agents_collection = db["agents"]
 
     # Calculate cutoff time for active agents (handle both aware and naive datetimes)
-    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
-    cutoff_naive = datetime.utcnow() - timedelta(minutes=AGENT_TIMEOUT_MINUTES)
+    cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
+    cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 
     # Count active agents (have sent heartbeat within timeout)
     active = await agents_collection.count_documents({

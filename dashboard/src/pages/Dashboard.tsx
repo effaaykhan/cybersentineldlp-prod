@@ -56,7 +56,7 @@ export default function Dashboard() {
   const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
     queryKey: ['stats'],
     queryFn: getStats,
-    refetchInterval: 30000, // Refresh every 30s
+    refetchInterval: 5000, // Refresh every 5s
   })
 
   // Fetch time series data

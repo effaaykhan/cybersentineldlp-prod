@@ -22,14 +22,14 @@ export default function AgentsPage() {
   const { data: agents = [], isLoading, refetch } = useQuery({
     queryKey: ['agents'],
     queryFn: () => getAgents(),
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 5000, // Refresh every 5 seconds
   })
 
   // Fetch agent stats
   const { data: agentStats, refetch: refetchStats } = useQuery({
     queryKey: ['agent-stats'],
     queryFn: () => getAgentsStats(),
-    refetchInterval: 30000,
+    refetchInterval: 5000,
   })
 
   const stats = {

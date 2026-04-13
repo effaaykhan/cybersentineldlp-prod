@@ -234,17 +234,17 @@ class AgentService:
         await self.db.commit()
         return True
 
-    async def get_online_agents(self, threshold_minutes: int = 2) -> List[Agent]:
+    async def get_online_agents(self, threshold_seconds: int = 5) -> List[Agent]:
         """
         Get agents that have sent heartbeat within threshold
 
         Args:
-            threshold_minutes: Consider agent offline if no heartbeat in this many minutes
+            threshold_seconds: Consider agent offline if no heartbeat in this many seconds
 
         Returns:
             List of online Agent objects
         """
-        threshold_time = datetime.utcnow() - timedelta(minutes=threshold_minutes)
+        threshold_time = datetime.utcnow() - timedelta(seconds=threshold_seconds)
 
         query = select(Agent).where(
             Agent.last_heartbeat >= threshold_time
@@ -253,17 +253,17 @@ class AgentService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_offline_agents(self, threshold_minutes: int = 2) -> List[Agent]:
+    async def get_offline_agents(self, threshold_seconds: int = 5) -> List[Agent]:
         """
         Get agents that haven't sent heartbeat within threshold
 
         Args:
-            threshold_minutes: Consider agent offline if no heartbeat in this many minutes
+            threshold_seconds: Consider agent offline if no heartbeat in this many seconds
 
         Returns:
             List of offline Agent objects
         """
-        threshold_time = datetime.utcnow() - timedelta(minutes=threshold_minutes)
+        threshold_time = datetime.utcnow() - timedelta(seconds=threshold_seconds)
 
         query = select(Agent).where(
             Agent.last_heartbeat < threshold_time
@@ -272,17 +272,17 @@ class AgentService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def update_offline_agents(self, threshold_minutes: int = 2) -> int:
+    async def update_offline_agents(self, threshold_seconds: int = 5) -> int:
         """
         Mark agents as offline if they haven't sent heartbeat
 
         Args:
-            threshold_minutes: Consider agent offline if no heartbeat in this many minutes
+            threshold_seconds: Consider agent offline if no heartbeat in this many seconds
 
         Returns:
             Number of agents marked offline
         """
-        offline_agents = await self.get_offline_agents(threshold_minutes)
+        offline_agents = await self.get_offline_agents(threshold_seconds)
 
         count = 0
         for agent in offline_agents:

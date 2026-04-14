@@ -91,13 +91,33 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      auto now = std::chrono::system_clock::now();
      auto now_c = std::chrono::system_clock::to_time_t(now);
      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
-     
+
      std::tm tm_utc;
      gmtime_s(&tm_utc, &now_c);
-     
+
      std::ostringstream oss;
      oss << std::put_time(&tm_utc, "%Y-%m-%dT%H:%M:%S");
      oss << "." << std::setfill('0') << std::setw(3) << ms.count() << "Z";
+     return oss.str();
+ }
+
+ // Timestamp for LOG FILE lines, formatted in Asia/Kolkata (IST, UTC+5:30)
+ // regardless of system timezone. Event payloads sent to the server continue
+ // to use GetCurrentTimestampISO() which stays in UTC (backend contract).
+ std::string GetCurrentTimestampLocalIST() {
+     auto now = std::chrono::system_clock::now();
+     auto now_c = std::chrono::system_clock::to_time_t(now);
+     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+
+     // IST = UTC + 5h30m, hardcoded so we are timezone-independent.
+     now_c += (5 * 3600 + 30 * 60);
+
+     std::tm tm_ist;
+     gmtime_s(&tm_ist, &now_c);   // interpret shifted time_t as UTC fields
+
+     std::ostringstream oss;
+     oss << std::put_time(&tm_ist, "%Y-%m-%dT%H:%M:%S");
+     oss << "." << std::setfill('0') << std::setw(3) << ms.count() << "+05:30";
      return oss.str();
  }
  
@@ -503,8 +523,10 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
         
 void Log(const std::string& level, const std::string& message) {
     std::lock_guard<std::mutex> lock(logMutex);
-    
-    std::string timestamp = GetCurrentTimestampISO();
+
+    // Log timestamps use Asia/Kolkata (IST). Event payloads sent to the
+    // server continue to use UTC via GetCurrentTimestampISO().
+    std::string timestamp = GetCurrentTimestampLocalIST();
     std::string logMsg = timestamp + " - CyberSentinelAgent - " + level + " - " + message;
     
     // Only output to console if window is visible (not in background mode)
@@ -960,8 +982,12 @@ static ClassificationResult Classify(const std::string& content,
     // C++ std::regex uses ECMAScript — no lookbehind support
     // Use \b word boundaries and post-match digit-count validation instead
     if (mappedType == "aadhaar") {
-        // 12 digits in 4-4-4 format with space or dash separator (mandatory separator)
-        std::regex pattern(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)");
+        // 12 digits in 4-4-4 format with space or dash separator (mandatory separator).
+        // Negative lookahead (?![\s-]?\d) rejects the match when another digit
+        // follows (possibly after a separator), which means the 12-digit run
+        // is actually part of a 16-digit credit card number. Without this the
+        // Aadhaar regex falsely matches the first 12 digits of a credit card.
+        std::regex pattern(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b(?![\s-]?\d))");
         std::sregex_iterator iter(content.begin(), content.end(), pattern);
         std::sregex_iterator end;
         for (; iter != end && results.size() < 10; ++iter) {

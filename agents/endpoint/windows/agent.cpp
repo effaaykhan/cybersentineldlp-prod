@@ -2685,6 +2685,27 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      merged.insert(merged.end(), clipboardPolicies.begin(), clipboardPolicies.end());
                      merged.insert(merged.end(), usbPolicies.begin(),       usbPolicies.end());
                  }
+                 // Diagnostic: log merged policy count + all distinct data
+                 // types being checked. Helps verify why a classification
+                 // returned Public when it shouldn't have.
+                 {
+                     std::set<std::string> allTypes;
+                     int enabledCount = 0;
+                     for (const auto& p : merged) {
+                         if (p.enabled) ++enabledCount;
+                         for (const auto& dt : p.dataTypes) allTypes.insert(dt);
+                     }
+                     std::string typesStr;
+                     for (const auto& t : allTypes) {
+                         if (!typesStr.empty()) typesStr += ",";
+                         typesStr += t;
+                     }
+                     logger.Debug("network_exfil classify: merged=" +
+                                  std::to_string(merged.size()) +
+                                  " enabled=" + std::to_string(enabledCount) +
+                                  " content_bytes=" + std::to_string(content.size()) +
+                                  " data_types=[" + typesStr + "]");
+                 }
                  try {
                      ClassificationResult cr = ContentClassifier::Classify(content, merged, "");
                      // Translate existing severity buckets into the four-level
@@ -2699,6 +2720,14 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      out.score  = cr.score;
                      out.labels = cr.labels;
                      if (!cr.matchedPolicies.empty()) out.matchedRule = cr.matchedPolicies.front();
+
+                     // Diagnostic: show the raw classifier output so we can see
+                     // if policies matched but severity mapping left us on Public.
+                     logger.Debug("network_exfil classify: result severity='" +
+                                  cr.severity + "' matched_policies=" +
+                                  std::to_string(cr.matchedPolicies.size()) +
+                                  " labels=" + std::to_string(cr.labels.size()) +
+                                  " -> category=" + out.category);
                  } catch (...) {
                      // Leave result empty; monitor will treat as no-match
                  }

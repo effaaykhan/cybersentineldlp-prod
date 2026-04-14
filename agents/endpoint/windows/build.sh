@@ -28,10 +28,11 @@ echo ""
 
 # Compile the agent
 g++ -std=c++17 -O2 \
-    agent.cpp screen_capture_monitor.cpp print_monitor.cpp \
+    agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
     -o cybersentinel_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
-    -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool -static
+    -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \
+    -luiautomationcore -lpsapi -static
 
 # Check if compilation was successful
 if [ $? -eq 0 ]; then

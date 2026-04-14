@@ -38,6 +38,7 @@
  #include <chrono>
  #include "screen_capture_monitor.h"
  #include "print_monitor.h"
+ #include "network_exfil_monitor.h"
  #include <regex>
  #include <iomanip>
  #include <filesystem>
@@ -2656,6 +2657,72 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          printMonitor->Start();
          logger.Info("Print monitoring started");
 
+         // ── Network Exfiltration Monitor ──
+         // ISOLATED module. Callbacks bridge it to the existing classifier,
+         // event sender, and logger. Handles curl / wget / PowerShell /
+         // bitsadmin / certutil / python with pre-send blocking, and browser
+         // file-dialog selection with alert-only detection. No hooks installed
+         // in other processes; all monitoring happens via WMI and UIAutomation
+         // from within this agent process. See network_exfil_monitor.{h,cpp}.
+         {
+             NetworkExfilMonitor::Config nemCfg;
+             nemCfg.agentId   = config.agentId;
+             nemCfg.agentName = config.agentName;
+             nemCfg.username  = GetUsername();
+             nemCfg.hostname  = GetHostname();
+
+             nemCfg.classify = [this](const std::string& content,
+                                      const std::string& /*eventType*/) {
+                 NetworkExfilMonitor::ClassifyResult out;
+                 // Merge all policy lists so any active data-type policy can
+                 // match. Pass empty eventType so the classifier doesn't
+                 // filter by monitoredEvents (existing policies don't declare
+                 // "network_exfil" as a monitored event).
+                 std::vector<PolicyRule> merged;
+                 {
+                     std::lock_guard<std::mutex> lock(policiesMutex);
+                     merged.insert(merged.end(), filePolicies.begin(),      filePolicies.end());
+                     merged.insert(merged.end(), clipboardPolicies.begin(), clipboardPolicies.end());
+                     merged.insert(merged.end(), usbPolicies.begin(),       usbPolicies.end());
+                 }
+                 try {
+                     ClassificationResult cr = ContentClassifier::Classify(content, merged, "");
+                     // Translate existing severity buckets into the four-level
+                     // classification shape the monitor emits in events.
+                     const std::string& sev = cr.severity;
+                     if      (sev == "critical") out.category = "Restricted";
+                     else if (sev == "high")     out.category = "Confidential";
+                     else if (sev == "medium")   out.category = "Internal";
+                     else if (!cr.matchedPolicies.empty()) out.category = "Internal";
+                     else                        out.category = "Public";
+
+                     out.score  = cr.score;
+                     out.labels = cr.labels;
+                     if (!cr.matchedPolicies.empty()) out.matchedRule = cr.matchedPolicies.front();
+                 } catch (...) {
+                     // Leave result empty; monitor will treat as no-match
+                 }
+                 return out;
+             };
+
+             nemCfg.sendEvent = [this](const std::string& json) {
+                 SendEvent(json);
+             };
+
+             nemCfg.log = [this](const std::string& level, const std::string& msg) {
+                 if      (level == "DEBUG")   logger.Debug(msg);
+                 else if (level == "WARNING") logger.Warning(msg);
+                 else if (level == "ERROR")   logger.Error(msg);
+                 else                         logger.Info(msg);
+             };
+
+             if (NetworkExfilMonitor::Start(nemCfg)) {
+                 logger.Info("Network Exfiltration Monitor started");
+             } else {
+                 logger.Warning("Network Exfiltration Monitor did not start");
+             }
+         }
+
          logger.Info("Agent started successfully");
          logger.Info("Press Ctrl+C to stop the agent");
          
@@ -2669,7 +2736,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          
          logger.Info("Stopping agent...");
          running = false;
-         
+
+         // Shut down the isolated network exfil monitor before joining the
+         // DLPAgent worker threads so its background threads exit cleanly.
+         try { NetworkExfilMonitor::Stop(); } catch (...) {}
+
          try {
              UnregisterAgent();
          } catch (...) {

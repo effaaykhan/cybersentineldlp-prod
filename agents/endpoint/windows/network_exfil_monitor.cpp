@@ -192,7 +192,65 @@ std::string ResolveExistingPath(const std::string& candidate) {
     return {};
 }
 
-// Read up to maxBytes from a file. Returns empty string on failure.
+// Forward declarations (definitions appear later in this anonymous namespace).
+std::string Utf16LeToUtf8(const std::string& raw);
+
+// Normalize a byte buffer to UTF-8 text suitable for regex-based classifiers.
+// Handles UTF-16LE (common from PowerShell Out-File), UTF-16BE, UTF-8 BOM.
+// Falls through untouched for plain ASCII / UTF-8.
+//
+// This is essential on Windows because PowerShell's Out-File defaults to
+// UTF-16LE, which stores ASCII regex targets with a null byte between every
+// character - the classifier's patterns would never match.
+std::string NormalizeToUtf8(const std::string& raw) {
+    if (raw.size() >= 3 &&
+        (unsigned char)raw[0] == 0xEF &&
+        (unsigned char)raw[1] == 0xBB &&
+        (unsigned char)raw[2] == 0xBF) {
+        // UTF-8 BOM - strip it
+        return raw.substr(3);
+    }
+    if (raw.size() >= 2 &&
+        (unsigned char)raw[0] == 0xFF &&
+        (unsigned char)raw[1] == 0xFE) {
+        // UTF-16LE BOM
+        std::string payload = raw.substr(2);
+        std::string converted = Utf16LeToUtf8(payload);
+        return converted.empty() ? raw : converted;
+    }
+    if (raw.size() >= 2 &&
+        (unsigned char)raw[0] == 0xFE &&
+        (unsigned char)raw[1] == 0xFF) {
+        // UTF-16BE BOM - swap bytes then treat as LE
+        std::string swapped;
+        swapped.reserve(raw.size());
+        for (size_t i = 2; i + 1 < raw.size(); i += 2) {
+            swapped.push_back(raw[i + 1]);
+            swapped.push_back(raw[i]);
+        }
+        std::string converted = Utf16LeToUtf8(swapped);
+        return converted.empty() ? raw : converted;
+    }
+
+    // Heuristic UTF-16LE without BOM: many ASCII-looking bytes at even
+    // offsets with null bytes at odd offsets. Common in Windows exports
+    // that skip the BOM.
+    if (raw.size() >= 16 && (raw.size() % 2 == 0)) {
+        size_t nulOdd = 0;
+        size_t checked = std::min<size_t>(raw.size(), 256);
+        for (size_t i = 1; i < checked; i += 2) {
+            if (raw[i] == '\0') nulOdd++;
+        }
+        if (nulOdd * 4 >= checked) {         // >= ~50% null at odd offsets
+            std::string converted = Utf16LeToUtf8(raw);
+            if (!converted.empty()) return converted;
+        }
+    }
+
+    return raw;
+}
+
+// Read up to maxBytes from a file and normalize to UTF-8. Returns empty on failure.
 std::string ReadFileSafely(const std::string& path, size_t maxBytes) {
     try {
         std::ifstream f(path, std::ios::binary);
@@ -205,7 +263,7 @@ std::string ReadFileSafely(const std::string& path, size_t maxBytes) {
         std::string buf;
         buf.resize(toRead);
         if (toRead > 0) f.read(buf.data(), toRead);
-        return buf;
+        return NormalizeToUtf8(buf);
     } catch (...) {
         return {};
     }

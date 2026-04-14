@@ -83,26 +83,48 @@ The executable should be around 3-4 MB.
 ## Deploying the Agent
 
 ### Option 1: Update Existing Installation
-1. Stop the Windows service:
+
+> The agent runs as a **Scheduled Task** named `CyberSentinel DLP Agent`
+> (not a Windows service). The task is configured with `RestartCount 999`,
+> so you must stop the task *before* killing the process, otherwise the
+> Task Scheduler will restart it within 1 minute.
+
+1. Stop the scheduled task (prevents auto-restart):
    ```powershell
-   Stop-Service CyberSentinelAgent -Force
+   Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
    ```
 
-2. Backup old executable:
+2. Kill any remaining agent process:
+   ```powershell
+   Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+   ```
+
+3. Verify no agent process is still running:
+   ```powershell
+   Get-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
+   # (output should be empty)
+   ```
+
+4. Backup old executable:
    ```powershell
    Copy-Item "C:\Program Files\CyberSentinel\cybersentinel_agent.exe" `
-             "C:\Program Files\CyberSentinel\cybersentinel_agent.exe.backup"
+             "C:\Program Files\CyberSentinel\cybersentinel_agent.exe.backup" -Force
    ```
 
-3. Replace with new executable:
+5. Replace with new executable:
    ```powershell
    Copy-Item "path\to\cybersentinel_agent.exe" `
              "C:\Program Files\CyberSentinel\cybersentinel_agent.exe" -Force
    ```
 
-4. Start the service:
+6. Start the scheduled task:
    ```powershell
-   Start-Service CyberSentinelAgent
+   Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+   ```
+
+7. Verify exactly one agent process is running:
+   ```powershell
+   Get-Process -Name "cybersentinel_agent"
    ```
 
 ### Option 2: re-run the canonical one-liner installer
@@ -216,8 +238,9 @@ After deployment, verify the new functionality is working:
 If you need to rollback to the previous version:
 
 ```powershell
-Stop-Service CyberSentinelAgent -Force
+Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
 Copy-Item "C:\Program Files\CyberSentinel\cybersentinel_agent.exe.backup" `
           "C:\Program Files\CyberSentinel\cybersentinel_agent.exe" -Force
-Start-Service CyberSentinelAgent
+Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 ```

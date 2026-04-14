@@ -79,45 +79,59 @@ New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\logs" -Force
 New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\cache" -Force
 ```
 
-## Step 6: Install NSSM (service manager)
+## Step 6: Register as a Scheduled Task (canonical method)
 
-Download NSSM from https://nssm.cc/download or use Chocolatey:
+> **Recommended:** use the one-liner installer which performs all of steps 3–7
+> automatically, including SHA-256 verification of the downloaded binary:
+>
+> ```powershell
+> powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
+> ```
 
-```powershell
-choco install nssm -y
-```
-
-## Step 7: Register as Windows service
-
-```powershell
-nssm install CyberSentinelAgent "C:\Program Files\CyberSentinel\cybersentinel_agent.exe"
-nssm set CyberSentinelAgent AppDirectory "C:\Program Files\CyberSentinel"
-nssm set CyberSentinelAgent DisplayName "CyberSentinel DLP Agent"
-nssm set CyberSentinelAgent Description "Endpoint Data Loss Prevention Agent"
-nssm set CyberSentinelAgent Start SERVICE_AUTO_START
-nssm set CyberSentinelAgent AppStdout "C:\ProgramData\CyberSentinel\logs\agent_stdout.log"
-nssm set CyberSentinelAgent AppStderr "C:\ProgramData\CyberSentinel\logs\agent_stderr.log"
-nssm set CyberSentinelAgent AppRotateFiles 1
-nssm set CyberSentinelAgent AppRotateBytes 10485760
-nssm set CyberSentinelAgent AppRestartDelay 5000
-nssm set CyberSentinelAgent ObjectName LocalSystem
-```
-
-## Step 8: Start the service
+If you are registering manually, create a scheduled task named
+`CyberSentinel DLP Agent`. The task runs the agent at user logon and at
+system startup with elevated privileges, and auto-restarts on crash.
 
 ```powershell
-nssm start CyberSentinelAgent
+$agentExe  = "C:\Program Files\CyberSentinel\cybersentinel_agent.exe"
+$launchVbs = "C:\Program Files\CyberSentinel\launch_agent.vbs"
+
+# VBScript launcher hides the console window
+@'
+Set objShell = CreateObject("WScript.Shell")
+objShell.Run """C:\Program Files\CyberSentinel\cybersentinel_agent.exe""", 0, False
+'@ | Out-File -FilePath $launchVbs -Encoding ASCII
+
+$action    = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$launchVbs`""
+$trigger1  = New-ScheduledTaskTrigger -AtLogOn
+$trigger2  = New-ScheduledTaskTrigger -AtStartup
+$trigger2.Delay = "PT30S"
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -RunLevel Highest
+$settings  = New-ScheduledTaskSettingsSet `
+                -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+                -MultipleInstances IgnoreNew
+
+Register-ScheduledTask -TaskName "CyberSentinel DLP Agent" `
+    -Action $action -Trigger @($trigger1, $trigger2) `
+    -Principal $principal -Settings $settings
 ```
 
-Verify it is running:
+## Step 7: Start the scheduled task
 
 ```powershell
-nssm status CyberSentinelAgent
+Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 ```
 
-Expected output: `SERVICE_RUNNING`
+Verify the process is running:
 
-## Step 9: Verify registration
+```powershell
+Get-Process -Name "cybersentinel_agent"
+```
+
+You should see **exactly one** `cybersentinel_agent` process.
+
+## Step 8: Verify registration
 
 The agent automatically registers with the server on first start. Check the server dashboard or API:
 
@@ -127,7 +141,7 @@ curl http://<SERVER_IP>:55000/api/v1/agents/
 
 Your agent should appear with status `active`.
 
-## Step 10: Verify monitoring
+## Step 9: Verify monitoring
 
 1. Copy a test file to a USB drive -- the agent should detect and report it
 2. Copy sensitive text (e.g., a fake SSN `123-45-6789`) to clipboard -- should be detected
@@ -161,27 +175,41 @@ rundll32.exe setupapi.dll,InstallHinfSection DefaultInstall 132 C:\Windows\INF\c
 fltmc load CyberSentinelFilter
 ```
 
-## Service Management
+## Agent Management
+
+> The task is configured with `RestartCount 999`. Always
+> `Stop-ScheduledTask` **before** killing the process — otherwise the
+> Task Scheduler will restart it within 1 minute.
 
 ```powershell
-# Stop the agent
-nssm stop CyberSentinelAgent
+# Stop the agent (must stop task first, then process)
+Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
 
-# Restart the agent
-nssm restart CyberSentinelAgent
+# Start the agent
+Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 
-# View logs
-Get-Content "C:\ProgramData\CyberSentinel\logs\agent_stdout.log" -Tail 50
+# Restart (stop + start)
+Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 
-# Check agent status
-nssm status CyberSentinelAgent
+# View status (should show exactly one process)
+Get-Process -Name "cybersentinel_agent"
+
+# View task state
+Get-ScheduledTask -TaskName "CyberSentinel DLP Agent" | Get-ScheduledTaskInfo
+
+# Tail logs
+Get-Content "C:\Program Files\CyberSentinel\cybersentinel_agent.log" -Tail 50 -Wait
 ```
 
 ## Uninstall
 
 ```powershell
-nssm stop CyberSentinelAgent
-nssm remove CyberSentinelAgent confirm
+Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent" -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "CyberSentinel DLP Agent" -Confirm:$false
 Remove-Item "C:\Program Files\CyberSentinel" -Recurse -Force
 # Optionally remove data:
 Remove-Item "C:\ProgramData\CyberSentinel" -Recurse -Force
@@ -192,7 +220,8 @@ Remove-Item "C:\ProgramData\CyberSentinel" -Recurse -Force
 | Issue | Solution |
 |-------|----------|
 | Agent not registering | Check firewall allows outbound to port 55000 |
-| Service crashes on start | Check `agent_config.json` is valid JSON, verify server URL |
+| Agent crashes on start | Check `agent_config.json` is valid JSON, verify server URL |
+| Two `cybersentinel_agent` processes running | Zombie from previous run — `Stop-ScheduledTask` first, then `Stop-Process -Force`, verify empty, then `Start-ScheduledTask` |
 | USB events not detected | Ensure `usb_devices: true` in config, agent must run as SYSTEM |
 | No events in dashboard | Check agent logs in `C:\ProgramData\CyberSentinel\logs\` |
 | Policy sync failing | Verify server is reachable, check API key in agent logs |

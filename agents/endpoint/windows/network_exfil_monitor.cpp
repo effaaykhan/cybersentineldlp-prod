@@ -26,8 +26,12 @@
 #ifndef _UNICODE
 #define _UNICODE
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 
 #include <windows.h>
 #include <winternl.h>
@@ -58,6 +62,30 @@
 // Note: libs are provided via build.sh (-lwbemuuid -lole32 -loleaut32
 // -luiautomationcore -ladvapi32 -lshell32 -luser32 -lpsapi). MSVC #pragma
 // comment(lib,...) pragmas are intentionally omitted to stay MinGW-friendly.
+
+// -----------------------------------------------------------------------------
+// UIAutomation GUID definitions for MinGW-w64.
+//
+// MinGW's libuiautomationcore.a only contains function stubs - the CLSID/IID
+// constants for UIAutomation are declared via `EXTERN_C const IID ...;` in the
+// headers but NOT defined in any MinGW-provided library (unlike MSVC, where
+// uiautomationcore.lib provides them). Providing them here lets our TU link
+// cleanly. The GUIDs are stable Microsoft-published values.
+// -----------------------------------------------------------------------------
+extern "C" {
+    const CLSID CLSID_CUIAutomation =
+        { 0xFF48DBA4, 0x60EF, 0x4201,
+          { 0xAA, 0x87, 0x54, 0x10, 0x3E, 0xEF, 0x59, 0x4E } };
+    const IID   IID_IUIAutomation =
+        { 0x30CBE57D, 0xD9D0, 0x452A,
+          { 0xAB, 0x13, 0x7A, 0xC5, 0xAC, 0x48, 0x25, 0xEE } };
+    const IID   IID_IUIAutomationEventHandler =
+        { 0x146C3C17, 0xF12E, 0x4E22,
+          { 0x8C, 0x27, 0xF8, 0x94, 0xB9, 0xB7, 0x9C, 0x69 } };
+    const IID   IID_IUIAutomationValuePattern =
+        { 0xA94CD8FE, 0x0D17, 0x4D8F,
+          { 0xBD, 0xB2, 0x0B, 0x4F, 0x99, 0x5F, 0x82, 0x2F } };
+}
 
 namespace fs = std::filesystem;
 

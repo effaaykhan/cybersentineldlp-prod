@@ -1515,4 +1515,222 @@ bool IsRunning() {
     return g_running.load();
 }
 
+// =============================================================================
+// Dedicated Network-Exfil Content Classifier
+//
+// Independent from ContentClassifier / ExtractDataType. Has its own regex
+// patterns, its own Luhn validation for credit cards, its own severity map.
+// Designed so that clipboard / USB / file / screen-capture detection remains
+// absolutely unchanged (zero shared state, zero shared regex).
+//
+// Precedence: credit card is evaluated BEFORE Aadhaar, and Aadhaar only
+// matches when NOT part of a longer digit sequence (negative lookahead).
+// This resolves the historical aadhaar/credit-card collision locally
+// without touching the shared engine used by other modules.
+// =============================================================================
+namespace {
+
+// Luhn checksum validator (credit cards).
+bool NxLuhn(const std::string& s) {
+    std::string d;
+    for (char c : s) if (c >= '0' && c <= '9') d += c;
+    if (d.size() < 13 || d.size() > 19) return false;
+    int sum = 0; bool alt = false;
+    for (int i = (int)d.size() - 1; i >= 0; --i) {
+        int x = d[i] - '0';
+        if (alt) { x *= 2; if (x > 9) x -= 9; }
+        sum += x;
+        alt = !alt;
+    }
+    return (sum % 10) == 0;
+}
+
+// Returns the first N bytes of s, for safe logging / preview.
+std::string NxTrim(const std::string& s, size_t n = 64) {
+    return s.size() <= n ? s : s.substr(0, n) + "...";
+}
+
+// Run all detectors, return list of {type, sample} pairs.
+struct NxItem { std::string type; std::string sample; };
+
+std::vector<NxItem> NxDetectAll(const std::string& content) {
+    std::vector<NxItem> items;
+    if (content.empty()) return items;
+
+    auto pushUnique = [&](const std::string& type, const std::string& sample) {
+        for (const auto& it : items) if (it.type == type) return;
+        items.push_back({type, NxTrim(sample)});
+    };
+
+    // ---- CREDIT_CARD (evaluated first; Luhn-validated) --------------------
+    try {
+        std::regex rx(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        for (; it != end; ++it) {
+            std::string m = it->str();
+            std::string d; for (char c : m) if (c >= '0' && c <= '9') d += c;
+            if (d.size() == 16 && NxLuhn(m)) {
+                pushUnique("CREDIT_CARD", m);
+                break;
+            }
+        }
+    } catch (...) {}
+
+    // ---- AADHAAR (negative lookahead to reject credit-card prefixes) ------
+    // Valid Aadhaar: standalone 4-4-4 digits. Reject if followed by another
+    // digit group (which would mean it's actually the start of a 16-digit card).
+    try {
+        std::regex rx(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b(?![\s-]?\d))");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        for (; it != end; ++it) {
+            std::string m = it->str();
+            std::string d; for (char c : m) if (c >= '0' && c <= '9') d += c;
+            if (d.size() == 12) { pushUnique("AADHAAR", m); break; }
+        }
+    } catch (...) {}
+
+    // ---- PAN (Indian Permanent Account Number: 5 letters, 4 digits, 1 letter)
+    try {
+        std::regex rx(R"(\b[A-Z]{5}\d{4}[A-Z]\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("PAN", it->str());
+    } catch (...) {}
+
+    // ---- IFSC (Indian bank branch code: 4 letters, 0, 6 alnum) ------------
+    try {
+        std::regex rx(R"(\b[A-Z]{4}0[A-Z0-9]{6}\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("IFSC", it->str());
+    } catch (...) {}
+
+    // ---- SSN (US Social Security Number) ----------------------------------
+    try {
+        std::regex rx(R"(\b\d{3}-\d{2}-\d{4}\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("SSN", it->str());
+    } catch (...) {}
+
+    // ---- INDIAN_PHONE (+91, leading 0, or bare 10 digits 6-9) ------------
+    try {
+        std::regex rx(R"((?:\+91[\s.-]?|0)?[6-9]\d{4}[\s.-]?\d{5})");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        for (; it != end; ++it) {
+            std::string m = it->str();
+            std::string d; for (char c : m) if (c >= '0' && c <= '9') d += c;
+            if (d.size() >= 10 && d.size() <= 12) {
+                pushUnique("INDIAN_PHONE", m);
+                break;
+            }
+        }
+    } catch (...) {}
+
+    // ---- US_PHONE (requires separators to avoid matching random 10 digits)
+    try {
+        std::regex rx(R"((?:\+?1[\s.-])?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4})");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        for (; it != end; ++it) {
+            std::string m = it->str();
+            std::string d; for (char c : m) if (c >= '0' && c <= '9') d += c;
+            if (d.size() >= 10 && d.size() <= 11) {
+                pushUnique("US_PHONE", m);
+                break;
+            }
+        }
+    } catch (...) {}
+
+    // ---- EMAIL -------------------------------------------------------------
+    try {
+        std::regex rx(R"(\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("EMAIL", it->str());
+    } catch (...) {}
+
+    // ---- AWS_KEY (access key id: AKIA / ASIA / AIDA / AROA + 16 alnum) ----
+    try {
+        std::regex rx(R"(\b(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{16}\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("AWS_KEY", it->str());
+    } catch (...) {}
+
+    // ---- PRIVATE_KEY (PEM header) -----------------------------------------
+    try {
+        std::regex rx(R"(-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("PRIVATE_KEY", "<PEM private key header>");
+    } catch (...) {}
+
+    // ---- JWT_TOKEN (header.payload.signature, base64url segments) --------
+    try {
+        std::regex rx(R"(\bey[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("JWT_TOKEN", "<jwt>");
+    } catch (...) {}
+
+    // ---- UPI_ID (Indian UPI handle - PSP-scoped only to avoid email FPs) -
+    try {
+        std::regex rx(
+            R"(\b[a-zA-Z0-9._\-]{3,}@(?:okaxis|okhdfcbank|okicici|oksbi|paytm|ybl|ibl|axl|upi|apl|airtel|fam|jupiteraxis|idfcbank|yesbank|kotak|federal|timecosmos|sbi)\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("UPI_ID", it->str());
+    } catch (...) {}
+
+    // ---- INDIAN_PASSPORT (one letter + 7 digits) --------------------------
+    try {
+        std::regex rx(R"(\b[A-PR-WYa-pr-wy][0-9]{7}\b)");
+        std::sregex_iterator it(content.begin(), content.end(), rx), end;
+        if (it != end) pushUnique("INDIAN_PASSPORT", it->str());
+    } catch (...) {}
+
+    return items;
+}
+
+// Map a detected type to our four-level category.
+int NxTypeSeverity(const std::string& type) {   // 0=Public, 3=Restricted
+    static const std::unordered_map<std::string, int> sev = {
+        // Critical PII / credentials - Restricted
+        {"CREDIT_CARD",     3}, {"AADHAAR",      3}, {"PAN",             3},
+        {"SSN",             3}, {"AWS_KEY",      3}, {"PRIVATE_KEY",     3},
+        {"INDIAN_PASSPORT", 3},
+        // Sensitive but less critical - Confidential
+        {"JWT_TOKEN",       2}, {"IFSC",         2}, {"INDIAN_PHONE",    2},
+        {"UPI_ID",          2},
+        // Lower sensitivity - Internal
+        {"US_PHONE",        1}, {"EMAIL",        1},
+    };
+    auto it = sev.find(type);
+    return it == sev.end() ? 0 : it->second;
+}
+
+} // anonymous namespace
+
+ClassifyResult ClassifyNetworkContent(const std::string& content) {
+    ClassifyResult out;
+    std::vector<NxItem> items = NxDetectAll(content);
+
+    int best = 0;
+    for (const auto& d : items) {
+        out.labels.push_back(d.type);
+        int s = NxTypeSeverity(d.type);
+        if (s > best) best = s;
+    }
+    switch (best) {
+        case 3: out.category = "Restricted";   out.score = 0.95; break;
+        case 2: out.category = "Confidential"; out.score = 0.85; break;
+        case 1: out.category = "Internal";     out.score = 0.50; break;
+        default: out.category = "Public";      out.score = 0.00; break;
+    }
+    // matchedRule carries the highest-severity specific type so the dashboard
+    // can show e.g. "CREDIT_CARD" or "AADHAAR" instead of a policy UUID.
+    if (!items.empty()) {
+        std::string top;
+        int topSev = -1;
+        for (const auto& d : items) {
+            int s = NxTypeSeverity(d.type);
+            if (s > topSev) { topSev = s; top = d.type; }
+        }
+        out.matchedRule = top;
+    }
+    return out;
+}
+
 } // namespace NetworkExfilMonitor

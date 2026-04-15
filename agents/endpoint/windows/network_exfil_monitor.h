@@ -71,4 +71,17 @@ void Stop();
 // True if Start() has been called and Stop() has not yet been invoked.
 bool IsRunning();
 
+// -----------------------------------------------------------------------------
+// Dedicated classifier for network-exfil content.
+//
+// DOES NOT depend on the shared ContentClassifier / ExtractDataType engine.
+// Has its own regex patterns, Luhn validation, and severity mapping so we
+// cannot affect clipboard / USB / screen-capture / file-monitor logic.
+//
+// Produces specific canonical labels (AADHAAR, CREDIT_CARD, PAN, SSN,
+// INDIAN_PHONE, US_PHONE, IFSC, EMAIL, AWS_KEY, PRIVATE_KEY, JWT_TOKEN,
+// UPI_ID) so the dashboard displays the right data type.
+// -----------------------------------------------------------------------------
+ClassifyResult ClassifyNetworkContent(const std::string& content);
+
 } // namespace NetworkExfilMonitor

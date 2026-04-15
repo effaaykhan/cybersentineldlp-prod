@@ -982,12 +982,8 @@ static ClassificationResult Classify(const std::string& content,
     // C++ std::regex uses ECMAScript — no lookbehind support
     // Use \b word boundaries and post-match digit-count validation instead
     if (mappedType == "aadhaar") {
-        // 12 digits in 4-4-4 format with space or dash separator (mandatory separator).
-        // Negative lookahead (?![\s-]?\d) rejects the match when another digit
-        // follows (possibly after a separator), which means the 12-digit run
-        // is actually part of a 16-digit credit card number. Without this the
-        // Aadhaar regex falsely matches the first 12 digits of a credit card.
-        std::regex pattern(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b(?![\s-]?\d))");
+        // 12 digits in 4-4-4 format with space or dash separator (mandatory separator)
+        std::regex pattern(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)");
         std::sregex_iterator iter(content.begin(), content.end(), pattern);
         std::sregex_iterator end;
         for (; iter != end && results.size() < 10; ++iter) {
@@ -2699,64 +2695,24 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
              nemCfg.classify = [this](const std::string& content,
                                       const std::string& /*eventType*/) {
-                 NetworkExfilMonitor::ClassifyResult out;
-                 // Merge all policy lists so any active data-type policy can
-                 // match. Pass empty eventType so the classifier doesn't
-                 // filter by monitoredEvents (existing policies don't declare
-                 // "network_exfil" as a monitored event).
-                 std::vector<PolicyRule> merged;
-                 {
-                     std::lock_guard<std::mutex> lock(policiesMutex);
-                     merged.insert(merged.end(), filePolicies.begin(),      filePolicies.end());
-                     merged.insert(merged.end(), clipboardPolicies.begin(), clipboardPolicies.end());
-                     merged.insert(merged.end(), usbPolicies.begin(),       usbPolicies.end());
-                 }
-                 // Diagnostic: log merged policy count + all distinct data
-                 // types being checked. Helps verify why a classification
-                 // returned Public when it shouldn't have.
-                 {
-                     std::set<std::string> allTypes;
-                     int enabledCount = 0;
-                     for (const auto& p : merged) {
-                         if (p.enabled) ++enabledCount;
-                         for (const auto& dt : p.dataTypes) allTypes.insert(dt);
-                     }
-                     std::string typesStr;
-                     for (const auto& t : allTypes) {
-                         if (!typesStr.empty()) typesStr += ",";
-                         typesStr += t;
-                     }
-                     logger.Debug("network_exfil classify: merged=" +
-                                  std::to_string(merged.size()) +
-                                  " enabled=" + std::to_string(enabledCount) +
-                                  " content_bytes=" + std::to_string(content.size()) +
-                                  " data_types=[" + typesStr + "]");
-                 }
-                 try {
-                     ClassificationResult cr = ContentClassifier::Classify(content, merged, "");
-                     // Translate existing severity buckets into the four-level
-                     // classification shape the monitor emits in events.
-                     const std::string& sev = cr.severity;
-                     if      (sev == "critical") out.category = "Restricted";
-                     else if (sev == "high")     out.category = "Confidential";
-                     else if (sev == "medium")   out.category = "Internal";
-                     else if (!cr.matchedPolicies.empty()) out.category = "Internal";
-                     else                        out.category = "Public";
+                 // Use the DEDICATED network-exfil classifier. It has its own
+                 // regex patterns, Luhn validation, and canonical labels, and
+                 // does NOT touch ContentClassifier / ExtractDataType - so
+                 // clipboard / USB / file / screen-capture classification
+                 // logic remains completely unchanged.
+                 NetworkExfilMonitor::ClassifyResult out =
+                     NetworkExfilMonitor::ClassifyNetworkContent(content);
 
-                     out.score  = cr.score;
-                     out.labels = cr.labels;
-                     if (!cr.matchedPolicies.empty()) out.matchedRule = cr.matchedPolicies.front();
-
-                     // Diagnostic: show the raw classifier output so we can see
-                     // if policies matched but severity mapping left us on Public.
-                     logger.Debug("network_exfil classify: result severity='" +
-                                  cr.severity + "' matched_policies=" +
-                                  std::to_string(cr.matchedPolicies.size()) +
-                                  " labels=" + std::to_string(cr.labels.size()) +
-                                  " -> category=" + out.category);
-                 } catch (...) {
-                     // Leave result empty; monitor will treat as no-match
+                 std::string labelStr;
+                 for (const auto& l : out.labels) {
+                     if (!labelStr.empty()) labelStr += ",";
+                     labelStr += l;
                  }
+                 logger.Debug("network_exfil classify: content_bytes=" +
+                              std::to_string(content.size()) +
+                              " detected=[" + labelStr + "]" +
+                              " top=" + (out.matchedRule.empty() ? "none" : out.matchedRule) +
+                              " -> category=" + out.category);
                  return out;
              };
 

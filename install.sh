@@ -200,13 +200,10 @@ fi
 # ─── 9. Print connection details ──────────────────────────────────────
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
 
-# Try to extract the bootstrap admin password the manager logs on first run.
-ADMIN_PASS=""
-if command -v docker >/dev/null 2>&1; then
-    ADMIN_PASS=$(docker logs cybersentinel-manager 2>&1 \
-        | grep -m1 'generated_password' \
-        | sed -n 's/.*"generated_password": *"\([^"]*\)".*/\1/p' || true)
-fi
+# Admin bootstrap password is fixed: Admin@1234.
+# Operators are expected to change it after first login via
+# Settings -> Profile -> Change Password.
+ADMIN_PASS="Admin@1234"
 
 echo
 c_green "================================================================"
@@ -238,13 +235,8 @@ c_yellow "        for that purpose."
 echo
 c_blue "First-login credentials:"
 echo "  Username : admin"
-if [ -n "${ADMIN_PASS}" ]; then
-    echo "  Password : ${ADMIN_PASS}"
-else
-    echo "  Password : (run the command below to read it from the manager log)"
-    echo "             docker logs cybersentinel-manager 2>&1 | grep generated_password"
-fi
-c_yellow "  → Change this password on first login (Settings → Profile → Change Password)."
+echo "  Password : ${ADMIN_PASS}"
+c_yellow "  → Change this password after first login (Settings → Profile → Change Password)."
 echo
 c_blue "Database tier (internal-only — no host port binding):"
 echo "  postgres / mongodb / redis / opensearch are reachable only on the"

@@ -39,8 +39,6 @@ async def _auto_init_schema_and_admin():
     Safe to call from multiple uvicorn workers simultaneously — uses
     INSERT … ON CONFLICT to avoid duplicate-key errors from race conditions.
     """
-    import secrets
-    import string
     from sqlalchemy import text
     from app.core.security import get_password_hash
 
@@ -77,28 +75,27 @@ async def _auto_init_schema_and_admin():
             )
             user_count = result.scalar()
             if user_count == 0:
-                # Generate a cryptographically secure random password
-                alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
-                admin_password = ''.join(secrets.choice(alphabet) for _ in range(20))
+                # Fixed default password. Operators are expected to change it
+                # after first login via Settings -> Profile -> Change Password.
+                # Must meet the app's password policy (>=8 chars, letters+digits+symbol).
+                admin_password = "Admin@1234"
                 hashed = get_password_hash(admin_password)
                 await session.execute(
                     text(
                         "INSERT INTO users (id, email, hashed_password, full_name, role, organization, "
                         "is_active, is_verified, must_change_password, created_at, updated_at) "
                         "VALUES (gen_random_uuid(), 'admin', :pw, 'Administrator', 'ADMIN', 'CyberSentinel', "
-                        "TRUE, TRUE, TRUE, NOW(), NOW()) "
+                        "TRUE, TRUE, FALSE, NOW(), NOW()) "
                         "ON CONFLICT (email) DO NOTHING"
                     ),
                     {"pw": hashed},
                 )
                 await session.commit()
-                # Log password once so admin can retrieve it from startup logs.
-                # In production, pipe logs to a secure log aggregator.
                 logger.warning(
-                    "DEFAULT ADMIN CREATED — change this password immediately",
+                    "DEFAULT ADMIN CREATED — change this password after first login",
                     username="admin",
-                    generated_password=admin_password,
-                    must_change_password=True,
+                    default_password=admin_password,
+                    must_change_password=False,
                 )
             else:
                 logger.info("Users table already populated, skipping admin seed")

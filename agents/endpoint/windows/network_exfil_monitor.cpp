@@ -1576,16 +1576,38 @@ std::vector<NxItem> NxDetectAll(const std::string& content) {
         }
     } catch (...) {}
 
-    // ---- AADHAAR (negative lookahead to reject credit-card prefixes) ------
-    // Valid Aadhaar: standalone 4-4-4 digits. Reject if followed by another
-    // digit group (which would mean it's actually the start of a 16-digit card).
+    // ---- AADHAAR (negative lookahead + manual lookbehind) -----------------
+    // A real Aadhaar is a standalone 4-4-4 digit string. We must reject the
+    // match when it is actually the head OR the tail of a longer digit run
+    // (e.g. a 16-digit credit card that failed Luhn).
+    //
+    // Negative lookahead ?![\s-]?\d  handles the HEAD-of-a-longer-number case.
+    // std::regex does not support lookbehind, so the TAIL-of-a-longer-number
+    // case is handled manually below by inspecting the bytes immediately
+    // before the match position.
     try {
         std::regex rx(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b(?![\s-]?\d))");
         std::sregex_iterator it(content.begin(), content.end(), rx), end;
         for (; it != end; ++it) {
             std::string m = it->str();
             std::string d; for (char c : m) if (c >= '0' && c <= '9') d += c;
-            if (d.size() == 12) { pushUnique("AADHAAR", m); break; }
+            if (d.size() != 12) continue;
+
+            // Manual lookbehind: reject if preceded by  <digit>  or
+            // <digit><sep>  -- i.e. we are sitting inside a larger run like a
+            // 16-digit card number. \b in the regex guarantees the byte at
+            // pos-1 (if any) is non-word, so we only need to handle:
+            //   pos-1 = separator AND pos-2 = digit  -> reject.
+            size_t pos = static_cast<size_t>(it->position());
+            if (pos >= 2) {
+                char c1 = content[pos - 1];
+                if (c1 == '-' || c1 == ' ' || c1 == '\t' || c1 == '.') {
+                    char c2 = content[pos - 2];
+                    if (c2 >= '0' && c2 <= '9') continue;   // REJECT
+                }
+            }
+            pushUnique("AADHAAR", m);
+            break;
         }
     } catch (...) {}
 

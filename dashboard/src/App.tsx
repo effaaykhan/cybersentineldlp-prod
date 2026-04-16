@@ -3,6 +3,7 @@ import { Toaster } from 'react-hot-toast'
 import { useAuthStore } from './lib/store/auth'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import SSOCallback from './pages/SSOCallback'
 import Dashboard from './pages/Dashboard'
 import Agents from './pages/Agents'
 import Events from './pages/Events'
@@ -20,6 +21,7 @@ function App() {
     <>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/auth/sso" element={<SSOCallback />} />
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />

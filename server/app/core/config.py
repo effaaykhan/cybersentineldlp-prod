@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     PASSWORD_MIN_LENGTH: int = 7
 
+    # SSO — shared secret for verifying exchange tokens from the SIEM.
+    # If empty/unset, the /auth/sso/exchange endpoint returns 503 (SSO disabled).
+    # This is NOT the same as SECRET_KEY. The SIEM signs its exchange token
+    # with DLP_SSO_SECRET; the DLP verifies it with DLP_SSO_SECRET then issues
+    # its own tokens signed with SECRET_KEY.
+    DLP_SSO_SECRET: str = Field(default="")
+
     # CORS
     # NOTE: Pydantic Settings parses list fields from env as JSON only. To support both:
     # - JSON list strings (recommended) AND

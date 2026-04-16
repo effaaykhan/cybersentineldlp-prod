@@ -1,6 +1,6 @@
 """
 Authentication API Endpoints
-User login, registration, token refresh
+User login, registration, token refresh, SSO exchange
 """
 
 from datetime import datetime, timedelta
@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
+from jose import jwt as jose_jwt, JWTError, ExpiredSignatureError
 import structlog
 
 from app.core.security import (
@@ -381,3 +382,170 @@ async def logout(
     await audit_log(current_user.id, "auth.logout")
 
     return {"message": "Logged out successfully"}
+
+
+# ── SSO Exchange ─────────────────────────────────────────────────────────
+# The SIEM generates a short-lived JWT "exchange token" signed with
+# DLP_SSO_SECRET. This endpoint verifies it, looks up the user in the
+# DLP database, and issues standard DLP access+refresh tokens signed
+# with SECRET_KEY. The exchange token is NOT the same as a DLP token.
+#
+# Two distinct secrets:
+#   DLP_SSO_SECRET  →  verify exchange token from SIEM (never used to issue)
+#   SECRET_KEY      →  issue DLP tokens (never used to verify SIEM tokens)
+
+
+class SSOExchangeRequest(BaseModel):
+    token: str
+
+
+@router.post("/sso/exchange", response_model=TokenResponse)
+async def sso_exchange(
+    body: SSOExchangeRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Exchange a SIEM-issued SSO token for DLP access + refresh tokens.
+
+    Public endpoint — no Authorization header required. The exchange token
+    itself serves as proof of authentication (signed by DLP_SSO_SECRET,
+    30-second TTL, single-use nonce).
+    """
+
+    # ── Guard: SSO must be configured ────────────────────────────────
+    if not settings.DLP_SSO_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SSO is not configured",
+        )
+
+    # ── Decode + verify exchange token ───────────────────────────────
+    try:
+        payload = jose_jwt.decode(
+            body.token,
+            settings.DLP_SSO_SECRET,
+            algorithms=["HS256"],
+        )
+    except ExpiredSignatureError:
+        logger.warning("SSO exchange: token expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Exchange token has expired",
+        )
+    except JWTError as e:
+        logger.warning("SSO exchange: invalid token", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid exchange token",
+        )
+
+    # ── Validate required claims ─────────────────────────────────────
+    if payload.get("purpose") != "sso_exchange":
+        logger.warning("SSO exchange: wrong purpose", purpose=payload.get("purpose"))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid exchange token: wrong purpose",
+        )
+
+    if payload.get("iss") != "cybersentinel-siem":
+        logger.warning("SSO exchange: wrong issuer", iss=payload.get("iss"))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid exchange token: wrong issuer",
+        )
+
+    nonce = payload.get("nonce")
+    if not nonce:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid exchange token: missing nonce",
+        )
+
+    # ── Nonce replay protection ──────────────────────────────────────
+    nonce_key = f"sso_nonce:{nonce}"
+    try:
+        cache = get_cache()
+        existing = await cache.get(nonce_key)
+        if existing is not None:
+            logger.warning("SSO exchange: nonce already used", nonce=nonce)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Exchange token already used",
+            )
+        # Mark nonce as consumed. TTL = 60s (double the token's 30s lifetime
+        # to account for clock skew).
+        await cache.set(nonce_key, "1", ex=60)
+    except HTTPException:
+        raise
+    except Exception:
+        # Redis unavailable → fail open on nonce check (token signature +
+        # expiry still protect us). Log so ops can investigate.
+        logger.warning("SSO exchange: Redis unavailable for nonce check")
+
+    # ── Look up user in DLP database ─────────────────────────────────
+    email = payload.get("email", "").strip().lower()
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Exchange token missing email claim",
+        )
+
+    user_service = UserService(db)
+    user = await user_service.get_user_by_email(email)
+
+    if not user:
+        logger.warning("SSO exchange: user not found", email=email)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found in DLP system",
+        )
+
+    if not getattr(user, "is_active", True):
+        logger.warning("SSO exchange: user inactive", email=email)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is disabled",
+        )
+
+    # ── Issue DLP tokens (signed with SECRET_KEY, not DLP_SSO_SECRET) ─
+    access_token = create_access_token(
+        data={
+            "sub": str(user.id),
+            "email": user.email,
+            "role": user.role,
+        }
+    )
+
+    refresh_token = create_refresh_token(
+        data={
+            "sub": str(user.id),
+            "email": user.email,
+        }
+    )
+
+    # Clear any login rate-limit counters for this user (same as normal login).
+    client_ip = request.client.host if request.client else "unknown"
+    try:
+        cache = get_cache()
+        await cache.delete(f"login_fail:{client_ip}:{email}")
+    except Exception:
+        pass
+
+    logger.info(
+        "SSO login successful",
+        user_id=str(user.id),
+        email=user.email,
+        siem_user=payload.get("username"),
+    )
+
+    await audit_log(user.id, "auth.sso_login", {
+        "siem_user": payload.get("username"),
+        "siem_issuer": payload.get("iss"),
+    })
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }

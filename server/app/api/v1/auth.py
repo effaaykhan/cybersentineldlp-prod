@@ -74,7 +74,11 @@ async def register(
     system, since the authorization layer has no per-tenant scoping.
     """
     # Only admins can provision new accounts.
-    if str(getattr(current_user, "role", "")).upper() != "ADMIN":
+    # user.role is a UserRole enum instance; str(enum) returns
+    # "ClassName.VALUE" not "VALUE", so extract .value first.
+    role_val = getattr(current_user, "role", "")
+    role_str = str(getattr(role_val, "value", role_val)).upper()
+    if role_str != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only administrators can register new users.",

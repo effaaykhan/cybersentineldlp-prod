@@ -4,7 +4,7 @@ Represents security incidents escalated from DLP events
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Index, CheckConstraint
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Index, CheckConstraint, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -22,7 +22,15 @@ class Incident(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # FK now points to the UUID primary key of events (was incorrectly referencing events.event_id)
     event_id = Column(UUID(as_uuid=True), ForeignKey("events.id", ondelete="SET NULL"), nullable=True, index=True)
-    severity = Column(String(20), nullable=False, default="low")  # low, medium, high, critical
+    # 0=info, 1=low, 2=medium, 3=high, 4=critical — matches IncidentCreate pydantic.
+    severity = Column(Integer, nullable=False, default=1, server_default="1")
+
+    # ABAC columns (Phase 3 prep). Nullable today — the effective ABAC rule
+    # still joins to ``events.department``. When Phase 3 starts populating
+    # these at incident creation, non-admin visibility can become per-row
+    # without the join. DO NOT reference these in ABAC filters yet.
+    department = Column(String(255), nullable=True, index=True)
+    required_clearance = Column(Integer, nullable=True)
     status = Column(String(30), nullable=False, default="open", index=True)  # open, investigating, resolved
     assigned_to = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
@@ -42,7 +50,7 @@ class Incident(Base):
     policy = relationship("Policy", backref="incidents", foreign_keys=[policy_id])
 
     __table_args__ = (
-        CheckConstraint("severity IN ('low', 'medium', 'high', 'critical', 'info')", name="ck_incident_severity"),
+        CheckConstraint("severity BETWEEN 0 AND 4", name="ck_incident_severity"),
         Index("idx_incidents_severity_status", "severity", "status"),
     )
 

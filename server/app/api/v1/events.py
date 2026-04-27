@@ -10,8 +10,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException, s
 from pydantic import BaseModel, Field
 import structlog
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.security import get_current_user, require_role
-from app.core.database import get_mongodb
+from app.core.database import get_mongodb, get_db
 from app.services.event_processor import get_event_processor
 
 logger = structlog.get_logger()
@@ -44,6 +46,9 @@ class EventCreate(BaseModel):
     description: Optional[str] = Field(None, description="Event description")
     user_email: Optional[str] = Field(None, description="User email")
     policy_version: Optional[str] = Field(None, description="Agent policy bundle version when event was generated")
+    # Optional ABAC overrides — if absent, server derives from user_email / defaults.
+    department: Optional[str] = Field(None, description="ABAC department (frozen at ingest)")
+    required_clearance: Optional[int] = Field(None, description="ABAC required clearance level")
 
 
 class DLPEvent(BaseModel):
@@ -133,9 +138,20 @@ async def create_event(
     db = get_mongodb()
     events_collection = db["dlp_events"]
 
+    # Resolve ABAC attrs from the user that the event is about. If the
+    # payload explicitly carried department/required_clearance we honour
+    # those; otherwise we derive from the user_email via the cache.
+    from app.services.user_dept_cache import resolve_user_attrs, DEFAULT_DEPARTMENT
+
+    abac = await resolve_user_attrs(event.user_email)
+    department = getattr(event, "department", None) or abac.department or DEFAULT_DEPARTMENT
+    required_clearance = int(getattr(event, "required_clearance", 0) or 0)
+
     # ── Step 1: Build raw event doc (NO processing yet) ────────────────
     event_doc: Dict[str, Any] = {
         "id": event.event_id,
+        "department": department,
+        "required_clearance": required_clearance,
         "title": None,                 # Populated by background processor
         "timestamp": datetime.now(timezone.utc),
         "event_type": event.event_type,
@@ -242,6 +258,23 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
             # Auto-create incident for blocked/critical events
             await _auto_create_incident(db, event_id, payload, update_fields)
 
+            # PG mirror: read the now-finalised Mongo doc (has classification,
+            # action_taken, department, etc.) and mirror it into the PG events
+            # table so analytics/export have something to aggregate. Best-
+            # effort — failures are logged inside the service and do not
+            # affect the background task's success.
+            try:
+                final_doc = await events_collection.find_one({"id": event_id})
+                if final_doc:
+                    from app.services.pg_event_mirror import mirror_event_to_pg
+                    await mirror_event_to_pg(final_doc)
+            except Exception as mirror_err:
+                logger.warning(
+                    "pg_mirror dispatch failed (non-fatal)",
+                    event_id=event_id,
+                    error=str(mirror_err),
+                )
+
             logger.info("Background event processing complete", event_id=event_id)
             return
 
@@ -339,6 +372,17 @@ async def _auto_create_incident(
             title = f"Repeated Violations ({violation_count}x) — {user_email}"
             sev_num = 4
 
+        # Stamp the auto-incident with the source event's ABAC attributes so
+        # it can be department-filtered like any other record. We read them
+        # from the just-updated event doc (authoritative) rather than the
+        # processor payload (may predate the tag).
+        src_event = await events_col.find_one(
+            {"id": event_id},
+            projection={"department": 1, "required_clearance": 1, "_id": 0},
+        ) or {}
+        dept = src_event.get("department") or "DEFAULT"
+        req_clr = int(src_event.get("required_clearance") or 0)
+
         incident_doc = {
             "id": event_id,
             "event_id": event_id,
@@ -350,6 +394,8 @@ async def _auto_create_incident(
             "user_email": user_email,
             "classification_level": classification,
             "event_count": violation_count,
+            "department": dept,
+            "required_clearance": req_clr,
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
             "assigned_to": None,
@@ -546,15 +592,16 @@ async def get_events(
     severity: Optional[str] = None,
     source: Optional[str] = None,
     search: Optional[str] = Query(None, max_length=200, description="Search keyword for filtering events"),
-    start_time: Optional[datetime] = Query(
-        None,
-        description="Filter events with timestamp >= this ISO datetime (UTC)",
-    ),
-    end_time: Optional[datetime] = Query(
-        None,
-        description="Filter events with timestamp <= this ISO datetime (UTC)",
-    ),
+    start_time: Optional[datetime] = Query(None),
+    end_time: Optional[datetime] = Query(None),
+    # Phase 3: filter-driven drill-down from dashboards. All optional.
+    module: Optional[str] = Query(None, description="Alias for event_type (USB/clipboard/screen_capture/network_exfil)"),
+    event_type: Optional[str] = Query(None),
+    action: Optional[str] = Query(None, description="Matches action_taken case-insensitively"),
+    classification: Optional[str] = Query(None, description="classification_level tier"),
+    channel: Optional[str] = Query(None),
     current_user=Depends(require_role("analyst")),
+    pg_db: AsyncSession = Depends(get_db),
 ):
     """
     Get DLP events with pagination and filtering.
@@ -568,6 +615,10 @@ async def get_events(
     - source filter
     - search keyword (searches in event_type, description, file_path, destination, etc.)
     - time range via start_time / end_time
+
+    ABAC: Results are further constrained per the viewer's department +
+    clearance_level, unless they carry the ``view_all_departments``
+    permission (in which case the filter is a no-op).
     """
     db = get_mongodb()
 
@@ -609,6 +660,38 @@ async def get_events(
         if end_time:
             time_filter["$lte"] = end_time
         query_filter["timestamp"] = time_filter
+
+    # ── Phase 3 dynamic filters ──────────────────────────────────────
+    # Case-insensitive anchored regex via $regex + $options=i. We escape
+    # every value so arbitrary user input can never be interpreted as
+    # regex metacharacters (ReDoS / enumeration vectors).
+    def _ci_exact(value: str) -> Dict[str, Any]:
+        import re as _re
+        return {"$regex": f"^{_re.escape(value)}$", "$options": "i"}
+
+    # ``module`` is a frontend-facing alias for ``event_type`` — the
+    # caller wins if both are provided.
+    et = event_type or module
+    if et:
+        query_filter["event_type"] = _ci_exact(et)
+    if action:
+        # Ingest stores outcomes in ``action_taken`` with varied casing;
+        # compare case-insensitively to keep "blocked"/"BLOCKED"/"block"
+        # addressable from a dashboard drill-down.
+        query_filter["action_taken"] = _ci_exact(action)
+    if classification:
+        # Mongo field matches the denormalized PG column name.
+        query_filter["classification_level"] = _ci_exact(classification)
+    if channel:
+        query_filter["channel"] = _ci_exact(channel)
+
+    # ── ABAC: merge viewer-specific visibility filter ─────────────────
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+    abac_filter = await build_abac_mongo_filter(pg_db, current_user)
+    query_filter = merge_mongo_filter(query_filter, abac_filter)
 
     # Query MongoDB
     cursor = (
@@ -684,6 +767,17 @@ async def get_events(
         filters=query_filter,
     )
 
+    # Aggregated ABAC observability — one line per request, no per-record
+    # events. `visible_count` is the filtered total the caller would see
+    # if they paginated through; it already reflects ABAC.
+    from app.services.audit_service import log_abac_scope
+    log_abac_scope(
+        current_user,
+        endpoint="GET /events/",
+        visible_count=total,
+        extra={"has_abac_filter": abac_filter is not None},
+    )
+
     return {
         "events": events,
         "total": total,
@@ -695,17 +789,48 @@ async def get_events(
 @router.get("/{event_id}", response_model=DLPEvent)
 async def get_event(
     event_id: str,
-    current_user: dict = Depends(require_role("analyst")),
+    current_user=Depends(require_role("analyst")),
+    pg_db: AsyncSession = Depends(get_db),
 ):
     """
     Get specific DLP event by ID. Requires analyst role — individual
     event records include file paths, clipboard captures, and email
     addresses that must not be enumerable by VIEWERs.
-    """
-    db = get_mongodb()
-    event = await db.dlp_events.find_one({"id": event_id})
 
+    ABAC: if the viewer lacks ``view_all_departments``, a matching event
+    is only returned when its department + clearance satisfy the viewer's
+    attributes. Otherwise we 404 (same response as "not found") — we do
+    not leak existence via a 403.
+    """
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
+    db = get_mongodb()
+    abac = await build_abac_mongo_filter(pg_db, current_user)
+    lookup = merge_mongo_filter({"id": event_id}, abac)
+
+    event = await db.dlp_events.find_one(lookup)
     if not event:
+        # Distinguish "truly absent" from "ABAC-filtered": if a doc exists
+        # with this id but didn't pass the filter, record a DENY. Otherwise
+        # the 404 is genuine and no log is written.
+        if abac is not None:
+            exists_unfiltered = await db.dlp_events.find_one(
+                {"id": event_id}, projection={"_id": 1}
+            )
+            if exists_unfiltered is not None:
+                try:
+                    from app.services.audit_service import audit_abac_deny
+                    await audit_abac_deny(
+                        user=current_user,
+                        resource_type="event",
+                        resource_id=event_id,
+                        reason="dept_or_clearance_mismatch",
+                    )
+                except Exception:
+                    pass
         raise HTTPException(status_code=404, detail="Event not found")
 
     return event
@@ -713,25 +838,35 @@ async def get_event(
 
 @router.get("/stats/summary")
 async def get_event_stats(
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ):
     """
-    Get event statistics summary
+    Get event statistics summary (ABAC-scoped).
     """
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
     db = get_mongodb()
+    abac = await build_abac_mongo_filter(pg_db, current_user)
+    base = merge_mongo_filter({}, abac)
+    blocked = merge_mongo_filter({"blocked": True}, abac)
 
-    # Aggregate statistics
-    total_events = await db.dlp_events.count_documents({})
-    blocked_events = await db.dlp_events.count_documents({"blocked": True})
+    total_events = await db.dlp_events.count_documents(base)
+    blocked_events = await db.dlp_events.count_documents(blocked)
 
-    # Events by severity
-    severity_pipeline = [
+    # Mongo aggregation pipelines must start with $match so the ABAC filter
+    # is applied before $group — otherwise totals leak from other depts.
+    pre_match: list = [{"$match": base}] if base else []
+
+    severity_pipeline = pre_match + [
         {"$group": {"_id": "$severity", "count": {"$sum": 1}}}
     ]
     severity_stats = await db.dlp_events.aggregate(severity_pipeline).to_list(None)
 
-    # Events by source
-    source_pipeline = [
+    source_pipeline = pre_match + [
         {"$group": {"_id": "$source", "count": {"$sum": 1}}}
     ]
     source_stats = await db.dlp_events.aggregate(source_pipeline).to_list(None)
@@ -746,22 +881,25 @@ async def get_event_stats(
 
 @router.get("/stats/by-type")
 async def get_events_by_type(
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ):
-    """
-    Get events grouped by type for dashboard charts
-    """
-    db = get_mongodb()
+    """Events grouped by type for dashboard charts (ABAC-scoped)."""
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
 
-    # Aggregate events by event_type
-    pipeline = [
+    db = get_mongodb()
+    abac = await build_abac_mongo_filter(pg_db, current_user)
+    base = merge_mongo_filter({}, abac)
+    pre_match: list = [{"$match": base}] if base else []
+
+    pipeline = pre_match + [
         {"$group": {"_id": "$event_type", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}}
+        {"$sort": {"count": -1}},
     ]
-    
     type_stats = await db.dlp_events.aggregate(pipeline).to_list(None)
-    
-    # Format for chart component
     return [
         {"type": item["_id"] or "unknown", "count": item["count"]}
         for item in type_stats
@@ -770,22 +908,25 @@ async def get_events_by_type(
 
 @router.get("/stats/by-severity")
 async def get_events_by_severity(
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ):
-    """
-    Get events grouped by severity for dashboard charts
-    """
-    db = get_mongodb()
+    """Events grouped by severity for dashboard charts (ABAC-scoped)."""
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
 
-    # Aggregate events by severity
-    pipeline = [
+    db = get_mongodb()
+    abac = await build_abac_mongo_filter(pg_db, current_user)
+    base = merge_mongo_filter({}, abac)
+    pre_match: list = [{"$match": base}] if base else []
+
+    pipeline = pre_match + [
         {"$group": {"_id": "$severity", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}}
+        {"$sort": {"count": -1}},
     ]
-    
     severity_stats = await db.dlp_events.aggregate(pipeline).to_list(None)
-    
-    # Format for chart component
     return [
         {"severity": item["_id"] or "unknown", "count": item["count"]}
         for item in severity_stats

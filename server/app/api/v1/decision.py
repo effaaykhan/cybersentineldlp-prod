@@ -80,6 +80,10 @@ class BatchEventItem(BaseModel):
     action: str = "logged"
     timestamp: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    # Optional ABAC hints — if absent, server derives from user_email / defaults.
+    user_email: Optional[str] = None
+    department: Optional[str] = None
+    required_clearance: Optional[int] = None
 
 
 class BatchEventRequest(BaseModel):
@@ -201,10 +205,21 @@ async def ingest_batch_events(
     rejected = 0
     errors = []
 
-    # Prepare bulk insert
+    # Prepare bulk insert. Tag each doc with ABAC attrs (spec: resolve from
+    # user_email and fall back to DEFAULT / 0; honour explicit overrides).
+    from app.services.user_dept_cache import resolve_user_attrs, DEFAULT_DEPARTMENT
+
     docs = []
     for item in request.events:
         try:
+            abac = await resolve_user_attrs(item.user_email)
+            department = (item.department or abac.department or DEFAULT_DEPARTMENT).strip() or DEFAULT_DEPARTMENT
+            required_clearance = int(
+                item.required_clearance
+                if item.required_clearance is not None
+                else 0
+            )
+
             doc = {
                 "event_id": item.event_id,
                 "event_type": item.event_type,
@@ -221,6 +236,9 @@ async def ingest_batch_events(
                 "metadata": item.metadata or {},
                 "batch_ingested": True,
                 "ingested_at": datetime.now(timezone.utc).isoformat(),
+                "user_email": item.user_email,
+                "department": department,
+                "required_clearance": required_clearance,
             }
             docs.append(doc)
             accepted += 1
@@ -239,6 +257,20 @@ async def ingest_batch_events(
             rejected += accepted
             accepted = 0
             errors.append({"event_id": "batch", "error": str(e)})
+
+        # PG mirror for the batch. Best-effort — a PG outage must not cause
+        # the agent to retry the batch (Mongo already has it).
+        try:
+            from app.services.pg_event_mirror import mirror_events_bulk
+            attempted, mirror_errors = await mirror_events_bulk(docs)
+            if mirror_errors:
+                logger.warning(
+                    "Batch PG mirror had row errors",
+                    attempted=attempted,
+                    errors=mirror_errors,
+                )
+        except Exception as e:
+            logger.warning("Batch PG mirror dispatch failed", error=str(e))
 
     return BatchEventResponse(accepted=accepted, rejected=rejected, errors=errors)
 

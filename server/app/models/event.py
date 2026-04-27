@@ -51,6 +51,10 @@ class Event(Base):
     # Classification results
     classification = Column(JSON, nullable=True)
     classification_label = Column(UUID(as_uuid=True), ForeignKey("data_labels.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Denormalized tier for filter-driven dashboards (Public/Internal/
+    # Confidential/Restricted). Populated at ingest time; retained even if
+    # the source event's classification payload changes later.
+    classification_level = Column(String(50), nullable=True, index=True)
     confidence_score = Column(Float, nullable=True)
 
     # Policy information
@@ -78,6 +82,17 @@ class Event(Base):
     # Additional metadata
     details = Column(JSON, nullable=True)
     tags = Column(JSON, nullable=True)
+
+    # ABAC attributes (Phase 2). Frozen at ingest time — see abac_service.
+    # `department` mirrors the user's department at the moment the event
+    # was recorded. `required_clearance` defaults to 0 (non-sensitive) and
+    # can be lifted by policy enrichment later.
+    department = Column(
+        String(255), nullable=False, default="DEFAULT", server_default="DEFAULT", index=True
+    )
+    required_clearance = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
     # Status and processing
     status = Column(String(20), nullable=False, default="new")
@@ -124,6 +139,7 @@ class Event(Base):
             "file_size": self.file_size,
             "file_hash": self.file_hash,
             "classification": self.classification,
+            "classification_level": self.classification_level,
             "confidence_score": self.confidence_score,
             "policy_id": str(self.policy_id) if self.policy_id else None,
             "policy_name": self.policy_name,
@@ -135,6 +151,8 @@ class Event(Base):
             "protocol": self.protocol,
             "details": self.details,
             "tags": self.tags,
+            "department": self.department,
+            "required_clearance": self.required_clearance,
             "status": self.status,
             "reviewed": self.reviewed,
             "reviewed_by": str(self.reviewed_by) if self.reviewed_by else None,

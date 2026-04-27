@@ -6,7 +6,7 @@ from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.incident import Incident
@@ -58,19 +58,26 @@ class IncidentService:
 
         return incident
 
-    async def get_incident(self, incident_id: UUID) -> Optional[Incident]:
+    async def get_incident(
+        self,
+        incident_id: UUID,
+        abac_clause=None,
+    ) -> Optional[Incident]:
         """
-        Fetch a single incident by ID
+        Fetch a single incident by ID.
 
-        Args:
-            incident_id: UUID of the incident
-
-        Returns:
-            Incident object or None if not found
+        ABAC: when ``abac_clause`` is provided (non-admin caller), the
+        incident is only returned if it has an underlying event AND that
+        event satisfies the predicate. Manual incidents (``event_id IS
+        NULL``) are intentionally hidden from non-admins — they carry no
+        department attribute and therefore cannot satisfy ABAC. Admins
+        (``abac_clause is None``) still see everything.
         """
-        result = await self.db.execute(
-            select(Incident).where(Incident.id == incident_id)
-        )
+        query = select(Incident).where(Incident.id == incident_id)
+        if abac_clause is not None:
+            from app.models import Event as _Event
+            query = query.join(_Event, Incident.event_id == _Event.id).where(abac_clause)
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def list_incidents(
@@ -80,19 +87,14 @@ class IncidentService:
         severity: Optional[int] = None,
         status: Optional[str] = None,
         assigned_to: Optional[UUID] = None,
+        abac_clause=None,
     ) -> List[Incident]:
         """
-        Fetch incidents with optional filtering
+        Fetch incidents with optional filtering.
 
-        Args:
-            skip: Number of records to skip
-            limit: Maximum number of records to return
-            severity: Filter by severity level
-            status: Filter by status string
-            assigned_to: Filter by assigned user UUID
-
-        Returns:
-            List of Incident objects
+        ABAC: when ``abac_clause`` is provided, incidents are filtered by
+        the visibility of their underlying event. Incidents without an
+        event are always included (manual incidents).
         """
         query = select(Incident)
 
@@ -106,6 +108,12 @@ class IncidentService:
 
         if filters:
             query = query.where(and_(*filters))
+
+        if abac_clause is not None:
+            # Non-admin: require a matching underlying event. Manual incidents
+            # (event_id IS NULL) have no department to verify and are hidden.
+            from app.models import Event as _Event
+            query = query.join(_Event, Incident.event_id == _Event.id).where(abac_clause)
 
         query = query.offset(skip).limit(limit).order_by(Incident.created_at.desc())
 
@@ -189,25 +197,30 @@ class IncidentService:
         )
         return list(result.scalars().all())
 
-    async def get_statistics(self) -> dict:
+    async def get_statistics(self, abac_clause=None) -> dict:
         """
-        Get incident statistics: counts by status and severity
+        Get incident statistics: counts by status and severity.
 
-        Returns:
-            Dictionary with status_counts and severity_counts
+        ABAC: when ``abac_clause`` is provided, incidents whose underlying
+        event fails the predicate are excluded from the counts, AND manual
+        incidents (``event_id IS NULL``) are also excluded — they carry no
+        department and cannot be evaluated against ABAC. Admins always see
+        the full count.
         """
-        # Counts by status
-        status_query = (
-            select(Incident.status, func.count(Incident.id))
-            .group_by(Incident.status)
+        def _with_abac(q):
+            if abac_clause is None:
+                return q
+            from app.models import Event as _Event
+            return q.join(_Event, Incident.event_id == _Event.id).where(abac_clause)
+
+        status_query = _with_abac(
+            select(Incident.status, func.count(Incident.id)).group_by(Incident.status)
         )
         status_result = await self.db.execute(status_query)
         status_counts = {row[0]: row[1] for row in status_result.all()}
 
-        # Counts by severity
-        severity_query = (
-            select(Incident.severity, func.count(Incident.id))
-            .group_by(Incident.severity)
+        severity_query = _with_abac(
+            select(Incident.severity, func.count(Incident.id)).group_by(Incident.severity)
         )
         severity_result = await self.db.execute(severity_query)
         severity_counts = {row[0]: row[1] for row in severity_result.all()}
@@ -219,6 +232,39 @@ class IncidentService:
             "status_counts": status_counts,
             "severity_counts": severity_counts,
         }
+
+    async def count_incidents_abac(
+        self,
+        severity: Optional[int] = None,
+        status: Optional[str] = None,
+        assigned_to: Optional[UUID] = None,
+        abac_clause=None,
+    ) -> int:
+        """Variant of count_incidents that also applies an ABAC clause.
+
+        Wraps the existing count_incidents path. When ``abac_clause`` is
+        provided, incidents whose underlying event fails the predicate are
+        excluded. Manual incidents (event_id IS NULL) still count.
+        """
+        query = select(func.count(Incident.id))
+        filters = []
+        if severity is not None:
+            filters.append(Incident.severity == severity)
+        if status is not None:
+            filters.append(Incident.status == status)
+        if assigned_to is not None:
+            filters.append(Incident.assigned_to == assigned_to)
+        if filters:
+            query = query.where(and_(*filters))
+
+        if abac_clause is not None:
+            # Non-admin: require a matching underlying event; manual incidents
+            # (event_id IS NULL) are hidden since they have no department.
+            from app.models import Event as _Event
+            query = query.join(_Event, Incident.event_id == _Event.id).where(abac_clause)
+
+        result = await self.db.execute(query)
+        return int(result.scalar() or 0)
 
     async def count_incidents(
         self,

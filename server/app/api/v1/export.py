@@ -13,6 +13,7 @@ import io
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.services.analytics_service import AnalyticsService
+from app.services.abac_service import build_abac_sql_filter
 from app.services.export_service import ExportService
 from app.core.observability import StructuredLogger
 
@@ -41,7 +42,8 @@ async def export_trends_csv(
             start_date = end_date - timedelta(days=7)
 
         # Get analytics data
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         trends = await analytics.get_incident_trends(
             start_date=start_date,
             end_date=end_date,
@@ -54,7 +56,7 @@ async def export_trends_csv(
 
         # Log export
         logger.logger.info("csv_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="trends",
                           rows=len(csv_content.split('\n')) - 1)
 
@@ -93,7 +95,8 @@ async def export_trends_pdf(
             start_date = end_date - timedelta(days=7)
 
         # Get analytics data
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         trends = await analytics.get_incident_trends(
             start_date=start_date,
             end_date=end_date,
@@ -107,7 +110,7 @@ async def export_trends_pdf(
 
         # Log export
         logger.logger.info("pdf_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="trends",
                           size_bytes=len(pdf_bytes))
 
@@ -141,7 +144,9 @@ async def export_violators_csv(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         violators = await analytics.get_top_violators(
             start_date=start_date,
             end_date=end_date,
@@ -152,7 +157,7 @@ async def export_violators_csv(
         csv_content = ExportService.export_analytics_to_csv(violators, "violators")
 
         logger.logger.info("csv_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="violators",
                           by=by)
 
@@ -185,7 +190,9 @@ async def export_violators_pdf(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         violators = await analytics.get_top_violators(
             start_date=start_date,
             end_date=end_date,
@@ -197,7 +204,7 @@ async def export_violators_pdf(
         pdf_bytes = ExportService.export_to_pdf(title, violators, "violators")
 
         logger.logger.info("pdf_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="violators",
                           by=by)
 
@@ -228,7 +235,9 @@ async def export_data_types_csv(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         data_types = await analytics.get_data_type_statistics(
             start_date=start_date,
             end_date=end_date
@@ -237,7 +246,7 @@ async def export_data_types_csv(
         csv_content = ExportService.export_analytics_to_csv(data_types, "data_types")
 
         logger.logger.info("csv_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="data_types")
 
         filename = f"data_types_{start_date.strftime('%Y%m%d')}.csv"
@@ -267,7 +276,9 @@ async def export_data_types_pdf(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         data_types = await analytics.get_data_type_statistics(
             start_date=start_date,
             end_date=end_date
@@ -277,7 +288,7 @@ async def export_data_types_pdf(
         pdf_bytes = ExportService.export_to_pdf(title, data_types, "data_types")
 
         logger.logger.info("pdf_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="data_types")
 
         filename = f"data_types_{start_date.strftime('%Y%m%d')}.pdf"
@@ -307,7 +318,9 @@ async def export_policy_violations_csv(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         violations = await analytics.get_policy_violation_breakdown(
             start_date=start_date,
             end_date=end_date
@@ -316,7 +329,7 @@ async def export_policy_violations_csv(
         csv_content = ExportService.export_analytics_to_csv(violations, "policy_violations")
 
         logger.logger.info("csv_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="policy_violations")
 
         filename = f"policy_violations_{start_date.strftime('%Y%m%d')}.csv"
@@ -346,7 +359,9 @@ async def export_policy_violations_pdf(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         violations = await analytics.get_policy_violation_breakdown(
             start_date=start_date,
             end_date=end_date
@@ -356,7 +371,7 @@ async def export_policy_violations_pdf(
         pdf_bytes = ExportService.export_to_pdf(title, violations, "policy_violations")
 
         logger.logger.info("pdf_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="policy_violations")
 
         filename = f"policy_violations_{start_date.strftime('%Y%m%d')}.pdf"
@@ -390,7 +405,9 @@ async def export_summary_pdf(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        _abac_clause = await build_abac_sql_filter(db, current_user)
+
+        analytics = AnalyticsService(db, abac_clause=_abac_clause)
         summary = await analytics.get_summary_statistics(
             start_date=start_date,
             end_date=end_date
@@ -400,7 +417,7 @@ async def export_summary_pdf(
         pdf_bytes = ExportService.export_to_pdf(title, summary, "summary")
 
         logger.logger.info("pdf_export",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           report_type="summary",
                           total_incidents=summary.get("total_incidents"))
 

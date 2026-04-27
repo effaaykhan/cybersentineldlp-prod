@@ -88,11 +88,35 @@ async def init_databases() -> None:
             database=settings.MONGODB_DB,
         )
 
-        # Ensure unique index on event id for deduplication safety
+        # Ensure unique index on event id for deduplication safety, plus
+        # ABAC-support indexes so department-filtered queries don't scan
+        # the whole collection. All are idempotent — re-creating an index
+        # with the same key is a no-op.
         try:
             events_col = mongodb_database["dlp_events"]
             await events_col.create_index("id", unique=True, background=True, sparse=True)
-            logger.info("MongoDB unique index on dlp_events.id ensured")
+            # ABAC hot path: equality on department + range on timestamp. The
+            # leading-column lets the same index cover pure-department queries.
+            await events_col.create_index(
+                [("department", 1), ("timestamp", -1)],
+                name="idx_dept_timestamp",
+                background=True,
+            )
+            # Supports count queries scoped by dept (dashboard overview, etc.)
+            await events_col.create_index(
+                [("department", 1), ("severity", 1)],
+                name="idx_dept_severity",
+                background=True,
+            )
+            # Incidents collection: auto-incidents are now tagged with
+            # department; this index supports ABAC-filtered listing.
+            incidents_col = mongodb_database["incidents"]
+            await incidents_col.create_index(
+                [("department", 1), ("created_at", -1)],
+                name="idx_dept_created",
+                background=True,
+            )
+            logger.info("MongoDB indexes ensured (id, dept/timestamp, dept/severity, incidents dept/created)")
         except Exception as idx_err:
             # Duplicate key errors on existing data — log but don't crash
             logger.warning("MongoDB index creation issue (non-fatal)", error=str(idx_err))

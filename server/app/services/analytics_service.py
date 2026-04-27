@@ -6,7 +6,7 @@ Provides aggregated data for dashboards and reports
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, desc
+from sqlalchemy import select, func, and_, or_, desc, case
 from opensearchpy import AsyncOpenSearch
 
 from app.models import Event, Agent, Policy
@@ -16,11 +16,34 @@ logger = StructuredLogger(__name__)
 
 
 class AnalyticsService:
-    """Service for analytics and reporting data aggregation"""
+    """Service for analytics and reporting data aggregation.
 
-    def __init__(self, db: AsyncSession, opensearch: Optional[AsyncOpenSearch] = None):
+    ABAC: when ``abac_clause`` is set on the instance, every SELECT executed
+    by this service has the clause AND-ed into its WHERE. A ``None`` value
+    means "no filter" — used when the caller carries ``view_all_departments``.
+    """
+
+    def __init__(
+        self,
+        db: AsyncSession,
+        opensearch: Optional[AsyncOpenSearch] = None,
+        abac_clause=None,
+    ):
         self.db = db
         self.opensearch = opensearch
+        self._abac_clause = abac_clause
+
+    def _apply_abac(self, query):
+        """Return ``query`` AND-merged with the configured ABAC predicate.
+
+        A no-op when ``self._abac_clause`` is None (global-access caller).
+        Adding ``.where(X)`` to an existing SELECT is safe regardless of
+        chain order — SQLAlchemy composes the final SQL's WHERE clause by
+        intersecting all registered criteria.
+        """
+        if self._abac_clause is None:
+            return query
+        return query.where(self._abac_clause)
 
     async def get_incident_trends(
         self,
@@ -128,7 +151,7 @@ class AnalyticsService:
         else:
             query = query.group_by('time_bucket').order_by('time_bucket')
 
-        result = await self.db.execute(query)
+        result = await self.db.execute(self._apply_abac(query))
         rows = result.all()
 
         # Format results
@@ -180,7 +203,24 @@ class AnalyticsService:
         interval: str,
         group_by: Optional[str]
     ) -> Dict[str, Any]:
-        """Get trends from OpenSearch with date histogram aggregation"""
+        """Get trends from OpenSearch with date histogram aggregation.
+
+        ABAC guard: this branch does not (yet) translate ``self._abac_clause``
+        into an OpenSearch query-body filter. Running it for a non-admin
+        caller would leak cross-department data. The branch is currently
+        dormant (no endpoint constructs AnalyticsService with an OpenSearch
+        client), so we fail loudly instead of silently leaking. If OpenSearch
+        is wired up later, add a term/terms filter on `department` (and a
+        range filter on `required_clearance`) derived from the caller's
+        attributes before removing this guard.
+        """
+        if self._abac_clause is not None:
+            raise RuntimeError(
+                "OpenSearch analytics path does not apply ABAC filters. "
+                "Refusing to serve a non-admin request from this code path. "
+                "Use the PostgreSQL fallback (construct AnalyticsService "
+                "without opensearch=) or implement ABAC in the OS query body."
+            )
 
         # Map interval to OpenSearch calendar interval
         interval_map = {
@@ -310,14 +350,18 @@ class AnalyticsService:
                     func.count(Event.id).label('incident_count'),
                     func.count(
                         func.distinct(
-                            func.case(
+                            case(
                                 (Event.severity == 'critical', Event.id),
                                 else_=None
                             )
                         )
                     ).label('critical_count')
                 ).join(
-                    Agent, Event.agent_id == Agent.id
+                    # Agent has both `id` (UUID PK) and `agent_id` (String
+                    # external identifier). Events carry the String external
+                    # identifier, so the join predicate must compare like
+                    # types. Comparing String → UUID fails at the planner.
+                    Agent, Event.agent_id == Agent.agent_id
                 ).where(
                     and_(
                         Event.timestamp >= start_date,
@@ -329,7 +373,7 @@ class AnalyticsService:
                     desc('incident_count')
                 ).limit(limit)
 
-                result = await self.db.execute(query)
+                result = await self.db.execute(self._apply_abac(query))
                 rows = result.all()
 
                 return [
@@ -350,7 +394,7 @@ class AnalyticsService:
                     func.count(Event.id).label('incident_count'),
                     func.count(
                         func.distinct(
-                            func.case(
+                            case(
                                 (Event.severity == 'critical', Event.id),
                                 else_=None
                             )
@@ -368,7 +412,7 @@ class AnalyticsService:
                     desc('incident_count')
                 ).limit(limit)
 
-                result = await self.db.execute(query)
+                result = await self.db.execute(self._apply_abac(query))
                 rows = result.all()
 
                 return [
@@ -386,7 +430,7 @@ class AnalyticsService:
                     func.count(Event.id).label('incident_count'),
                     func.count(
                         func.distinct(
-                            func.case(
+                            case(
                                 (Event.severity == 'critical', Event.id),
                                 else_=None
                             )
@@ -404,7 +448,7 @@ class AnalyticsService:
                     desc('incident_count')
                 ).limit(limit)
 
-                result = await self.db.execute(query)
+                result = await self.db.execute(self._apply_abac(query))
                 rows = result.all()
 
                 return [
@@ -437,29 +481,29 @@ class AnalyticsService:
         try:
             # Query classification types
             query = select(
-                Event.classification_type,
+                Event.event_type,
                 func.count(Event.id).label('count'),
-                func.avg(Event.confidence).label('avg_confidence')
+                func.avg(Event.confidence_score).label('avg_confidence')
             ).where(
                 and_(
                     Event.timestamp >= start_date,
                     Event.timestamp <= end_date,
-                    Event.classification_type.isnot(None)
+                    Event.event_type.isnot(None)
                 )
             ).group_by(
-                Event.classification_type
+                Event.event_type
             ).order_by(
                 desc('count')
             )
 
-            result = await self.db.execute(query)
+            result = await self.db.execute(self._apply_abac(query))
             rows = result.all()
 
             total_detections = sum(row.count for row in rows)
 
             return [
                 {
-                    "data_type": row.classification_type,
+                    "data_type": row.event_type,
                     "count": row.count,
                     "percentage": round((row.count / total_detections * 100), 2) if total_detections > 0 else 0,
                     "avg_confidence": round(float(row.avg_confidence or 0), 2)
@@ -489,8 +533,8 @@ class AnalyticsService:
                 func.count(Event.id).label('violation_count'),
                 func.count(
                     func.distinct(
-                        func.case(
-                            (Event.blocked == True, Event.id),
+                        case(
+                            (Event.action == 'blocked', Event.id),
                             else_=None
                         )
                     )
@@ -509,7 +553,7 @@ class AnalyticsService:
                 desc('violation_count')
             )
 
-            result = await self.db.execute(query)
+            result = await self.db.execute(self._apply_abac(query))
             rows = result.all()
 
             return [
@@ -554,7 +598,7 @@ class AnalyticsService:
                 desc('count')
             )
 
-            result = await self.db.execute(query)
+            result = await self.db.execute(self._apply_abac(query))
             rows = result.all()
 
             total = sum(row.count for row in rows)
@@ -595,7 +639,7 @@ class AnalyticsService:
                     Event.timestamp <= end_date
                 )
             )
-            total_result = await self.db.execute(total_query)
+            total_result = await self.db.execute(self._apply_abac(total_query))
             total_incidents = total_result.scalar()
 
             # Critical incidents
@@ -606,7 +650,7 @@ class AnalyticsService:
                     Event.severity == 'critical'
                 )
             )
-            critical_result = await self.db.execute(critical_query)
+            critical_result = await self.db.execute(self._apply_abac(critical_query))
             critical_incidents = critical_result.scalar()
 
             # Blocked incidents
@@ -614,10 +658,10 @@ class AnalyticsService:
                 and_(
                     Event.timestamp >= start_date,
                     Event.timestamp <= end_date,
-                    Event.blocked == True
+                    Event.action == 'blocked'
                 )
             )
-            blocked_result = await self.db.execute(blocked_query)
+            blocked_result = await self.db.execute(self._apply_abac(blocked_query))
             blocked_incidents = blocked_result.scalar()
 
             # Active agents
@@ -627,7 +671,7 @@ class AnalyticsService:
                     Event.timestamp <= end_date
                 )
             )
-            agents_result = await self.db.execute(agents_query)
+            agents_result = await self.db.execute(self._apply_abac(agents_query))
             active_agents = agents_result.scalar()
 
             # Policy violations
@@ -638,28 +682,28 @@ class AnalyticsService:
                     Event.policy_id.isnot(None)
                 )
             )
-            policy_result = await self.db.execute(policy_query)
+            policy_result = await self.db.execute(self._apply_abac(policy_query))
             policy_violations = policy_result.scalar()
 
             # Most common data type
             datatype_query = select(
-                Event.classification_type,
+                Event.event_type,
                 func.count(Event.id).label('count')
             ).where(
                 and_(
                     Event.timestamp >= start_date,
                     Event.timestamp <= end_date,
-                    Event.classification_type.isnot(None)
+                    Event.event_type.isnot(None)
                 )
             ).group_by(
-                Event.classification_type
+                Event.event_type
             ).order_by(
                 desc('count')
             ).limit(1)
 
-            datatype_result = await self.db.execute(datatype_query)
+            datatype_result = await self.db.execute(self._apply_abac(datatype_query))
             datatype_row = datatype_result.first()
-            most_common_datatype = datatype_row.classification_type if datatype_row else None
+            most_common_datatype = datatype_row.event_type if datatype_row else None
 
             return {
                 "period": {

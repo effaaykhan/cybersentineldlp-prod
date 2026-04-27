@@ -10,8 +10,10 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 import structlog
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.security import get_current_user
-from app.core.database import get_mongodb
+from app.core.database import get_mongodb, get_db
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -19,15 +21,24 @@ router = APIRouter()
 
 @router.get("/overview")
 async def get_dashboard_overview(
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
-    Get dashboard overview statistics
-    Returns real data from database populated by agents
+    Get dashboard overview statistics (ABAC-scoped on event counts).
+
+    Agent counts are *not* ABAC-gated — visibility of agents is an
+    operational concern, not a DLP record. Event-derived metrics (total
+    events / critical / blocked) respect the viewer's ABAC scope.
     """
     from datetime import datetime, timedelta, timezone
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
 
     db = get_mongodb()
+    abac = await build_abac_mongo_filter(pg_db, current_user)
 
     # Query agents from MongoDB
     agents_collection = db["agents"]
@@ -50,14 +61,20 @@ async def get_dashboard_overview(
     # Query events from MongoDB (using correct collection name)
     events_collection = db.dlp_events
 
-    # Total events (all time)
-    total_events = await events_collection.count_documents({})
+    # Total events (all time), ABAC-scoped
+    total_events = await events_collection.count_documents(
+        merge_mongo_filter({}, abac)
+    )
 
-    # Critical alerts/events
-    critical_alerts = await events_collection.count_documents({"severity": "critical"})
+    # Critical alerts/events, ABAC-scoped
+    critical_alerts = await events_collection.count_documents(
+        merge_mongo_filter({"severity": "critical"}, abac)
+    )
 
-    # Blocked events
-    blocked_events = await events_collection.count_documents({"blocked": True})
+    # Blocked events, ABAC-scoped
+    blocked_events = await events_collection.count_documents(
+        merge_mongo_filter({"blocked": True}, abac)
+    )
 
     return {
         "total_agents": total_agents,
@@ -71,21 +88,30 @@ async def get_dashboard_overview(
 @router.get("/timeline")
 async def get_event_timeline(
     hours: int = Query(24, ge=1, le=168, description="Number of hours to retrieve"),
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     """
-    Get event timeline data for charts
-    Returns actual event counts grouped by hour
+    Get event timeline data for charts (ABAC-scoped).
+    Returns actual event counts grouped by hour.
     """
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
     db = get_mongodb()
     events_collection = db.dlp_events
 
     now = datetime.utcnow()
     start_time = now - timedelta(hours=hours)
 
+    abac = await build_abac_mongo_filter(pg_db, current_user)
+    match_stage = merge_mongo_filter({"timestamp": {"$gte": start_time}}, abac)
+
     # Aggregate events by hour
     pipeline = [
-        {"$match": {"timestamp": {"$gte": start_time}}},
+        {"$match": match_stage},
         {
             "$group": {
                 "_id": {

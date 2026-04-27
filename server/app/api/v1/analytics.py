@@ -81,7 +81,9 @@ async def get_incident_trends(
         if (end_date - start_date).days > 90:
             raise HTTPException(status_code=400, detail="Date range cannot exceed 90 days")
 
-        analytics = AnalyticsService(db)
+        from app.services.abac_service import build_abac_sql_filter
+        abac = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=abac)
         trends = await analytics.get_incident_trends(
             start_date=start_date,
             end_date=end_date,
@@ -90,7 +92,7 @@ async def get_incident_trends(
         )
 
         logger.logger.info("analytics_trends_requested",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           interval=interval,
                           group_by=group_by,
                           total_incidents=trends.get("total_incidents"))
@@ -158,7 +160,9 @@ async def get_top_violators(
         if not start_date:
             start_date = end_date - timedelta(days=30)  # Default to 30 days
 
-        analytics = AnalyticsService(db)
+        from app.services.abac_service import build_abac_sql_filter
+        abac = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=abac)
         violators = await analytics.get_top_violators(
             start_date=start_date,
             end_date=end_date,
@@ -167,7 +171,7 @@ async def get_top_violators(
         )
 
         logger.logger.info("top_violators_requested",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           by=by,
                           count=len(violators))
 
@@ -231,14 +235,16 @@ async def get_data_type_statistics(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        from app.services.abac_service import build_abac_sql_filter
+        abac = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=abac)
         data_types = await analytics.get_data_type_statistics(
             start_date=start_date,
             end_date=end_date
         )
 
         logger.logger.info("data_type_stats_requested",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           types_count=len(data_types))
 
         return data_types
@@ -297,14 +303,16 @@ async def get_policy_violation_breakdown(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        from app.services.abac_service import build_abac_sql_filter
+        abac = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=abac)
         violations = await analytics.get_policy_violation_breakdown(
             start_date=start_date,
             end_date=end_date
         )
 
         logger.logger.info("policy_violations_requested",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           policies_count=len(violations))
 
         return violations
@@ -368,14 +376,16 @@ async def get_severity_distribution(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        from app.services.abac_service import build_abac_sql_filter
+        abac = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=abac)
         distribution = await analytics.get_severity_distribution(
             start_date=start_date,
             end_date=end_date
         )
 
         logger.logger.info("severity_distribution_requested",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           total=distribution.get("total_incidents"))
 
         return distribution
@@ -431,14 +441,16 @@ async def get_summary_statistics(
         if not start_date:
             start_date = end_date - timedelta(days=30)
 
-        analytics = AnalyticsService(db)
+        from app.services.abac_service import build_abac_sql_filter
+        abac = await build_abac_sql_filter(db, current_user)
+        analytics = AnalyticsService(db, abac_clause=abac)
         summary = await analytics.get_summary_statistics(
             start_date=start_date,
             end_date=end_date
         )
 
         logger.logger.info("summary_stats_requested",
-                          user_id=current_user.get("sub"),
+                          user_id=getattr(current_user, "id", None),
                           total_incidents=summary.get("total_incidents"))
 
         return summary

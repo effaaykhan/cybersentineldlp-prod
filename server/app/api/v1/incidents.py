@@ -125,10 +125,14 @@ async def list_incidents(
     severity: Optional[int] = Query(None, ge=0, le=4),
     status: Optional[str] = Query(None),
     assigned_to: Optional[UUID] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List incidents with optional filtering"""
+    """List incidents with optional filtering (ABAC-scoped via underlying event)."""
+    from app.services.abac_service import build_abac_sql_filter
+
+    abac = await build_abac_sql_filter(db, current_user)
+
     svc = IncidentService(db)
     incidents = await svc.list_incidents(
         skip=skip,
@@ -136,11 +140,13 @@ async def list_incidents(
         severity=severity,
         status=status,
         assigned_to=assigned_to,
+        abac_clause=abac,
     )
-    total = await svc.count_incidents(
+    total = await svc.count_incidents_abac(
         severity=severity,
         status=status,
         assigned_to=assigned_to,
+        abac_clause=abac,
     )
     return IncidentListResponse(
         incidents=[_incident_to_out(i) for i in incidents],
@@ -150,25 +156,46 @@ async def list_incidents(
 
 @router.get("/statistics", response_model=IncidentStatisticsResponse)
 async def get_statistics(
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get incident statistics (counts by status and severity)"""
+    """Get incident statistics (counts by status and severity), ABAC-scoped."""
+    from app.services.abac_service import build_abac_sql_filter
+
+    abac = await build_abac_sql_filter(db, current_user)
     svc = IncidentService(db)
-    stats = await svc.get_statistics()
+    stats = await svc.get_statistics(abac_clause=abac)
     return IncidentStatisticsResponse(**stats)
 
 
 @router.get("/{incident_id}", response_model=IncidentDetailOut)
 async def get_incident(
     incident_id: UUID,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a single incident with its comments"""
+    """Get a single incident with its comments (ABAC-scoped)."""
+    from app.services.abac_service import build_abac_sql_filter
+    abac = await build_abac_sql_filter(db, current_user)
+
     svc = IncidentService(db)
-    incident = await svc.get_incident(incident_id)
+    incident = await svc.get_incident(incident_id, abac_clause=abac)
     if not incident:
+        # If a row exists but ABAC filtered it out, this is a DENY not a 404.
+        # We surface 404 to the user either way (avoid existence oracles).
+        if abac is not None:
+            exists = await svc.get_incident(incident_id, abac_clause=None)
+            if exists is not None:
+                try:
+                    from app.services.audit_service import audit_abac_deny
+                    await audit_abac_deny(
+                        user=current_user,
+                        resource_type="incident",
+                        resource_id=str(incident_id),
+                        reason="dept_or_clearance_mismatch",
+                    )
+                except Exception:
+                    pass
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
 
     comments = await svc.get_comments(incident_id)
@@ -292,36 +319,62 @@ async def list_auto_incidents(
     status: Optional[str] = Query(None),
     severity: Optional[int] = Query(None),
     limit: int = Query(100, ge=1, le=500),
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ):
-    """List auto-generated incidents from MongoDB."""
+    """List auto-generated incidents from MongoDB (ABAC-scoped).
+
+    Auto-incident docs carry the source event's ``department`` and
+    ``required_clearance`` (stamped at creation; see events.py). The same
+    Mongo filter we use for dlp_events applies unchanged here.
+    """
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
     db = get_mongodb()
     col = db["incidents"]
+    abac = await build_abac_mongo_filter(pg_db, current_user)
 
     query: dict = {}
     if status:
         query["status"] = status
     if severity is not None:
         query["severity"] = severity
+    query = merge_mongo_filter(query, abac)
 
     cursor = col.find(query).sort("created_at", -1).limit(limit)
     incidents = []
     async for doc in cursor:
         doc.pop("_id", None)
-        # Normalize datetime
         for f in ("created_at", "updated_at"):
             if f in doc and isinstance(doc[f], datetime):
                 doc[f] = doc[f].isoformat()
         incidents.append(doc)
 
-    # Stats
+    # Stats (ABAC-scoped) — same dept/clearance filter merged with status.
+    stats_base = merge_mongo_filter({}, abac)
     stats = {
-        "total": await col.count_documents({}),
-        "open": await col.count_documents({"status": "open"}),
-        "investigating": await col.count_documents({"status": "investigating"}),
-        "resolved": await col.count_documents({"status": "resolved"}),
+        "total": await col.count_documents(stats_base),
+        "open": await col.count_documents(
+            merge_mongo_filter({**stats_base, "status": "open"}, None)
+        ),
+        "investigating": await col.count_documents(
+            merge_mongo_filter({**stats_base, "status": "investigating"}, None)
+        ),
+        "resolved": await col.count_documents(
+            merge_mongo_filter({**stats_base, "status": "resolved"}, None)
+        ),
     }
 
+    from app.services.audit_service import log_abac_scope
+    log_abac_scope(
+        current_user,
+        endpoint="GET /incidents/auto/list",
+        visible_count=stats.get("total", 0),
+        extra={"has_abac_filter": abac is not None},
+    )
     return {"incidents": incidents, "stats": stats}
 
 
@@ -329,11 +382,18 @@ async def list_auto_incidents(
 async def update_auto_incident(
     incident_id: str,
     update: IncidentUpdate,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ):
-    """Update an auto-generated incident status/assignment."""
+    """Update an auto-generated incident status/assignment (ABAC-scoped)."""
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
     db = get_mongodb()
     col = db["incidents"]
+    abac = await build_abac_mongo_filter(pg_db, current_user)
 
     update_fields: dict = {"updated_at": datetime.now(timezone.utc)}
     if update.status:
@@ -341,10 +401,16 @@ async def update_auto_incident(
     if update.assigned_to:
         update_fields["assigned_to"] = str(update.assigned_to)
 
-    result = await col.update_one({"id": incident_id}, {"$set": update_fields})
+    # Lookups honour ABAC — callers cannot update a doc they can't see.
+    result = await col.update_one(
+        merge_mongo_filter({"id": incident_id}, abac),
+        {"$set": update_fields},
+    )
     if result.matched_count == 0:
-        # Try event_id as fallback
-        result = await col.update_one({"event_id": incident_id}, {"$set": update_fields})
+        result = await col.update_one(
+            merge_mongo_filter({"event_id": incident_id}, abac),
+            {"$set": update_fields},
+        )
 
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -355,15 +421,38 @@ async def update_auto_incident(
 @router.get("/auto/{incident_id}")
 async def get_auto_incident(
     incident_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ):
-    """Get a single auto-generated incident with related events."""
+    """Get a single auto-generated incident with related events (ABAC-scoped)."""
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
     db = get_mongodb()
     col = db["incidents"]
     events_col = db["dlp_events"]
+    abac = await build_abac_mongo_filter(pg_db, current_user)
 
-    doc = await col.find_one({"$or": [{"id": incident_id}, {"event_id": incident_id}]})
+    doc = await col.find_one(
+        merge_mongo_filter(
+            {"$or": [{"id": incident_id}, {"event_id": incident_id}]},
+            abac,
+        )
+    )
     if not doc:
+        # Audit the denial (distinguishable from a true not-found only in logs).
+        try:
+            from app.services.audit_service import audit_abac_deny
+            await audit_abac_deny(
+                user=current_user,
+                resource_type="incident_auto",
+                resource_id=incident_id,
+                reason="not_found_or_dept_mismatch",
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Incident not found")
 
     doc.pop("_id", None)

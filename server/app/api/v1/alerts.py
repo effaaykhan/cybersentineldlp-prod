@@ -10,8 +10,10 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 import structlog
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.security import get_current_user, require_role
-from app.core.database import get_mongodb
+from app.core.database import get_mongodb, get_db
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -43,24 +45,33 @@ class AlertsResponse(BaseModel):
 
 @router.get("/", response_model=AlertsResponse)
 async def get_alerts(
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     status: Optional[str] = Query(None, description="Filter by status"),
+    pg_db: AsyncSession = Depends(get_db),
 ):
     """
-    Get all active alerts
-    Generates alerts from critical/high severity events if no alerts exist in database
-    Returns alerts list (limited to 100) and total counts for accurate statistics
+    Get all active alerts (ABAC-scoped).
+
+    Generates alerts from critical/high severity events if no alerts exist
+    in the database. Both the materialized-alerts path and the event-fallback
+    path apply the viewer's ABAC visibility filter before counting/listing.
     """
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
     db = get_mongodb()
-    
+    abac = await build_abac_mongo_filter(pg_db, current_user)
+
     # Check if alerts collection exists and has alerts
     alerts_collection = db.get_collection("alerts")
     alert_count = await alerts_collection.count_documents({})
-    
+
     alerts = []
     counts = {"new": 0, "acknowledged": 0, "resolved": 0, "total": 0}
-    
+
     if alert_count > 0:
         # Query alerts from database
         query_filter: Dict[str, Any] = {}
@@ -69,11 +80,19 @@ async def get_alerts(
         if status:
             query_filter["status"] = status
 
+        query_filter = merge_mongo_filter(query_filter, abac)
+
         # Get total counts before limiting
         counts["total"] = await alerts_collection.count_documents(query_filter)
-        counts["new"] = await alerts_collection.count_documents({**query_filter, "status": "new"})
-        counts["acknowledged"] = await alerts_collection.count_documents({**query_filter, "status": "acknowledged"})
-        counts["resolved"] = await alerts_collection.count_documents({**query_filter, "status": "resolved"})
+        counts["new"] = await alerts_collection.count_documents(
+            merge_mongo_filter({**query_filter, "status": "new"}, None)
+        )
+        counts["acknowledged"] = await alerts_collection.count_documents(
+            merge_mongo_filter({**query_filter, "status": "acknowledged"}, None)
+        )
+        counts["resolved"] = await alerts_collection.count_documents(
+            merge_mongo_filter({**query_filter, "status": "resolved"}, None)
+        )
 
         # Get limited list for display
         cursor = alerts_collection.find(query_filter).sort("timestamp", -1).limit(100)
@@ -98,6 +117,8 @@ async def get_alerts(
         query_filter = {"severity": {"$in": ["critical", "high"]}}
         if severity:
             query_filter["severity"] = severity
+
+        query_filter = merge_mongo_filter(query_filter, abac)
 
         # Get total counts before limiting
         try:
@@ -179,6 +200,13 @@ async def get_alerts(
         user=current_user.get("email", "unknown") if isinstance(current_user, dict) else getattr(current_user, "email", "unknown"),
         count=len(alerts),
         total_count=counts["total"],
+    )
+    from app.services.audit_service import log_abac_scope
+    log_abac_scope(
+        current_user,
+        endpoint="GET /alerts/",
+        visible_count=counts["total"],
+        extra={"has_abac_filter": abac is not None},
     )
 
     return AlertsResponse(alerts=alerts, counts=counts)
@@ -263,16 +291,25 @@ async def resolve_alert(
 @router.get("/{alert_id}")
 async def get_alert(
     alert_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
+    pg_db: AsyncSession = Depends(get_db),
 ):
     """
-    Get a specific alert by ID
+    Get a specific alert by ID (ABAC-scoped on both alerts + event fallback).
     """
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+
     db = get_mongodb()
     alerts_collection = db.get_collection("alerts")
+    abac = await build_abac_mongo_filter(pg_db, current_user)
 
-    # Try to find alert in database
-    alert_doc = await alerts_collection.find_one({"id": alert_id})
+    # Try to find alert in database (ABAC-filtered).
+    alert_doc = await alerts_collection.find_one(
+        merge_mongo_filter({"id": alert_id}, abac)
+    )
 
     if alert_doc:
         alert_dict = {k: v for k, v in alert_doc.items() if k != "_id"}
@@ -287,9 +324,14 @@ async def get_alert(
         logger.info("Alert retrieved", alert_id=alert_id)
         return alert_dict
 
-    # If not found in alerts collection, try events
+    # If not found in alerts collection, try events (still ABAC-filtered).
     events_collection = db.dlp_events
-    event_doc = await events_collection.find_one({"$or": [{"id": alert_id}, {"event_id": alert_id}]})
+    event_doc = await events_collection.find_one(
+        merge_mongo_filter(
+            {"$or": [{"id": alert_id}, {"event_id": alert_id}]},
+            abac,
+        )
+    )
 
     if event_doc:
         # Create alert from event

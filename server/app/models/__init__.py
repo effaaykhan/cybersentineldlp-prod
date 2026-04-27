@@ -4,6 +4,7 @@ Exports all SQLAlchemy models for easy import
 """
 
 from app.models.role import Role
+from app.models.permission import Permission, RolePermission, UserPermission
 from app.models.user import User, UserRole
 from app.models.endpoint import Endpoint
 from app.models.agent_log import AgentLog
@@ -29,6 +30,9 @@ from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
 
 __all__ = [
     "Role",
+    "Permission",
+    "RolePermission",
+    "UserPermission",
     "User",
     "UserRole",
     "Endpoint",

@@ -89,6 +89,9 @@ class UserService:
         full_name: str,
         role: str = "VIEWER",
         organization: Optional[str] = None,
+        department: Optional[str] = None,
+        clearance_level: Optional[int] = None,
+        username: Optional[str] = None,
     ) -> User:
         """
         Create a new user
@@ -115,10 +118,13 @@ class UserService:
         hashed_password = get_password_hash(password)
         user = User(
             email=email,
+            username=username,
             hashed_password=hashed_password,
             full_name=full_name,
             role=role,
             organization=organization,
+            department=department,
+            clearance_level=clearance_level if clearance_level is not None else 1,
             is_active=True,
             is_verified=False,
         )
@@ -136,6 +142,8 @@ class UserService:
         role: Optional[str] = None,
         organization: Optional[str] = None,
         is_active: Optional[bool] = None,
+        department: Optional[str] = None,
+        clearance_level: Optional[int] = None,
     ) -> Optional[User]:
         """
         Update user details
@@ -162,11 +170,25 @@ class UserService:
             user.organization = organization
         if is_active is not None:
             user.is_active = is_active
+        if department is not None:
+            user.department = department
+        if clearance_level is not None:
+            user.clearance_level = clearance_level
 
         user.updated_at = datetime.utcnow()
 
         await self.db.commit()
         await self.db.refresh(user)
+
+        # Invalidate the ingest-path user→department cache so subsequent
+        # events for this user get tagged with the new attributes. Historical
+        # events are intentionally not rewritten (immutability).
+        try:
+            from app.services.user_dept_cache import invalidate as _dept_invalidate
+
+            await _dept_invalidate(user.email)
+        except Exception:
+            pass
 
         return user
 
@@ -205,39 +227,45 @@ class UserService:
     async def delete_user(self, user_id: str) -> bool:
         """
         Delete a user (soft delete - sets is_active to False)
-
-        Args:
-            user_id: UUID of the user
-
-        Returns:
-            True if user was deleted, False if not found
         """
         user = await self.get_user_by_id(user_id)
         if not user:
             return False
 
+        email = user.email
         user.is_active = False
         user.updated_at = datetime.utcnow()
 
         await self.db.commit()
+
+        # Invalidate ingest-path dept cache so new events for this email
+        # don't reuse a stale department mapping during the TTL window.
+        try:
+            from app.services.user_dept_cache import invalidate as _dept_invalidate
+            await _dept_invalidate(email)
+        except Exception:
+            pass
+
         return True
 
     async def hard_delete_user(self, user_id: str) -> bool:
         """
         Permanently delete a user from database
-
-        Args:
-            user_id: UUID of the user
-
-        Returns:
-            True if user was deleted, False if not found
         """
         user = await self.get_user_by_id(user_id)
         if not user:
             return False
 
+        email = user.email
         await self.db.delete(user)
         await self.db.commit()
+
+        try:
+            from app.services.user_dept_cache import invalidate as _dept_invalidate
+            await _dept_invalidate(email)
+        except Exception:
+            pass
+
         return True
 
     async def update_last_login(self, user_id: str) -> None:

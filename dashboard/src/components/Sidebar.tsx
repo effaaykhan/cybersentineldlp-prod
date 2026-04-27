@@ -14,23 +14,41 @@ import {
   AlertTriangle,
   Search,
   ClipboardList,
+  UserCog,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { usePermission } from '@/hooks/usePermission'
 
-const navigation = [
-  { name: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
-  { name: 'Agents', to: '/agents', icon: Server },
-  { name: 'Events', to: '/events', icon: FileText },
-  { name: 'Alerts', to: '/alerts', icon: AlertCircle },
-  { name: 'Incidents', to: '/incidents', icon: AlertTriangle },
-  { name: 'Log Explorer', to: '/log-explorer', icon: Search },
-  { name: 'Rules', to: '/rules', icon: List },
-  { name: 'Policies', to: '/policies', icon: Shield },
-  { name: 'Settings', to: '/settings', icon: Settings },
+// Each nav item declares the permissions that would make it relevant.
+// An item is shown if the user has ANY of the listed permissions, OR if
+// the list is empty (always-shown). ADMIN is implicitly granted everything
+// via usePermission.hasAny.
+type NavItem = {
+  name: string
+  to: string
+  icon: typeof LayoutDashboard
+  requires: string[]
+}
+
+const navigation: NavItem[] = [
+  { name: 'Dashboard',        to: '/dashboard',     icon: LayoutDashboard, requires: ['view_dashboard'] },
+  { name: 'Agents',       to: '/agents',       icon: Server,          requires: ['view_events'] },
+  { name: 'Events',       to: '/events',       icon: FileText,        requires: ['view_events'] },
+  { name: 'Alerts',       to: '/alerts',       icon: AlertCircle,     requires: ['view_alerts'] },
+  { name: 'Incidents',    to: '/incidents',    icon: AlertTriangle,   requires: ['view_alerts'] },
+  { name: 'Log Explorer', to: '/log-explorer', icon: Search,          requires: ['view_events'] },
+  { name: 'Rules',        to: '/rules',        icon: List,            requires: ['create_policy', 'update_policy'] },
+  { name: 'Policies',        to: '/policies',     icon: Shield,     requires: ['create_policy', 'update_policy'] },
+  { name: 'User Management', to: '/admin/users',  icon: UserCog,    requires: ['manage_users'] },
+  { name: 'Settings',        to: '/settings',     icon: Settings,   requires: ['manage_users', 'manage_roles'] },
 ]
 
 export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const { hasAny } = usePermission()
+  const visibleNav = navigation.filter(
+    (item) => item.requires.length === 0 || hasAny(item.requires),
+  )
 
   return (
     <aside className={cn(
@@ -53,7 +71,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
-        {navigation.map((item) => (
+        {visibleNav.map((item) => (
           <NavLink
             key={item.name}
             to={item.to}

@@ -6,7 +6,7 @@ User login, registration, token refresh, SSO exchange
 from datetime import datetime, timedelta
 from typing import Dict
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,7 @@ from app.core.security import (
     validate_password_strength,
     decode_token,
     get_current_user,
+    require_role,
 )
 from app.core.config import settings
 from app.core.database import get_db
@@ -386,6 +387,56 @@ async def logout(
     await audit_log(current_user.id, "auth.logout")
 
     return {"message": "Logged out successfully"}
+
+
+@router.get("/me")
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Dict:
+    """
+    Return the authenticated user's identity + resolved permissions.
+
+    This is the source of truth the frontend uses to drive UI gating.
+    Never trust the role embedded in a JWT for authorization decisions —
+    that's just a hint for optimistic UI; this endpoint is what actually
+    backs show/hide logic, and the server re-checks on every protected call.
+    """
+    from app.services.permission_service import get_user_permissions
+
+    permissions = sorted(await get_user_permissions(db, current_user))
+    role_value = getattr(current_user.role, "value", str(current_user.role))
+
+    return {
+        "id": str(current_user.id),
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "role": role_value,
+        "role_id": str(current_user.role_id) if current_user.role_id else None,
+        "department": current_user.department,
+        "organization": current_user.organization,
+        "is_active": current_user.is_active,
+        "permissions": permissions,
+    }
+
+
+@router.get("/users/check")
+async def check_user_exists(
+    email: EmailStr = Query(..., description="Email address to check"),
+    _: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+) -> Dict:
+    """
+    Admin-only probe: does a user with this email exist in the DLP system?
+
+    Used by the SIEM to reconcile its local `dlpRegistered` flag when an
+    admin deletes a DLP account directly from the admin panel. Without
+    this, the SIEM would keep pushing stale SSO logins for a user that
+    no longer exists, and the exchange at /sso/exchange would 401.
+    """
+    user_service = UserService(db)
+    user = await user_service.get_user_by_email(email.strip().lower())
+    return {"exists": user is not None}
 
 
 # ── SSO Exchange ─────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ User Database Models (PostgreSQL)
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Boolean, DateTime, Enum, ForeignKey
+from sqlalchemy import Column, String, Boolean, DateTime, Enum, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -19,6 +19,7 @@ def _utcnow():
 class UserRole(str, enum.Enum):
     ADMIN = "ADMIN"
     ANALYST = "ANALYST"
+    MANAGER = "MANAGER"
     VIEWER = "VIEWER"
     AGENT = "AGENT"
 
@@ -34,6 +35,7 @@ class User(Base):
     role = Column(Enum(UserRole), nullable=False, default=UserRole.VIEWER)
     role_id = Column(UUID(as_uuid=True), ForeignKey("roles.id", ondelete="SET NULL"), nullable=True, index=True)
     department = Column(String(255), nullable=True)
+    clearance_level = Column(Integer, nullable=False, default=1, server_default="1")
     organization = Column(String(255), nullable=False)
 
     # Relationships

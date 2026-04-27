@@ -228,8 +228,10 @@ def require_role(required_role: str):
     async def role_checker(current_user: User = Depends(get_current_user)):
         user_role = current_user.role
 
-        # Role hierarchy: ADMIN > ANALYST > VIEWER
-        role_hierarchy = {"ADMIN": 3, "ANALYST": 2, "VIEWER": 1}
+        # Role hierarchy: ADMIN > ANALYST ≈ MANAGER > VIEWER
+        # MANAGER sits at ANALYST's level for backwards-compatible hierarchical checks.
+        # Fine-grained gating should use require_permission instead of require_role.
+        role_hierarchy = {"ADMIN": 3, "ANALYST": 2, "MANAGER": 2, "VIEWER": 1}
         
         # Convert role to string - handle enum properly
         # UserRole enum has .value attribute that returns the string value
@@ -252,6 +254,61 @@ def require_role(required_role: str):
         return current_user
 
     return role_checker
+
+
+def require_permission(permission: str):
+    """
+    Dependency factory for fine-grained RBAC.
+
+    Resolves the current user's full permission set via permission_service
+    and raises 403 if `permission` is not granted. Every denial is recorded
+    in the audit log with result=DENIED so SOC can reconstruct attempts.
+
+    Prefer this over require_role for new endpoints. require_role remains
+    for legacy gates and for coarse ADMIN-only checks.
+    """
+    async def _checker(
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> User:
+        # Lazy import: permission_service -> models -> security -> cycle otherwise.
+        from app.services.permission_service import get_user_permissions
+        from app.services.audit_service import audit_log
+
+        perms = await get_user_permissions(db, current_user)
+        if permission not in perms:
+            # Fire-and-forget audit of the denial. Do not let an audit write
+            # failure leak into the authorization path.
+            try:
+                await audit_log(
+                    current_user.id,
+                    "authz.denied",
+                    {
+                        "required_permission": permission,
+                        "user_role": getattr(
+                            current_user.role, "value", str(current_user.role)
+                        ),
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "audit_log failed during 403 denial",
+                    user_id=str(current_user.id),
+                    permission=permission,
+                )
+            logger.info(
+                "Permission denied",
+                user_id=str(current_user.id),
+                email=current_user.email,
+                required=permission,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing required permission: {permission}",
+            )
+        return current_user
+
+    return _checker
 
 
 def validate_password_strength(password: str) -> bool:

@@ -72,7 +72,11 @@ class AgentService:
         if os_type:
             query = query.where(Agent.os_type == os_type)
 
-        query = query.offset(skip).limit(limit).order_by(Agent.last_heartbeat.desc())
+        # Order by the numeric agent_code so listings match registration
+        # order (001, 002, …). ORDER BY is rendered before LIMIT/OFFSET
+        # by SQLAlchemy regardless of method-call order, but we keep the
+        # call sequence explicit to mirror the spec.
+        query = query.order_by(Agent.agent_code.asc()).offset(skip).limit(limit)
 
         result = await self.db.execute(query)
         return list(result.scalars().all())

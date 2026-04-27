@@ -604,8 +604,29 @@ function EventDetailModal({
 }
 
 export default function Events() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const agentParam = searchParams.get('agent')
+
+  // Phase 3: dashboard drill-down params. Read from URL; forward to backend.
+  const dashboardFilters = useMemo(() => {
+    const get = (k: string) => searchParams.get(k) || undefined
+    return {
+      module: get('module'),
+      event_type: get('event_type'),
+      classification: get('classification'),
+      action: get('action'),
+      severity: get('severity'),
+      channel: get('channel'),
+      start_date: get('start_date'),
+      end_date: get('end_date'),
+      time_range: get('time_range'),
+    }
+  }, [searchParams])
+
+  const activeDashboardFilters = useMemo(
+    () => Object.entries(dashboardFilters).filter(([, v]) => !!v),
+    [dashboardFilters],
+  )
 
   const [kqlQuery, setKqlQuery] = useState('')
   const [activeQuery, setActiveQuery] = useState(agentParam || '')
@@ -722,19 +743,25 @@ export default function Events() {
     return 'File Activity'
   }
 
-  // Fetch events
+  // Fetch events — forward dashboard drill-down filters as query params
+  // (backend merges them into the Mongo filter alongside ABAC).
   const {
     data,
     isLoading,
     error,
     refetch,
   } = useQuery({
-    queryKey: ['events', activeQuery],
-    queryFn: () =>
-      activeQuery
-        ? searchEvents({ search: activeQuery, limit: 100 })
-        : searchEvents({ limit: 100 }),
-    refetchInterval: 15000, // Refresh every 15s
+    queryKey: ['events', activeQuery, dashboardFilters],
+    queryFn: () => {
+      const params: Record<string, any> = { limit: 100 }
+      if (activeQuery) params.search = activeQuery
+      // Only include filter params that are actually set.
+      for (const [k, v] of Object.entries(dashboardFilters)) {
+        if (v) params[k] = v
+      }
+      return searchEvents(params)
+    },
+    refetchInterval: 15000,
   })
 
   const events = data?.events || []
@@ -907,6 +934,35 @@ export default function Events() {
           Search and analyze DLP events by keyword
         </p>
       </div>
+
+      {/* Active dashboard drill-down filters */}
+      {activeDashboardFilters.length > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-indigo-900 font-medium">
+              Drill-down from dashboard:
+            </span>
+            {activeDashboardFilters.map(([k, v]) => (
+              <span
+                key={k}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-indigo-200 text-xs font-medium text-indigo-800"
+              >
+                {k}=<span className="font-mono">{v}</span>
+              </span>
+            ))}
+          </div>
+          <button
+            onClick={() => {
+              const next = new URLSearchParams(searchParams)
+              for (const [k] of activeDashboardFilters) next.delete(k)
+              setSearchParams(next, { replace: true })
+            }}
+            className="text-xs text-indigo-700 hover:text-indigo-900 hover:underline font-medium"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
 
       {/* Search Bar */}
       <div className="card">

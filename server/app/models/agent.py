@@ -20,6 +20,11 @@ class Agent(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     agent_id = Column(String(64), unique=True, nullable=False, index=True)
+    # Short, human-readable numeric ID. Sequence-assigned by the DB
+    # (see migration 018); never set by application code. The UI zero-pads
+    # this for display ("001", "012"); we keep it as a plain INTEGER so
+    # it sorts naturally and width is a presentation concern.
+    agent_code = Column(Integer, unique=True, nullable=True, index=True)
     name = Column(String(255), nullable=False)
     hostname = Column(String(255), nullable=False)
     os = Column(String(50), nullable=False)
@@ -59,6 +64,7 @@ class Agent(Base):
         return {
             "id": str(self.id),
             "agent_id": self.agent_id,
+            "agent_code": self.agent_code,
             "name": self.name,
             "hostname": self.hostname,
             "os": self.os,

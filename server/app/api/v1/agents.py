@@ -27,6 +27,55 @@ router = APIRouter()
 AGENT_TIMEOUT_SECONDS = 5
 
 
+async def _next_agent_code() -> Optional[int]:
+    """Pull the next ``agent_code`` from the Postgres sequence.
+
+    Sequence-driven so we never compute the ID in application code
+    (see migration 018). Returns ``None`` when Postgres is unavailable
+    so we degrade to "no display code" rather than blocking registration.
+    """
+    import app.core.database as _db
+    from sqlalchemy import text
+
+    if not _db.postgres_session_factory:
+        return None
+
+    try:
+        async with _db.postgres_session_factory() as session:
+            row = await session.execute(text("SELECT nextval('agent_code_seq')"))
+            value = row.scalar()
+            return int(value) if value is not None else None
+    except Exception as e:
+        logger.warning("Failed to fetch agent_code sequence", error=str(e))
+        return None
+
+
+async def _ensure_agent_code(agent_doc: Dict[str, Any]) -> Optional[int]:
+    """Backfill ``agent_code`` on a legacy Mongo doc that pre-dates the
+    column. Concurrent calls can briefly waste sequence values but the
+    ``$exists: false`` guard ensures no doc ever ends up with two codes.
+    """
+    code = agent_doc.get("agent_code")
+    if isinstance(code, int):
+        return code
+
+    new_code = await _next_agent_code()
+    if new_code is None:
+        return None
+
+    db = get_mongodb()
+    await db["agents"].update_one(
+        {"_id": agent_doc["_id"], "agent_code": {"$exists": False}},
+        {"$set": {"agent_code": new_code}},
+    )
+    # Whoever won the race wrote first; re-read to learn the persisted code.
+    fresh = await db["agents"].find_one({"_id": agent_doc["_id"]}, {"agent_code": 1})
+    if fresh and isinstance(fresh.get("agent_code"), int):
+        agent_doc["agent_code"] = fresh["agent_code"]
+        return fresh["agent_code"]
+    return None
+
+
 async def verify_agent_key(request: Request) -> Optional[str]:
     """Verify the X-Agent-Key header if present.
 
@@ -72,6 +121,11 @@ class AgentCreate(BaseModel):
 class Agent(AgentBase):
     """Agent response model"""
     agent_id: str = Field(..., description="Unique agent ID")
+    # Short numeric ID (1, 2, 3 …) assigned by the Postgres sequence
+    # ``agent_code_seq``. UI zero-pads for display ("001"). Optional in
+    # the response so legacy Mongo docs that haven't been backfilled yet
+    # don't fail validation.
+    agent_code: Optional[int] = Field(None, description="Short numeric ID for UI display")
     # TODO: Implement agent resume functionality so agents can resume instead of creating new entries
     # Status field removed - agents are considered active if they've sent heartbeat within timeout period
     last_seen: datetime = Field(..., description="Last heartbeat timestamp")
@@ -129,11 +183,20 @@ async def list_agents(
     if os:
         query["os"] = os
 
-    # Query agents from database
-    agents_cursor = agents_collection.find(query).sort("last_seen", -1)
+    # Query agents from database — sort by the numeric agent_code so the
+    # earliest-registered agent (001) is first and new agents append at
+    # the bottom (PART of the chronological-order spec). last_seen DESC
+    # is kept as a tiebreaker for the unlikely case where two agents
+    # share a code (e.g. a doc lost its code mid-backfill).
+    agents_cursor = agents_collection.find(query).sort(
+        [("agent_code", 1), ("last_seen", -1)]
+    )
     agents = []
 
     async for agent_doc in agents_cursor:
+        # Backfill agent_code BEFORE stripping _id (we need _id to update).
+        await _ensure_agent_code(agent_doc)
+
         # Remove MongoDB _id field and status field (no longer used)
         if "_id" in agent_doc:
             del agent_doc["_id"]
@@ -174,11 +237,18 @@ async def list_all_agents(
     cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
     cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 
-    # Get all agents
-    agents_cursor = agents_collection.find({}).sort("last_seen", -1)
+    # Get all agents, sorted by numeric agent_code (001, 002, …) so the
+    # display matches registration order. Tiebreak on last_seen so agents
+    # without a code don't bunch up unpredictably.
+    agents_cursor = agents_collection.find({}).sort(
+        [("agent_code", 1), ("last_seen", -1)]
+    )
     agents = []
 
     async for agent_doc in agents_cursor:
+        # Backfill agent_code BEFORE stripping _id (we need _id to update).
+        await _ensure_agent_code(agent_doc)
+
         # Remove MongoDB _id field
         if "_id" in agent_doc:
             del agent_doc["_id"]
@@ -271,12 +341,20 @@ async def register_agent(
             {"_id": existing["_id"]},
             {"$set": update_fields},
         )
+        # Re-registering legacy agent without agent_code → backfill now.
+        agent_code = existing.get("agent_code")
+        if not isinstance(agent_code, int):
+            agent_code = await _ensure_agent_code(existing)
+        agent_doc = existing
     else:
-        # New agent
+        # New agent — pull agent_code from the Postgres sequence so we
+        # never compute the ID in app code.
         api_key = f"csak_{secrets.token_urlsafe(32)}"
+        agent_code = await _next_agent_code()
 
         agent_doc = {
             "agent_id": agent_id,
+            "agent_code": agent_code,
             "name": agent.name,
             "os": agent.os,
             "ip_address": agent.ip_address,
@@ -293,11 +371,12 @@ async def register_agent(
 
         await agents_collection.insert_one(agent_doc)
 
-    logger.info("Agent registered", agent_id=agent_id, name=agent.name)
+    logger.info("Agent registered", agent_id=agent_id, agent_code=agent_code, name=agent.name)
 
     # Return agent data + the API key (shown once)
-    response_doc = {k: v for k, v in agent_doc.items() if k != "api_key"}
+    response_doc = {k: v for k, v in agent_doc.items() if k not in ("api_key", "_id")}
     response_doc["api_key"] = api_key
+    response_doc["agent_code"] = agent_code
     response_doc["last_seen"] = now.isoformat()
     response_doc["created_at"] = now.isoformat()
 
@@ -322,6 +401,9 @@ async def get_agent(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Agent {agent_id} not found"
         )
+
+    # Backfill agent_code BEFORE stripping _id (we need _id to update).
+    await _ensure_agent_code(agent_doc)
 
     # Remove MongoDB _id field
     if "_id" in agent_doc:

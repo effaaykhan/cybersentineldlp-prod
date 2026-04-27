@@ -19,7 +19,7 @@ apiClient.interceptors.request.use((config) => {
   let authToken = token
   if (!authToken) {
     try {
-      const authData = localStorage.getItem('dlp-auth-v2')
+      const authData = localStorage.getItem('dlp-auth-v3')
       if (authData) {
         const parsed = JSON.parse(authData)
         authToken = parsed?.state?.accessToken
@@ -180,6 +180,10 @@ export const triggerGoogleDrivePoll = async () => {
 export type Agent = {
   id?: string
   agent_id: string
+  /** Short numeric ID assigned by the Postgres sequence
+   *  ``agent_code_seq``. The UI zero-pads it for display ("001"); the
+   *  raw ``agent_id``/UUID stays the source of truth for API calls. */
+  agent_code?: number
   name: string
   os: string
   ip_address: string
@@ -437,6 +441,102 @@ export const getUserStats = async () => {
   return data
 }
 
+// ── Admin User Management ──
+// These target the Phase-1 RBAC-enforced admin endpoints on /users.
+// Distinct from the legacy `getUsers` / `getUser` helpers above which are
+// used by the DLP user-activity monitoring page.
+
+export type AdminUser = {
+  id: string
+  username: string | null
+  email: string
+  full_name: string
+  role: string
+  organization: string
+  department: string | null
+  clearance_level: number
+  is_active: boolean
+  created_at: string | null
+  /** Effective permission set (role defaults ∪ direct grants), sorted. */
+  permissions: string[]
+  /** Direct grants only — subset of `permissions`. */
+  direct_permissions: string[]
+}
+
+export type AdminUserCreateInput = {
+  email: string
+  password: string
+  full_name: string
+  role: string
+  organization?: string
+  username?: string
+  department?: string
+  clearance_level?: number
+  /** Optional direct-grant permissions, unioned with the role defaults. */
+  permissions?: string[]
+}
+
+export type AdminUserUpdateInput = {
+  full_name?: string
+  role?: string
+  department?: string
+  clearance_level?: number
+  is_active?: boolean
+  /** When present (even []), replaces the user's direct permission grants. */
+  permissions?: string[]
+}
+
+export type PermissionDef = {
+  id: string
+  name: string
+  description: string
+}
+
+export const listAllPermissions = async (): Promise<PermissionDef[]> => {
+  const { data } = await apiClient.get('/permissions/')
+  return data
+}
+
+export const adminListUsers = async (params?: {
+  skip?: number
+  limit?: number
+  role?: string
+  is_active?: boolean
+}): Promise<AdminUser[]> => {
+  const { data } = await apiClient.get('/users/', { params })
+  return data
+}
+
+export const adminCreateUser = async (
+  input: AdminUserCreateInput
+): Promise<AdminUser> => {
+  const { data } = await apiClient.post('/users/', input)
+  return data
+}
+
+export const adminUpdateUser = async (
+  userId: string,
+  input: AdminUserUpdateInput
+): Promise<AdminUser> => {
+  const { data } = await apiClient.put(`/users/${userId}`, input)
+  return data
+}
+
+export const adminDeactivateUser = async (userId: string) => {
+  const { data } = await apiClient.delete(`/users/${userId}`)
+  return data
+}
+
+/** Permanently delete a user row. Use with caution — referential cleanup
+ *  is CASCADE/SET NULL; historical audit entries remain but lose the
+ *  actor linkage. */
+export const adminHardDeleteUser = async (userId: string) => {
+  const { data } = await apiClient.delete(`/users/${userId}`, {
+    params: { hard: true },
+  })
+  return data
+}
+
 // Alerts functions
 export const acknowledgeAlert = async (alertId: string) => {
   const { data } = await apiClient.post(`/alerts/${alertId}/acknowledge`)
@@ -572,5 +672,6 @@ export async function getScanResults(jobId: string, params?: { skip?: number; li
   const { data } = await apiClient.get(`/scans/${jobId}/results`, { params })
   return data
 }
+
 
 export default apiClient

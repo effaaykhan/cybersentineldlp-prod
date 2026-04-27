@@ -190,8 +190,17 @@ export default function Agents() {
                       )}
                     </td>
                     <td>
-                      <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-                        {agent.agent_id}
+                      {/* Show the short numeric agent_code zero-padded to
+                          three digits (001, 012, 123). The UUID/agent_id
+                          stays available on hover for power users and is
+                          still the value sent on click-through. */}
+                      <code
+                        className="text-xs bg-gray-100 px-2 py-1 rounded font-mono tabular-nums"
+                        title={agent.agent_id}
+                      >
+                        {typeof agent.agent_code === 'number'
+                          ? String(agent.agent_code).padStart(3, '0')
+                          : agent.agent_id}
                       </code>
                     </td>
                     <td>

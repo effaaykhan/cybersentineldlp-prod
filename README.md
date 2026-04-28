@@ -28,6 +28,18 @@ bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-
 
 This clones the repo, generates secure passwords, starts all services, and prints the admin credentials.
 
+#### Install the updates
+```
+docker compose -f docker-compose.prod.yml pull
+```
+```
+docker compose -f docker-compose.prod.yml up -d
+```
+#### Verify
+```
+docker ps
+```
+
 **Manual install:**
 
 ```bash

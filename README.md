@@ -52,7 +52,18 @@ powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.c
 
 This downloads the agent binary, creates configuration, registers a scheduled task (runs as current user for clipboard/screen access), and starts monitoring.
 
-Agent IDs are assigned automatically: WIN-001, WIN-002, etc.
+#### To start the agent:
+```powershell
+Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+```
+
+#### To Stop the agent:
+```powershell
+Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+```
+```powershell
+Stop-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
+```
 
 ### Linux Agent
 

@@ -600,6 +600,23 @@ class EventProcessor:
             if summary.quarantined:
                 event["quarantined"] = True
 
+        # Matched-policy severity is the single source of truth for event
+        # severity. Without this, an event that arrived with the default
+        # "medium" (e.g. USB connect/disconnect, which has no content for
+        # the classification stage to override severity) kept that default
+        # even when a matching policy explicitly defined "low" / "high" /
+        # etc. When multiple policies match, the highest severity wins so
+        # the most serious classification surfaces in alerts/incidents.
+        severity_rank = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+        candidate_severities = [m.severity for m in matches if m.severity]
+        if candidate_severities:
+            winning_severity = max(
+                candidate_severities,
+                key=lambda s: severity_rank.get(s, -1),
+            )
+            event.setdefault("event", {})
+            event["event"]["severity"] = winning_severity
+
         logger.info(
             "Policies evaluated",
             event_id=event.get("event_id"),

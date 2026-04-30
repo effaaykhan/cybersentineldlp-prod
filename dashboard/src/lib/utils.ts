@@ -52,6 +52,29 @@ function parseAsUTC(date: string | Date): Date {
 }
 
 /**
+ * Render an agent reference as "NAME (NNN)" for the UI.
+ *
+ * Resolution order: server-enriched name → caller-provided fallback name
+ * (e.g. the local agentMap lookup) → "Unknown Agent". The agent_code is
+ * zero-padded to three digits to match the Agents page convention. The
+ * raw ``agent_id`` UUID is intentionally not surfaced here — callers
+ * that want it visible should pass it via ``title=`` on the rendered
+ * element.
+ */
+export function formatAgentLabel(
+  name?: string | null,
+  code?: number | null,
+  fallbackName?: string | null,
+): string {
+  const resolvedName = name || fallbackName
+  if (!resolvedName) return 'Unknown Agent'
+  if (typeof code === 'number') {
+    return `${resolvedName} (${String(code).padStart(3, '0')})`
+  }
+  return resolvedName
+}
+
+/**
  * Format date to human-readable string in IST
  */
 export function formatDate(date: string | Date, formatStr = 'PPpp'): string {

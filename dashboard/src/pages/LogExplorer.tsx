@@ -3,7 +3,7 @@ import { Search, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Filter } fro
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import { searchEvents } from '@/lib/api'
-import { formatDateTimeIST } from '@/lib/utils'
+import { formatDateTimeIST, formatAgentLabel } from '@/lib/utils'
 
 const SEVERITY_OPTIONS = ['info', 'low', 'medium', 'high', 'critical']
 const EVENT_TYPES = ['file_transfer', 'clipboard', 'usb', 'google_drive', 'onedrive', 'email', 'network', 'process']
@@ -136,7 +136,11 @@ export default function LogExplorer() {
                       <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{ev.timestamp ? formatDateTimeIST(ev.timestamp) : '-'}</td>
                       <td className="px-4 py-3"><span className="px-2 py-0.5 rounded text-xs font-medium bg-[#2a2d2f] text-gray-300">{ev.event_type || '-'}</span></td>
                       <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${sevColor}`}>{ev.severity || 'info'}</span></td>
-                      <td className="px-4 py-3 text-gray-400 font-mono text-xs">{ev.agent_id || '-'}</td>
+                      <td className="px-4 py-3 text-gray-300 text-xs" title={ev.agent_id}>
+                        {ev.agent_name || ev.agent_code != null
+                          ? formatAgentLabel(ev.agent_name, ev.agent_code)
+                          : (ev.agent_id ? formatAgentLabel(undefined, undefined) : '-')}
+                      </td>
                       <td className="px-4 py-3 text-gray-300 truncate max-w-xs">{ev.file_name || ev.description || ev.title || '-'}</td>
                     </tr>
                     {expanded && (

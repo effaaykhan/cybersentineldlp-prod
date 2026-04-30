@@ -60,6 +60,12 @@ class DLPEvent(BaseModel):
     description: Optional[str] = None
     source: str = "unknown"
     agent_id: str = "unknown"
+    # Enriched from the agents table at read time so the UI can render a
+    # human-readable label ("CRYPTON (002)") instead of the raw agent_id
+    # UUID. Both fall back to None when the agent has been deleted; the
+    # raw agent_id stays the source of truth and is never overwritten.
+    agent_name: Optional[str] = None
+    agent_code: Optional[int] = None
     user_email: str = "agent@system"
     classification_level: Optional[str] = None
     classification_score: Optional[float] = 0.0
@@ -110,6 +116,44 @@ class EventQueryParams(BaseModel):
     source: Optional[List[str]] = None
     user_email: Optional[str] = None
     blocked_only: bool = False
+
+
+async def _attach_agent_info(events: List[Dict[str, Any]]) -> None:
+    """Batch-fill ``agent_name``/``agent_code`` on event dicts in place.
+
+    Events and agents both live in MongoDB (``dlp_events`` / ``agents``),
+    so we can't SQL-JOIN them. Instead: collect the unique ``agent_id``s
+    referenced by this page of events, fetch the matching agent docs in
+    one query, then merge ``name`` and ``agent_code`` onto each event.
+    The event documents themselves are never mutated — enrichment lives
+    purely on the API response, so renames on the agent flow through
+    automatically and the events collection stays canonical.
+    """
+    if not events:
+        return
+
+    agent_ids = {
+        ev.get("agent_id")
+        for ev in events
+        if ev.get("agent_id") and ev.get("agent_id") != "unknown"
+    }
+    if not agent_ids:
+        return
+
+    db = get_mongodb()
+    cursor = db.agents.find(
+        {"agent_id": {"$in": list(agent_ids)}},
+        {"_id": 0, "agent_id": 1, "name": 1, "agent_code": 1},
+    )
+    info: Dict[str, Dict[str, Any]] = {
+        doc["agent_id"]: doc async for doc in cursor if doc.get("agent_id")
+    }
+
+    for ev in events:
+        match = info.get(ev.get("agent_id"))
+        if match:
+            ev["agent_name"] = match.get("name")
+            ev["agent_code"] = match.get("agent_code")
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
@@ -756,6 +800,10 @@ async def get_events(
         except Exception as e:
             logger.warning("Skipping malformed event document", error=str(e))
 
+    # Enrich with friendly agent label (name + numeric code) from the
+    # Mongo agents collection — no JOIN, just a batched lookup.
+    await _attach_agent_info(events)
+
     # Get total count for pagination
     total = await db.dlp_events.count_documents(query_filter)
 
@@ -833,7 +881,11 @@ async def get_event(
                     pass
         raise HTTPException(status_code=404, detail="Event not found")
 
-    return event
+    # Enrich with friendly agent label so the detail view shows
+    # "CRYPTON (002)" rather than the raw agent_id UUID.
+    event_dict = {k: v for k, v in event.items() if k != "_id"}
+    await _attach_agent_info([event_dict])
+    return event_dict
 
 
 @router.get("/stats/summary")

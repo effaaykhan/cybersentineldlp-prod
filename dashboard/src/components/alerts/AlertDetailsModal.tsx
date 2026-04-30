@@ -2,7 +2,7 @@ import { X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getEvent } from '@/lib/api'
 import LoadingSpinner from '../LoadingSpinner'
-import { cn } from '@/lib/utils'
+import { cn, formatAgentLabel } from '@/lib/utils'
 
 interface AlertDetailsModalProps {
   alert: any
@@ -107,8 +107,16 @@ export default function AlertDetailsModal({ alert, isOpen, onClose }: AlertDetai
                   <span className="ml-2">{new Date(alert.created_at).toLocaleString()}</span>
                 </div>
                 <div>
-                  <span className="font-medium text-gray-600">Agent ID:</span>
-                  <span className="ml-2 font-mono text-xs">{alert.agent_id}</span>
+                  <span className="font-medium text-gray-600">Agent:</span>
+                  <span
+                    className="ml-2"
+                    title={eventData?.agent_id || alert.agent_id}
+                  >
+                    {formatAgentLabel(
+                      eventData?.agent_name,
+                      eventData?.agent_code,
+                    )}
+                  </span>
                 </div>
                 <div>
                   <span className="font-medium text-gray-600">Event ID:</span>

@@ -107,6 +107,23 @@ export const deleteAgent = async (agentId: string) => {
   return data
 }
 
+export const decommissionAgent = async (agentId: string) => {
+  const { data } = await apiClient.post(`/agents/${agentId}/decommission`)
+  return data
+}
+
+export const cleanupStaleAgents = async (
+  olderThanDays: number,
+  dryRun: boolean = true,
+) => {
+  const { data } = await apiClient.post(
+    `/agents/cleanup-stale`,
+    null,
+    { params: { older_than_days: olderThanDays, dry_run: dryRun } },
+  )
+  return data
+}
+
 // Additional exports for direct imports
 export const getAlerts = async () => {
   const { data } = await apiClient.get('/alerts/')
@@ -187,21 +204,45 @@ export type Agent = {
   name: string
   os: string
   ip_address: string
-  // Status field removed - agents are considered active if they've sent heartbeat within timeout period
   last_seen: string
   created_at: string
   version?: string
   hostname?: string
   os_version?: string
   capabilities?: Record<string, boolean>
+  /** Legacy boolean — true if heartbeat within ``AGENT_TIMEOUT_SECONDS`` (5s).
+   *  Prefer ``lifecycle_status`` for new UI code. */
   is_active?: boolean
+  /** Legacy two-state label kept for back-compat with older dashboard
+   *  components. ``lifecycle_status`` is the four-tier replacement. */
   status_label?: 'active' | 'disconnected'
+  /** Four-tier freshness ladder computed by the backend.
+   *  active < 5s, disconnected < 1h, inactive < 7d, stale ≥ 7d. */
+  lifecycle_status?: 'active' | 'disconnected' | 'inactive' | 'stale'
+  /** Heartbeat age in seconds — handy for "Last seen X ago" without
+   *  client-side timezone math. */
+  last_seen_seconds_ago?: number | null
+  /** Soft-delete flag. Hidden from the default listing; surface with
+   *  ``GET /agents/all?include_deleted=true`` when auditing. */
+  is_deleted?: boolean
+  deleted_at?: string
+  deleted_by?: string
+  /** "Mark as Decommissioned" — agent stays visible but with a retired
+   *  badge. Distinct from is_deleted (which hides it). */
+  decommissioned?: boolean
+  decommissioned_at?: string
+  decommissioned_by?: string
+  decommissioned_reason?: string
 }
 
 export type Event = {
   id: string
   title?: string
   agent_id: string
+  /** Server-enriched from the agents table at read time; absent only when
+   *  the agent has been deleted. Pair with ``agent_code`` for display. */
+  agent_name?: string
+  agent_code?: number
   event_type: string
   event_subtype?: string
   severity: string

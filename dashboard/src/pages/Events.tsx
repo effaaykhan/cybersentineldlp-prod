@@ -6,7 +6,7 @@ import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, Arro
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { searchEvents, getAgents, clearAllEvents, triggerGoogleDrivePoll, triggerOneDrivePoll, getPolicies, type Event, type Agent } from '@/lib/api'
-import { formatDate, getSeverityColor, cn, truncate, formatDateTimeIST } from '@/lib/utils'
+import { formatDate, getSeverityColor, cn, truncate, formatDateTimeIST, formatAgentLabel } from '@/lib/utils'
 import toast from 'react-hot-toast'
 
 // Event Detail Modal Component
@@ -169,7 +169,9 @@ function EventDetailModal({
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Agent</label>
-                <p className="text-gray-900 font-medium">{event.agent_id}</p>
+                <p className="text-gray-900 font-medium" title={event.agent_id}>
+                  {formatAgentLabel(event.agent_name, event.agent_code)}
+                </p>
               </div>
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">User</label>
@@ -572,7 +574,9 @@ function EventDetailModal({
             </div>
             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
               <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Agent</label>
-              <p className="text-gray-900 font-medium">{event.agent_id}</p>
+              <p className="text-gray-900 font-medium" title={event.agent_id}>
+                {formatAgentLabel(event.agent_name, event.agent_code)}
+              </p>
             </div>
             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
               <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Description</label>
@@ -650,24 +654,31 @@ export default function Events() {
     refetchInterval: 30000, // Refresh every 30s
   })
 
-  // Create agent lookup map: agent_id -> agent name
+  // Create agent lookup map: agent_id -> { name, agent_code }
+  // Used as a client-side fallback when an event was returned before the
+  // backend started enriching responses, or when the lookup races a fresh
+  // event whose agent isn't in the cached agents query yet.
   const agentMap = useMemo(() => {
-    const map = new Map<string, string>()
+    const map = new Map<string, { name: string; agent_code?: number }>()
     if (agentsData && Array.isArray(agentsData)) {
       agentsData.forEach((agent: Agent) => {
         if (agent?.agent_id && agent?.name) {
-          map.set(agent.agent_id, agent.name)
+          map.set(agent.agent_id, { name: agent.name, agent_code: agent.agent_code })
         }
       })
     }
     return map
   }, [agentsData])
 
-  // Helper function to get agent name from agent_id
-  const getAgentName = (agentId?: string): string => {
-    if (!agentId) return 'Unknown Agent'
-    const agentName = agentMap.get(agentId)
-    return agentName || agentId // Return agent_id if name not found, not "Unknown Agent"
+  // Resolve an event's agent label using server enrichment first, then
+  // the local agentMap. Returns "NAME (NNN)" or "Unknown Agent".
+  const getEventAgentLabel = (event: Event): string => {
+    const fallback = event.agent_id ? agentMap.get(event.agent_id) : undefined
+    return formatAgentLabel(
+      event.agent_name,
+      event.agent_code ?? fallback?.agent_code,
+      fallback?.name,
+    )
   }
 
   // Helper function to format file size
@@ -1148,8 +1159,8 @@ export default function Events() {
                     <div className="flex items-center gap-3 text-sm text-gray-600">
                       <span>
                         <span className="text-gray-500">Agent:</span>{' '}
-                        <span className="font-medium text-gray-900">
-                          {getAgentName(event.agent_id)}
+                        <span className="font-medium text-gray-900" title={event.agent_id}>
+                          {getEventAgentLabel(event)}
                         </span>
                       </span>
                       <span className="text-gray-400">•</span>

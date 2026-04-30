@@ -48,14 +48,18 @@ function App() {
         position="top-right"
         toastOptions={{
           duration: 4000,
-          style: { background: '#363636', color: '#fff' },
+          style: {
+            background: '#111118',
+            color: '#D0D0E8',
+            border: '0.5px solid #1E1E2E',
+          },
           success: {
             duration: 3000,
-            iconTheme: { primary: '#22c55e', secondary: '#fff' },
+            iconTheme: { primary: '#34D399', secondary: '#111118' },
           },
           error: {
             duration: 5000,
-            iconTheme: { primary: '#ef4444', secondary: '#fff' },
+            iconTheme: { primary: '#F87171', secondary: '#111118' },
           },
         }}
       />

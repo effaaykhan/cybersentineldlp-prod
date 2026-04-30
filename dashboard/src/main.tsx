@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './index.css'
+import './styles/obsidian-vault.css'
 
 // Create a client
 const queryClient = new QueryClient({

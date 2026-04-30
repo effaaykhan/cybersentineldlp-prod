@@ -796,6 +796,9 @@ void Log(const std::string& level, const std::string& message) {
     std::string name;
     std::string policyType;
     std::string action;
+    std::string severity;  // From server policy. Empty when the operator
+                           // didn't pin a severity, in which case callers
+                           // fall back to an action-derived guess.
     std::vector<std::string> dataTypes;
     std::vector<std::string> fileExtensions;
     std::vector<std::string> monitoredPaths;
@@ -3154,7 +3157,15 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         
         // Extract name
         rule.name = ExtractJsonString(policyObj, "name");
-        
+
+        // Extract severity (top-level on each policy in the bundle, see
+        // server/app/policies/agent_policy_transformer.py:_serialize_policy).
+        // When empty, the agent's USB/clipboard handlers fall back to
+        // action-derived severity. This was the missing link that made
+        // log-only USB connect events surface as "medium" instead of
+        // honoring the operator-configured severity.
+        rule.severity = ExtractJsonString(policyObj, "severity");
+
         // Extract enabled status
         size_t enabledPos = policyObj.find("\"enabled\"");
         if (enabledPos != std::string::npos) {
@@ -4205,64 +4216,72 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             std::string policyAction = "log";
             std::string matchedPolicyId;
             std::string matchedPolicyName;
-            std::string severity = "medium";
-            
+            std::string matchedPolicySeverity;  // Empty until a policy matches
+            std::string severity;
+
             std::string eventToCheck = "usb_" + eventType;
             std::cout << "[DEBUG] Looking for event: " << eventToCheck << std::endl;
-            
+
             for (const auto& policy : policies) {
                 if (!policy.enabled) {
                     std::cout << "[DEBUG] Policy '" << policy.name << "' is disabled - skipping" << std::endl;
                     continue;
                 }
-                
+
                 std::cout << "[DEBUG] ========================================" << std::endl;
                 std::cout << "[DEBUG] Checking policy: " << policy.name << std::endl;
                 std::cout << "[DEBUG] Policy ID: " << policy.policyId << std::endl;
                 std::cout << "[DEBUG] Policy action: " << policy.action << std::endl;
                 std::cout << "[DEBUG] Monitored events count: " << policy.monitoredEvents.size() << std::endl;
-                
+
                 for (const auto& evt : policy.monitoredEvents) {
                     std::cout << "[DEBUG]   - " << evt << std::endl;
                 }
-                
+
                 // Check if this policy monitors this specific USB event
                 for (const auto& monitoredEvent : policy.monitoredEvents) {
                     std::cout << "[DEBUG] Comparing: '" << monitoredEvent << "' vs '" << eventToCheck << "'" << std::endl;
-                    
-                    if (monitoredEvent == eventToCheck || 
-                        monitoredEvent == "all" || 
+
+                    if (monitoredEvent == eventToCheck ||
+                        monitoredEvent == "all" ||
                         monitoredEvent == "*" ||
                         monitoredEvent == "usb_" + eventType) {
-                        
+
                         eventMonitored = true;
                         policyAction = policy.action;
                         matchedPolicyId = policy.policyId;
                         matchedPolicyName = policy.name;
-                        
+                        matchedPolicySeverity = policy.severity;
+
                         std::cout << "[DEBUG] *** EVENT MATCHED! ***" << std::endl;
                         std::cout << "[DEBUG] Action: " << policyAction << std::endl;
+                        std::cout << "[DEBUG] Policy severity: '" << matchedPolicySeverity << "'" << std::endl;
                         break;
                     }
                 }
-                
+
                 if (eventMonitored) {
                     std::cout << "[DEBUG] Policy matched - stopping search" << std::endl;
                     break;
                 }
             }
-            
+
             std::cout << "[DEBUG] ========================================" << std::endl;
             std::cout << "[DEBUG] Event monitored: " << (eventMonitored ? "YES" : "NO") << std::endl;
             std::cout << "[DEBUG] ===========================================" << std::endl;
-            
+
             if (!eventMonitored) {
                 logger.Info("USB event '" + eventType + "' not monitored by any active policy");
                 return;
             }
-            
-            // Determine severity based on action
-            if (policyAction == "block") {
+
+            // Severity comes strictly from the matched policy. The legacy
+            // action-based guess (block→critical, alert→high, else medium)
+            // remains only as a fallback for policies that didn't pin a
+            // severity in their config — never as an override.
+            if (!matchedPolicySeverity.empty()) {
+                severity = matchedPolicySeverity;
+            } else if (policyAction == "block") {
                 severity = "critical";
             } else if (policyAction == "alert") {
                 severity = "high";

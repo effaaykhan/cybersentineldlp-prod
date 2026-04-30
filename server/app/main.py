@@ -67,6 +67,18 @@ async def _auto_init_schema_and_admin():
         else:
             logger.info("Database tables already exist, skipping creation")
 
+        # Sequences live in Alembic migrations, but fresh installs use
+        # ``create_all`` and never run migrations — so without this the
+        # ``agent_code_seq`` (added by migration 018) would never exist
+        # on a clean box, _next_agent_code() would fail, and the UI would
+        # fall back to the raw agent UUID instead of the "001/002/..."
+        # display code. IF NOT EXISTS makes this safe to call on every
+        # boot, including upgrades where Alembic already created it.
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(
+                text("CREATE SEQUENCE IF NOT EXISTS agent_code_seq START 1")
+            )
+
         # Seed default admin if no users exist yet.
         # Uses ON CONFLICT to handle race conditions with multiple workers.
         async with _db.postgres_session_factory() as session:

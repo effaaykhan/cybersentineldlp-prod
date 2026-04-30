@@ -95,9 +95,14 @@ async def _next_agent_code() -> Optional[int]:
 
 
 async def _ensure_agent_code(agent_doc: Dict[str, Any]) -> Optional[int]:
-    """Backfill ``agent_code`` on a legacy Mongo doc that pre-dates the
-    column. Concurrent calls can briefly waste sequence values but the
-    ``$exists: false`` guard ensures no doc ever ends up with two codes.
+    """Backfill ``agent_code`` on a Mongo doc that doesn't have one yet.
+    Triggered on legacy docs predating the column AND on docs that were
+    inserted while the Postgres ``agent_code_seq`` was missing (fresh
+    installs that skipped Alembic — see _auto_init_schema_and_admin).
+
+    The race guard matches both shapes: field absent OR field present
+    but null. Concurrent calls can briefly waste sequence values, but
+    the guard ensures no doc ever ends up with two codes.
     """
     code = agent_doc.get("agent_code")
     if isinstance(code, int):
@@ -109,7 +114,13 @@ async def _ensure_agent_code(agent_doc: Dict[str, Any]) -> Optional[int]:
 
     db = get_mongodb()
     await db["agents"].update_one(
-        {"_id": agent_doc["_id"], "agent_code": {"$exists": False}},
+        {
+            "_id": agent_doc["_id"],
+            "$or": [
+                {"agent_code": {"$exists": False}},
+                {"agent_code": None},
+            ],
+        },
         {"$set": {"agent_code": new_code}},
     )
     # Whoever won the race wrote first; re-read to learn the persisted code.

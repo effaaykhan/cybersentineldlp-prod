@@ -310,10 +310,11 @@ export default function PolicyCreatorModal({
         description: description.trim() || undefined,
         priority,
         enabled,
+        match: classificationPolicy.conditions.match,
         conditions: conditionsArray,
         actions: actionsArray,
         agentIds: agentId ? [agentId] : [],
-      }
+      } as Partial<Policy> & { match: 'all' | 'any' }
     } else {
       // Traditional policy uses type/severity/config format
       policy = {

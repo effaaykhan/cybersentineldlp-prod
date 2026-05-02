@@ -3,7 +3,7 @@ DLP Policies API Endpoints
 Create, update, and manage DLP policies
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Literal, Optional
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -81,6 +81,7 @@ class PolicyUpsert(BaseModel):
     type: Optional[str] = None
     severity: Optional[str] = None
     config: Optional[Dict[str, Any]] = None
+    match: Literal["all", "any", "none"] = "all"
     conditions: Optional[List[PolicyCondition]] = []
     actions: Optional[List[PolicyAction]] = []
     compliance_tags: List[str] = []
@@ -339,6 +340,9 @@ async def get_policies(
             "type": policy.type,
             "severity": policy.severity,
             "config": policy.config,
+            "match": policy.conditions.get("match", "all")
+            if isinstance(policy.conditions, dict)
+            else "all",
             "conditions": policy.conditions.get("rules", [])
             if isinstance(policy.conditions, dict)
             else [],
@@ -379,6 +383,9 @@ async def get_policy(
         "type": policy.type,
         "severity": policy.severity,
         "config": policy.config,
+        "match": policy.conditions.get("match", "all")
+        if isinstance(policy.conditions, dict)
+        else "all",
         "conditions": policy.conditions.get("rules", [])
         if isinstance(policy.conditions, dict)
         else [],
@@ -418,7 +425,7 @@ async def create_policy(
         )
     else:
         conditions_dict = {
-            "match": "all",
+            "match": policy.match,
             "rules": [cond.dict() for cond in (policy.conditions or [])]
         }
         actions_dict = {action.type: action.parameters for action in (policy.actions or [])}
@@ -500,7 +507,7 @@ async def update_policy(
         )
     else:
         conditions_dict = {
-            "match": "all",
+            "match": policy.match,
             "rules": [cond.dict() for cond in (policy.conditions or [])]
         }
         actions_dict = {action.type: action.parameters for action in (policy.actions or [])}

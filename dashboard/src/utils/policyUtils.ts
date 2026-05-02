@@ -368,7 +368,7 @@ export const transformApiPolicyToFrontend = (apiPolicy: any): Policy => {
   let conditions: any
   if (Array.isArray(apiPolicy.conditions)) {
     conditions = {
-      match: (apiPolicy.conditions_match as 'all' | 'any') || 'all',
+      match: (apiPolicy.match as 'all' | 'any') || 'all',
       rules: apiPolicy.conditions,
     }
   } else if (apiPolicy.conditions && typeof apiPolicy.conditions === 'object') {
@@ -435,12 +435,21 @@ export const transformFrontendPolicyToApi = (policy: Partial<Policy>): any => {
   // instead of the list causes pydantic to reject with
   //   422 "input should be a valid list".
   let conditionsList: any[] = []
+  let conditionsMatch: 'all' | 'any' | 'none' = 'all'
   const fc: any = policy.conditions
   if (fc && typeof fc === 'object' && !Array.isArray(fc)) {
     // Frontend shape: {match, rules: [...]}
     conditionsList = Array.isArray(fc.rules) ? fc.rules : []
+    if (fc.match === 'all' || fc.match === 'any' || fc.match === 'none') {
+      conditionsMatch = fc.match
+    }
   } else if (Array.isArray(fc)) {
     conditionsList = fc
+  }
+  // Top-level `match` (when modal flattens conditions to a list) takes precedence
+  const topMatch = (policy as any).match
+  if (topMatch === 'all' || topMatch === 'any' || topMatch === 'none') {
+    conditionsMatch = topMatch
   }
 
   // ── actions: { alert: {...}, block: {...} } → List[PolicyAction] ──
@@ -472,6 +481,7 @@ export const transformFrontendPolicyToApi = (policy: Partial<Policy>): any => {
     enabled: policy.enabled ?? true,
     config: policy.config,
     agent_ids: policy.agentIds || [],
+    match: conditionsMatch,
     conditions: conditionsList,
     actions: actionsList,
     compliance_tags: [],

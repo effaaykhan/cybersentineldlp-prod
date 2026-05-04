@@ -547,3 +547,112 @@ code {
 .text-red-500 {
   color: var(--obsidian-critical) !important;
 }
+
+/* ===== RECHARTS — OBSIDIAN VAULT OVERRIDES =====
+ *
+ * Recharts ships with light-theme defaults (white tooltip, gray axis
+ * text, white hover backgrounds). The block below makes those defaults
+ * legible on the void without touching the chart components themselves.
+ * Component-level styles set via the `tick`, `contentStyle`, and `cursor`
+ * props are intentionally overridden here so charts look right even
+ * before each call site is migrated to the new chart theme tokens.
+ */
+
+.recharts-text,
+.recharts-cartesian-axis-tick-value,
+.recharts-cartesian-axis-tick text {
+  fill: var(--obsidian-text-secondary) !important;
+  font-size: 12px !important;
+}
+
+.recharts-legend-item-text {
+  color: var(--obsidian-text-secondary) !important;
+  fill: var(--obsidian-text-secondary) !important;
+  font-size: 12px !important;
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: var(--obsidian-bg-tertiary) !important;
+  opacity: 0.5 !important;
+}
+
+.recharts-cartesian-axis-line {
+  stroke: var(--obsidian-bg-tertiary) !important;
+}
+
+/* Default tooltip wrapper (no <CustomTooltip /> in use). Charts that
+ * already pass `content={<X />}` render their own DOM and won't hit
+ * these rules — those go through inline styles set by the component. */
+.recharts-tooltip-wrapper {
+  outline: none !important;
+}
+
+.recharts-default-tooltip {
+  background: var(--obsidian-bg-secondary) !important;
+  border: 0.5px solid var(--obsidian-bg-tertiary) !important;
+  border-radius: 6px !important;
+  padding: 12px !important;
+  box-shadow: none !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--obsidian-text-primary) !important;
+  font-weight: 500 !important;
+}
+
+.recharts-tooltip-item,
+.recharts-tooltip-item-name,
+.recharts-tooltip-item-value,
+.recharts-tooltip-item-separator,
+.recharts-tooltip-item-unit {
+  color: var(--obsidian-text-primary) !important;
+}
+
+.recharts-tooltip-item-list {
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.recharts-tooltip-item-list li {
+  color: var(--obsidian-text-primary) !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  margin: 4px 0 !important;
+}
+
+/* Bar / pie hover — replace the default white wash with a subtle
+ * brightness lift so colors stay legible. */
+.recharts-bar-rectangle,
+.recharts-bar {
+  transition: opacity 0.2s ease, filter 0.2s ease !important;
+}
+
+.recharts-bar-rectangle:hover {
+  opacity: 0.85 !important;
+  filter: brightness(1.1) !important;
+}
+
+.recharts-pie-sector {
+  transition: filter 0.2s ease !important;
+}
+
+.recharts-pie-sector:hover {
+  filter: drop-shadow(0 0 10px rgba(91, 126, 255, 0.4)) brightness(1.1) !important;
+}
+
+/* Cursor (the line / fill that follows the mouse over the chart). */
+.recharts-cursor {
+  stroke: var(--obsidian-accent) !important;
+  opacity: 0.5 !important;
+}
+
+/* Catch any stray white rect (e.g. CartesianGrid background fills).
+ * Recharts emits these in a few corners; matching by attribute keeps
+ * the override surgical. */
+.recharts-wrapper rect[fill="white"],
+.recharts-wrapper rect[fill="#fff"],
+.recharts-wrapper rect[fill="#ffffff"] {
+  fill: var(--obsidian-bg-secondary) !important;
+}

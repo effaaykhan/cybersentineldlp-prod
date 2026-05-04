@@ -18,6 +18,7 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { drillDownUrl, DRILL_TOOLTIP } from '@/lib/drilldown'
+import { CHART_COLORS, RECHARTS_CONFIG, tickStyle } from '@/styles/charts'
 
 // ── Time formatting (IST) ───────────────────────────────────────────────
 const IST_TIMEZONE = 'Asia/Kolkata'
@@ -55,26 +56,40 @@ function ChartTooltip({
 }: any) {
   if (!active || !payload?.length) return null
   return (
-    <div className="rounded-xl bg-white/95 backdrop-blur shadow-xl border border-gray-200 px-3 py-2 text-xs">
+    <div
+      className="rounded-md px-3 py-2 text-xs"
+      style={{
+        background: RECHARTS_CONFIG.tooltipBackground,
+        border: `0.5px solid ${RECHARTS_CONFIG.tooltipBorder}`,
+        color: CHART_COLORS.text.primary,
+        boxShadow: 'none',
+      }}
+    >
       {label !== undefined && (
-        <div className="font-medium text-gray-700 mb-1">
+        <div className="font-medium mb-1" style={{ color: CHART_COLORS.text.secondary }}>
           {labelFormatter ? labelFormatter(label) : label}
         </div>
       )}
       {payload.map((p: any, i: number) => (
-        <div key={i} className="flex items-center gap-2 text-gray-800 tabular-nums">
+        <div key={i} className="flex items-center gap-2 tabular-nums" style={{ color: CHART_COLORS.text.primary }}>
           <span
             className="inline-block w-2 h-2 rounded-full"
-            style={{ background: p.color || p.payload?.fill || '#6366f1' }}
+            style={{ background: p.color || p.payload?.fill || CHART_COLORS.primary }}
           />
-          <span className="text-gray-500">{p.name ?? p.dataKey}:</span>
+          <span style={{ color: CHART_COLORS.text.secondary }}>{p.name ?? p.dataKey}:</span>
           <span className="font-semibold">{Number(p.value).toLocaleString()}</span>
         </div>
       ))}
       {/* PART 5: surface "click to drill down" affordance in the tooltip
           itself so the action is discoverable without a separate hint. */}
       {drillHint && (
-        <div className="mt-1.5 pt-1.5 border-t border-gray-100 text-[10px] text-indigo-600 font-medium uppercase tracking-wider">
+        <div
+          className="mt-1.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider"
+          style={{
+            borderTop: `1px solid ${CHART_COLORS.backgrounds.tertiary}`,
+            color: CHART_COLORS.primary,
+          }}
+        >
           ↗ Click to filter by {drillHint}
         </div>
       )}
@@ -216,27 +231,27 @@ export default function Dashboard() {
               <AreaChart data={timeSeries} margin={{ top: 10, right: 8, left: -12, bottom: 0 }}>
                 <defs>
                   <linearGradient id="grad-events" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#6366f1" stopOpacity={0.45} />
-                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                    <stop offset="0%" stopColor={CHART_COLORS.primary} stopOpacity={0.45} />
+                    <stop offset="100%" stopColor={CHART_COLORS.primary} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={RECHARTS_CONFIG.gridStroke} vertical={false} />
                 <XAxis
                   dataKey="timestamp"
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={{ fontSize: 11, fill: tickStyle.fill }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v) => formatTimeIST(new Date(v))}
                   minTickGap={32}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={{ fontSize: 11, fill: tickStyle.fill }}
                   tickLine={false}
                   axisLine={false}
                   width={40}
                 />
                 <Tooltip
-                  cursor={{ stroke: '#c7d2fe', strokeWidth: 1, strokeDasharray: '3 3' }}
+                  cursor={{ stroke: RECHARTS_CONFIG.cursorStroke, strokeWidth: 1, strokeDasharray: '3 3', opacity: RECHARTS_CONFIG.cursorOpacity }}
                   content={
                     <ChartTooltip
                       labelFormatter={(v: any) => formatDateTimeIST(new Date(v))}
@@ -247,10 +262,10 @@ export default function Dashboard() {
                   type="monotone"
                   dataKey="count"
                   name="Events"
-                  stroke="#4f46e5"
+                  stroke={CHART_COLORS.primary}
                   strokeWidth={2.25}
                   fill="url(#grad-events)"
-                  activeDot={{ r: 5, strokeWidth: 2, stroke: '#fff' }}
+                  activeDot={{ r: 5, strokeWidth: 2, stroke: CHART_COLORS.backgrounds.surface }}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -281,7 +296,7 @@ export default function Dashboard() {
                   cornerRadius={4}
                   dataKey="count"
                   nameKey="type"
-                  stroke="#fff"
+                  stroke={CHART_COLORS.backgrounds.surface}
                   strokeWidth={2}
                   // PART 2: clicking a segment drills into that module.
                   onClick={(d: any) => {
@@ -356,21 +371,21 @@ export default function Dashboard() {
                     </linearGradient>
                   ))}
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={RECHARTS_CONFIG.gridStroke} vertical={false} />
                 <XAxis
                   dataKey="severity"
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={{ fontSize: 11, fill: tickStyle.fill }}
                   tickLine={false}
                   axisLine={false}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={{ fontSize: 11, fill: tickStyle.fill }}
                   tickLine={false}
                   axisLine={false}
                   width={40}
                 />
                 <Tooltip
-                  cursor={{ fill: '#f3f4f6' }}
+                  cursor={{ fill: 'rgba(91, 126, 255, 0.08)' }}
                   content={<ChartTooltip drillHint="severity" />}
                 />
                 <Bar

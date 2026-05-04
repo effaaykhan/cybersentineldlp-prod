@@ -3,6 +3,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { api } from '@/lib/api'
+import { CHART_COLORS, RECHARTS_CONFIG, tickStyle } from '@/styles/charts'
+import CustomTooltip from '@/components/charts/CustomTooltip'
 
 // IST timezone
 const IST_TIMEZONE = 'Asia/Kolkata'
@@ -37,28 +39,29 @@ export default function EventsTimeline() {
   return (
     <ResponsiveContainer width="100%" height={320}>
       <LineChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+        <CartesianGrid
+          strokeDasharray="3 3"
+          stroke={RECHARTS_CONFIG.gridStroke}
+          opacity={RECHARTS_CONFIG.gridOpacity}
+        />
         <XAxis
           dataKey="timestamp"
-          stroke="#6b7280"
+          stroke={RECHARTS_CONFIG.axisStroke}
+          tick={tickStyle}
           tickFormatter={(value) => {
             return formatTimeIST(new Date(value))
           }}
         />
-        <YAxis stroke="#6b7280" />
+        <YAxis stroke={RECHARTS_CONFIG.axisStroke} tick={tickStyle} />
         <Tooltip
-          contentStyle={{
-            backgroundColor: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
-            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
-          }}
+          content={<CustomTooltip />}
+          cursor={{ stroke: RECHARTS_CONFIG.cursorStroke, opacity: RECHARTS_CONFIG.cursorOpacity }}
         />
-        <Legend />
+        <Legend wrapperStyle={{ color: RECHARTS_CONFIG.legendTextColor }} />
         <Line
           type="monotone"
           dataKey="total_events"
-          stroke="#3b82f6"
+          stroke={CHART_COLORS.primary}
           strokeWidth={2}
           name="Total Events"
           dot={false}
@@ -66,7 +69,7 @@ export default function EventsTimeline() {
         <Line
           type="monotone"
           dataKey="blocked_events"
-          stroke="#ef4444"
+          stroke={CHART_COLORS.critical}
           strokeWidth={2}
           name="Blocked"
           dot={false}
@@ -74,7 +77,7 @@ export default function EventsTimeline() {
         <Line
           type="monotone"
           dataKey="critical_events"
-          stroke="#f59e0b"
+          stroke={CHART_COLORS.warning}
           strokeWidth={2}
           name="Critical"
           dot={false}

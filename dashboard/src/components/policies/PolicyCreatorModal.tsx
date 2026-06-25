@@ -59,6 +59,10 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
           delete: false,
           move: false
         },
+        patterns: {
+          predefined: [],
+          custom: [],
+        },
         action: 'alert'
       } as FileSystemConfig
 
@@ -72,6 +76,10 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
           modify: true,
           delete: false,
           move: true
+        },
+        patterns: {
+          predefined: [],
+          custom: [],
         },
         action: 'block'
       } as FileTransferConfig
@@ -350,13 +358,13 @@ export default function PolicyCreatorModal({
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={handleClose}>
-      <div 
-        className="bg-gray-800 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto border border-gray-700" 
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={handleClose}>
+      <div
+        className="bg-gray-900 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto border border-gray-700 shadow-2xl ring-1 ring-white/5"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-700 sticky top-0 bg-gray-800 z-10">
+        <div className="flex items-center justify-between p-6 border-b border-gray-700 sticky top-0 bg-gray-900 z-10">
           <div>
             <h3 className="text-2xl font-bold text-white">
               {editingPolicy ? 'Edit Policy' : 'Create New Policy'}
@@ -646,7 +654,7 @@ export default function PolicyCreatorModal({
         </div>
 
         {/* Footer */}
-        <div className="flex gap-3 p-6 border-t border-gray-700 sticky bottom-0 bg-gray-800">
+        <div className="flex gap-3 p-6 border-t border-gray-700 sticky bottom-0 bg-gray-900">
           {step > 1 && (
             <button
               onClick={handleBack}

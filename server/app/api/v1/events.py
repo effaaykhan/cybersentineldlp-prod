@@ -49,6 +49,35 @@ class EventCreate(BaseModel):
     # Optional ABAC overrides — if absent, server derives from user_email / defaults.
     department: Optional[str] = Field(None, description="ABAC department (frozen at ingest)")
     required_clearance: Optional[int] = Field(None, description="ABAC required clearance level")
+    # Agent-asserted policy attribution. The agent already evaluated which
+    # enabled policies matched this event content; without this field the
+    # server has no way to attribute the event back to a rule (monitoring
+    # policies have empty conditions.rules and never match server-side).
+    matched_policies: Optional[List[Any]] = Field(
+        None,
+        description=(
+            "Policy IDs (or {policy_id,...} dicts) the agent matched against "
+            "this event. Server resolves these to enriched records and uses "
+            "their severity/action when no server-side rules matched."
+        ),
+    )
+    # Per-line diff captured by the agent on file_modified events.
+    # Populated when the new content differs from the previous snapshot
+    # the agent has on disk; the analyst can see exactly which lines
+    # changed in a large file instead of just "file modified."
+    content_changes: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description=(
+            "Line-level diff: list of {line, action: added|removed, content} "
+            "entries. Only present on file_modified events."
+        ),
+    )
+    lines_added: Optional[int] = Field(None, description="Count of added lines in content_changes")
+    lines_removed: Optional[int] = Field(None, description="Count of removed lines in content_changes")
+    content_changes_truncated: Optional[bool] = Field(
+        None,
+        description="True when content_changes was capped to avoid oversized payloads",
+    )
 
 
 class DLPEvent(BaseModel):
@@ -97,6 +126,11 @@ class DLPEvent(BaseModel):
     matched_policies: Optional[List[Dict[str, Any]]] = None
     policy_action_summaries: Optional[List[Dict[str, Any]]] = None
     tags: Optional[List[str]] = None
+    # Line-level diff captured by the agent on file_modified events.
+    content_changes: Optional[List[Dict[str, Any]]] = None
+    lines_added: Optional[int] = None
+    lines_removed: Optional[int] = None
+    content_changes_truncated: Optional[bool] = None
 
     class Config:
         extra = "allow"
@@ -128,32 +162,155 @@ async def _attach_agent_info(events: List[Dict[str, Any]]) -> None:
     The event documents themselves are never mutated — enrichment lives
     purely on the API response, so renames on the agent flow through
     automatically and the events collection stays canonical.
+
+    Lookup order for each event:
+      1. exact ``agent_id`` match (canonical)
+      2. ``agent_id`` matches an agent's ``previous_agent_ids`` (covers
+         events emitted before the agent rolled its UUID on reinstall)
+      3. ``agent_id`` matches an agent's ``name`` (legacy events where
+         the hostname was recorded as the id)
+      4. event's own ``hostname`` matches an agent's ``name`` (covers
+         events that pre-date stable UUIDs entirely)
     """
     if not events:
         return
 
-    agent_ids = {
-        ev.get("agent_id")
-        for ev in events
-        if ev.get("agent_id") and ev.get("agent_id") != "unknown"
-    }
-    if not agent_ids:
+    candidate_ids: set[str] = set()
+    candidate_names: set[str] = set()
+    for ev in events:
+        aid = ev.get("agent_id")
+        if aid and aid != "unknown":
+            candidate_ids.add(aid)
+            # The same string may double as a hostname for legacy agents.
+            candidate_names.add(aid)
+        host = ev.get("hostname") or ev.get("agent_hostname")
+        if host:
+            candidate_names.add(host)
+
+    if not candidate_ids and not candidate_names:
         return
 
     db = get_mongodb()
+    or_clauses: List[Dict[str, Any]] = []
+    if candidate_ids:
+        or_clauses.append({"agent_id": {"$in": list(candidate_ids)}})
+        # Match historic UUIDs that the agent has rolled past.
+        or_clauses.append({"previous_agent_ids": {"$in": list(candidate_ids)}})
+    if candidate_names:
+        or_clauses.append({"name": {"$in": list(candidate_names)}})
+
     cursor = db.agents.find(
-        {"agent_id": {"$in": list(agent_ids)}},
-        {"_id": 0, "agent_id": 1, "name": 1, "agent_code": 1},
+        {"$or": or_clauses},
+        {
+            "_id": 0,
+            "agent_id": 1,
+            "name": 1,
+            "agent_code": 1,
+            "previous_agent_ids": 1,
+        },
     )
-    info: Dict[str, Dict[str, Any]] = {
-        doc["agent_id"]: doc async for doc in cursor if doc.get("agent_id")
-    }
+    by_id: Dict[str, Dict[str, Any]] = {}
+    by_name: Dict[str, Dict[str, Any]] = {}
+    async for doc in cursor:
+        if doc.get("agent_id"):
+            by_id[doc["agent_id"]] = doc
+        # Index every previous id so events tagged with old UUIDs hit
+        # the same agent record.
+        for prev in doc.get("previous_agent_ids") or []:
+            by_id[prev] = doc
+        if doc.get("name"):
+            # Last-write-wins is fine — duplicates are rare and the agents
+            # collection has a unique index on (name, os) for active rows.
+            by_name[doc["name"]] = doc
 
     for ev in events:
-        match = info.get(ev.get("agent_id"))
+        aid = ev.get("agent_id")
+        host = ev.get("hostname") or ev.get("agent_hostname")
+        match = (
+            (by_id.get(aid) if aid else None)
+            or (by_name.get(aid) if aid else None)
+            or (by_name.get(host) if host else None)
+        )
         if match:
-            ev["agent_name"] = match.get("name")
-            ev["agent_code"] = match.get("agent_code")
+            ev["agent_name"] = match.get("name") or ev.get("agent_name")
+            if ev.get("agent_code") is None:
+                ev["agent_code"] = match.get("agent_code")
+
+
+# Action precedence used to pick which agent-matched policy "wins" when
+# enriching event_doc. Mirrors the agent's classifier ranking so server
+# and agent agree on suggestedAction.
+_ACTION_RANK = {"log": 1, "alert": 2, "quarantine": 3, "block": 4}
+_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _normalize_agent_matched_ids(raw: Optional[List[Any]]) -> List[str]:
+    """Agent sends either bare UUID strings or {policy_id: ...} dicts."""
+    if not raw:
+        return []
+    ids: List[str] = []
+    for item in raw:
+        if isinstance(item, str) and item:
+            ids.append(item)
+        elif isinstance(item, dict):
+            pid = item.get("policy_id") or item.get("id")
+            if pid:
+                ids.append(str(pid))
+    # Preserve order while deduping
+    seen: set[str] = set()
+    out: List[str] = []
+    for pid in ids:
+        if pid not in seen:
+            seen.add(pid)
+            out.append(pid)
+    return out
+
+
+async def _resolve_matched_policies(policy_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Hydrate agent-asserted policy IDs into the canonical ``matched_policies``
+    shape (``policy_id``, ``policy_name``, ``severity``, ``priority``, ``action``).
+
+    Why: the agent has the policy bundle and is authoritative on which
+    enabled policy matched a clipboard/USB/file copy. The server's rule-
+    based evaluator skips monitoring policies entirely (their
+    ``conditions.rules`` is empty), so without this resolution every
+    monitoring-policy event would persist with ``policy_id: null`` and
+    the dashboard couldn't link the event back to a rule.
+    """
+    if not policy_ids:
+        return []
+    from app.core.database import get_postgres_session
+    from app.services.policy_service import PolicyService
+
+    async with get_postgres_session() as session:
+        service = PolicyService(session)
+        out: List[Dict[str, Any]] = []
+        for pid in policy_ids:
+            try:
+                policy = await service.get_policy_by_id(pid)
+            except Exception:
+                policy = None
+            if not policy:
+                # Agent referenced a policy that no longer exists; keep the
+                # raw id so the event is still traceable in audits.
+                out.append({"policy_id": pid})
+                continue
+            # Resolve canonical action from the policy's ``config.action``
+            # (single canonical action — normalize_monitoring_actions
+            # already collapsed the legacy {block:{}, alert:{}} shape).
+            cfg = policy.config or {}
+            action = cfg.get("action")
+            if not action and policy.actions:
+                action = next(iter(policy.actions.keys()), None)
+            out.append({
+                "policy_id": str(policy.id),
+                "policy_name": policy.name,
+                "severity": policy.severity,
+                "priority": policy.priority or 0,
+                "action": action,
+            })
+        return out
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
@@ -229,6 +386,71 @@ async def create_event(
         event_doc["event_subtype"] = event.event_subtype
     if event.description:
         event_doc["description"] = event.description
+    # Preserve agent-provided content diff fields so the event detail
+    # view can render the per-line change list. Empty diffs are still
+    # written so the UI can distinguish "modified, no textual change"
+    # (e.g. metadata-only) from "modified, agent didn't compute diff."
+    if event.content_changes is not None:
+        event_doc["content_changes"] = event.content_changes
+    if event.lines_added is not None:
+        event_doc["lines_added"] = event.lines_added
+    if event.lines_removed is not None:
+        event_doc["lines_removed"] = event.lines_removed
+    if event.content_changes_truncated is not None:
+        event_doc["content_changes_truncated"] = event.content_changes_truncated
+
+    # Hydrate agent-asserted matched policies. The agent ran the policy
+    # bundle against the content and is authoritative on which monitoring
+    # policies matched; the server's rule-based evaluator can't replicate
+    # this because monitoring policies have empty conditions.rules. Using
+    # the resolved records here lets every event cite its triggering
+    # policy and use that policy's operator-configured severity/action
+    # instead of falling back to classification-derived defaults.
+    #
+    # IMPORTANT: when the agent's reported action is "allowed", it means
+    # the policy *inspected* this content but did not detect anything
+    # sensitive — the matched_policies array is monitoring-attribution
+    # only. In that case we still attach the policies so the analyst can
+    # trace which rule looked at the event, but we MUST NOT override the
+    # agent's "allowed" outcome with the policy's enforcement action.
+    agent_action_norm = (event.action or "").lower()
+    agent_outcome_allowed = agent_action_norm in ("allowed", "allow")
+    agent_matched_ids = _normalize_agent_matched_ids(
+        getattr(event, "matched_policies", None)
+    )
+    resolved_matches: List[Dict[str, Any]] = []
+    if agent_matched_ids:
+        resolved_matches = await _resolve_matched_policies(agent_matched_ids)
+        if resolved_matches:
+            event_doc["matched_policies"] = resolved_matches
+            event_doc["policy_id"] = resolved_matches[0].get("policy_id")
+            if not agent_outcome_allowed:
+                # Severity: pick the highest among matched policies. The
+                # operator's configured severity wins over any classification-
+                # derived bump (e.g. "Restricted" content forcing "critical").
+                sevs = [
+                    m.get("severity") for m in resolved_matches
+                    if m.get("severity") in _SEVERITY_RANK
+                ]
+                if sevs:
+                    event_doc["severity"] = max(
+                        sevs, key=lambda s: _SEVERITY_RANK[s]
+                    )
+                # Action: pick the strongest enforcement (block > quarantine
+                # > alert > log). Past-tense form matches the existing event
+                # vocabulary (alert→alerted, block→blocked, etc.).
+                actions = [
+                    m.get("action") for m in resolved_matches
+                    if m.get("action") in _ACTION_RANK
+                ]
+                if actions:
+                    winning = max(actions, key=lambda a: _ACTION_RANK[a])
+                    event_doc["action_taken"] = {
+                        "alert": "alerted",
+                        "block": "blocked",
+                        "quarantine": "quarantined",
+                        "log": "logged",
+                    }.get(winning, winning)
 
     # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
     result = await events_collection.update_one(
@@ -240,10 +462,15 @@ async def create_event(
         return {"status": "duplicate", "event_id": event.event_id}
 
     # ── Step 3: Queue background processing ────────────────────────────
+    payload = _build_processor_payload(event)
+    # Tell the processor about the agent-resolved matches so its
+    # classify_event stage won't override the policy-derived severity.
+    if resolved_matches:
+        payload["matched_policies"] = resolved_matches
     background_tasks.add_task(
         _process_event_background,
         event_id=event.event_id,
-        payload=_build_processor_payload(event),
+        payload=payload,
     )
 
     return {"status": "accepted", "event_id": event.event_id}
@@ -270,19 +497,39 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                 "processed_at": datetime.now(timezone.utc),
             }
 
+            # If the agent already attributed this event to one or more
+            # policies, those represent the operator's authoritative
+            # intent. The server's downstream stages (classify_event in
+            # particular) may try to bump severity based on content
+            # classification — we ignore those bumps here so the
+            # operator-configured severity sticks. The same applies to
+            # matched_policies: don't let an empty server-side match
+            # wipe out the agent's attribution.
+            agent_supplied_policies = bool(payload.get("matched_policies"))
+            # Distinguish "agent matched something" from "agent only saw
+            # the content but found nothing sensitive in it". The latter
+            # carries action="allowed" (or similar) from the agent's
+            # Public path. For those events the server's independent
+            # classifier MUST NOT relabel the event as Restricted /
+            # Confidential — the only enabled policies didn't consider
+            # the content sensitive, so any contradiction is the server
+            # second-guessing the operator's policy set.
+            agent_action = (payload.get("event", {}).get("action") or "").lower()
+            agent_outcome_allowed = agent_action in ("allowed", "allow")
+
             # Merge processed results
             if processed.get("event"):
                 ev = processed["event"]
-                if ev.get("severity"):
+                if ev.get("severity") and not agent_supplied_policies:
                     update_fields["severity"] = ev["severity"]
-                if ev.get("action"):
+                if ev.get("action") and not agent_supplied_policies:
                     update_fields["action_taken"] = ev["action"]
 
-            if processed.get("blocked"):
+            if processed.get("blocked") and not agent_outcome_allowed:
                 update_fields["blocked"] = True
-            if processed.get("quarantined"):
+            if processed.get("quarantined") and not agent_outcome_allowed:
                 update_fields["quarantined"] = True
-            if processed.get("classification_metadata"):
+            if processed.get("classification_metadata") and not agent_outcome_allowed:
                 update_fields["classification_metadata"] = processed["classification_metadata"]
                 cm = processed["classification_metadata"]
                 if cm.get("classification_level"):
@@ -290,7 +537,24 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                 if cm.get("confidence_score") is not None:
                     update_fields["classification_score"] = cm["confidence_score"]
             if processed.get("matched_policies"):
-                update_fields["matched_policies"] = processed["matched_policies"]
+                # If the server-side evaluator also matched policies
+                # (conditions.rules-based), union them with the agent's
+                # attribution. Dedupe by policy_id to avoid double-billing.
+                server_matches = processed["matched_policies"]
+                if agent_supplied_policies:
+                    seen = {
+                        m.get("policy_id")
+                        for m in payload["matched_policies"]
+                        if isinstance(m, dict)
+                    }
+                    merged = list(payload["matched_policies"])
+                    for sm in server_matches:
+                        if sm.get("policy_id") not in seen:
+                            merged.append(sm)
+                            seen.add(sm.get("policy_id"))
+                    update_fields["matched_policies"] = merged
+                else:
+                    update_fields["matched_policies"] = server_matches
             if processed.get("metadata"):
                 update_fields["metadata"] = processed["metadata"]
 
@@ -638,6 +902,10 @@ async def get_events(
     search: Optional[str] = Query(None, max_length=200, description="Search keyword for filtering events"),
     start_time: Optional[datetime] = Query(None),
     end_time: Optional[datetime] = Query(None),
+    # Drill-down: filter to one agent and ALL its historic UUIDs.
+    # Resolved against the agents collection so events emitted before
+    # a reinstall still appear under the same agent record.
+    agent: Optional[str] = Query(None, description="Filter by canonical agent_id (expands to previous_agent_ids)"),
     # Phase 3: filter-driven drill-down from dashboards. All optional.
     module: Optional[str] = Query(None, description="Alias for event_type (USB/clipboard/screen_capture/network_exfil)"),
     event_type: Optional[str] = Query(None),
@@ -697,6 +965,29 @@ async def get_events(
             {"agent_id": search_pattern},
             {"user_email": search_pattern},
         ]
+
+    # Resolve ``?agent=<id>`` to the set of every UUID the matching
+    # agent has ever used (current + previous_agent_ids). Without this,
+    # clicking an agent from the Agents tab only surfaces events from
+    # AFTER the last reinstall — anything emitted under a rolled UUID
+    # silently disappears from the filter.
+    if agent:
+        agent_doc = await db.agents.find_one(
+            {
+                "$or": [
+                    {"agent_id": agent},
+                    {"previous_agent_ids": agent},
+                ]
+            },
+            {"_id": 0, "agent_id": 1, "previous_agent_ids": 1},
+        )
+        if agent_doc:
+            id_set = {agent_doc["agent_id"], *(agent_doc.get("previous_agent_ids") or [])}
+        else:
+            # Unknown id — still filter by what the caller asked for so
+            # we don't silently return ALL events.
+            id_set = {agent}
+        query_filter["agent_id"] = {"$in": list(id_set)}
     if start_time or end_time:
         time_filter: Dict[str, Any] = {}
         if start_time:

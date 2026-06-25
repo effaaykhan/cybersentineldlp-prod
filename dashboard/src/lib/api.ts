@@ -210,14 +210,14 @@ export type Agent = {
   hostname?: string
   os_version?: string
   capabilities?: Record<string, boolean>
-  /** Legacy boolean — true if heartbeat within ``AGENT_TIMEOUT_SECONDS`` (5s).
+  /** Legacy boolean — true if heartbeat within ``AGENT_TIMEOUT_SECONDS`` (30s).
    *  Prefer ``lifecycle_status`` for new UI code. */
   is_active?: boolean
   /** Legacy two-state label kept for back-compat with older dashboard
    *  components. ``lifecycle_status`` is the four-tier replacement. */
   status_label?: 'active' | 'disconnected'
   /** Four-tier freshness ladder computed by the backend.
-   *  active < 5s, disconnected < 1h, inactive < 7d, stale ≥ 7d. */
+   *  active ≤ 30s, disconnected ≤ 24h, inactive ≤ 7d, stale > 7d. */
   lifecycle_status?: 'active' | 'disconnected' | 'inactive' | 'stale'
   /** Heartbeat age in seconds — handy for "Last seen X ago" without
    *  client-side timezone math. */

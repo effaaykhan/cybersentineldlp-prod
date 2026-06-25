@@ -252,6 +252,23 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
             <input
               type="radio"
               name="clipboard-action"
+              value="block"
+              checked={config.action === 'block'}
+              onChange={() => onChange({ ...config, action: 'block' })}
+              className="w-4 h-4 text-indigo-600"
+            />
+            <div>
+              <div className="text-white font-medium text-sm">Block</div>
+              <div className="text-gray-400 text-xs">
+                Clear the clipboard so the copied content cannot be pasted, and raise an alert
+              </div>
+            </div>
+          </label>
+
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+            <input
+              type="radio"
+              name="clipboard-action"
               value="alert"
               checked={config.action === 'alert'}
               onChange={() => onChange({ ...config, action: 'alert' })}
@@ -262,7 +279,7 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
               <div className="text-gray-400 text-xs">Send alert notification when pattern is detected</div>
             </div>
           </label>
-          
+
           <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
             <input
               type="radio"

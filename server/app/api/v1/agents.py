@@ -23,11 +23,11 @@ from app.core.cache import get_cache, CacheService
 logger = structlog.get_logger()
 router = APIRouter()
 
-# Agent is considered dead if no heartbeat received in 5 seconds.
+# Agent is considered dead if no heartbeat received in 30 seconds.
 # This is the threshold for the boolean ``is_active`` flag we keep around
 # for backward-compatibility with old dashboard code; the new four-tier
 # lifecycle status (active/disconnected/inactive/stale) lives below.
-AGENT_TIMEOUT_SECONDS = 5
+AGENT_TIMEOUT_SECONDS = 30
 
 # ── Lifecycle status thresholds ──────────────────────────────────────
 # Tiered freshness ladder reported as ``lifecycle_status`` on agent
@@ -35,8 +35,8 @@ AGENT_TIMEOUT_SECONDS = 5
 # exactly one tier — UIs can show a colored badge without computing the
 # math themselves.
 #
-#   active:       last_seen ≤ 5s ago        — heartbeat just arrived
-#   disconnected: 5s   < last_seen ≤ 24h    — recently silent (spec says
+#   active:       last_seen ≤ 30s ago       — heartbeat just arrived
+#   disconnected: 30s  < last_seen ≤ 24h    — recently silent (spec says
 #                                             "< 1 hour" but escalates
 #                                             to inactive only at >24h,
 #                                             so the disconnected band
@@ -416,7 +416,12 @@ async def register_agent(
         stored_id = existing["agent_id"]
         api_key = existing.get("api_key") or f"csak_{secrets.token_urlsafe(32)}"
 
-        # If the agent changed its ID (reinstall), update to new ID
+        # If the agent rolled its UUID (reinstall / stale state file), we
+        # used to overwrite agent_id and silently orphan every prior
+        # event. Now: keep the stored_id stable AS the canonical id and
+        # archive any rolled UUIDs in ``previous_agent_ids`` so event
+        # enrichment + the /events agent filter can resolve them back
+        # to this same agent record.
         update_fields = {
             "ip_address": agent.ip_address,
             "version": agent.version,
@@ -424,18 +429,27 @@ async def register_agent(
             "capabilities": capabilities,
             "api_key": api_key,
         }
+        update_ops: Dict[str, Any] = {"$set": update_fields}
         if stored_id != agent_id:
-            update_fields["agent_id"] = agent_id
+            previous_ids = list(existing.get("previous_agent_ids") or [])
+            # Archive the agent's rolled UUID under previous_agent_ids
+            # so historic events tagged with it still resolve.
+            if agent_id not in previous_ids and agent_id != stored_id:
+                update_ops["$addToSet"] = {"previous_agent_ids": agent_id}
+            # Force the registering agent to keep using stored_id so all
+            # new events share the canonical id.
+            agent_id = stored_id
 
         await agents_collection.update_one(
             {"_id": existing["_id"]},
-            {"$set": update_fields},
+            update_ops,
         )
         # Re-registering legacy agent without agent_code → backfill now.
         agent_code = existing.get("agent_code")
         if not isinstance(agent_code, int):
             agent_code = await _ensure_agent_code(existing)
         agent_doc = existing
+        agent_doc["agent_id"] = stored_id
     else:
         # New agent — pull agent_code from the Postgres sequence so we
         # never compute the ID in app code.
@@ -575,8 +589,11 @@ async def agent_heartbeat(
     if heartbeat and heartbeat.policy_sync_error is not None:
         update_data["policy_sync_error"] = heartbeat.policy_sync_error
 
+    # Resolve rolled UUIDs (reinstalled agent) by also matching previous_agent_ids.
+    # An agent whose local state file kept an old UUID may still be heartbeating
+    # under it; that UUID now lives in this record's previous_agent_ids array.
     result = await agents_collection.update_one(
-        {"agent_id": agent_id},
+        {"$or": [{"agent_id": agent_id}, {"previous_agent_ids": agent_id}]},
         {"$set": update_data}
     )
 
@@ -894,7 +911,11 @@ async def sync_agent_policies(
     mongo = get_mongodb()
     agents_collection = mongo["agents"]
 
-    agent_doc = await agents_collection.find_one({"agent_id": agent_id})
+    # Tolerate rolled UUIDs (reinstalled agent still using its old local id)
+    # by also looking up in previous_agent_ids.
+    agent_doc = await agents_collection.find_one(
+        {"$or": [{"agent_id": agent_id}, {"previous_agent_ids": agent_id}]}
+    )
     if not agent_doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

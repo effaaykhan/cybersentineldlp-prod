@@ -95,6 +95,20 @@ html, body, #root {
 .bg-gray-200 {
   background-color: var(--obsidian-bg-tertiary) !important;
 }
+
+/* Tailwind opacity-modifier variants on light backgrounds also need
+ * flattening. The plain-class rules above don't catch them because
+ * `bg-white/50` is a *different* CSS class (`.bg-white\/50`). Match by
+ * class-name substring so any opacity variant from 5 to 95 is collapsed
+ * to the same obsidian surface tier as its solid counterpart. */
+[class*="bg-white/"],
+[class*="bg-gray-50/"] {
+  background-color: var(--obsidian-bg-secondary) !important;
+}
+[class*="bg-gray-100/"],
+[class*="bg-gray-200/"] {
+  background-color: var(--obsidian-bg-tertiary) !important;
+}
 .bg-gray-700,
 .bg-gray-800,
 .bg-gray-900 {
@@ -435,6 +449,78 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator,
 input[type="time"]::-webkit-calendar-picker-indicator {
   filter: invert(0.85) sepia(0.1);
   cursor: pointer;
+  opacity: 0.7;
+  padding: 2px;
+  border-radius: 4px;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover,
+input[type="time"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  background-color: rgba(91, 126, 255, 0.15);
+}
+
+/* Native date/time pickers: bump the surface a notch above bg-secondary
+ * so the input doesn't read as "sunken" relative to typical container
+ * panels (which sit at bg-secondary already), and style the internal
+ * webkit pseudo-elements so the month/day/year edit fields blend with
+ * the dark surface instead of carrying default light chrome. */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="month"],
+input[type="week"] {
+  background-color: var(--obsidian-bg-tertiary) !important;
+  color-scheme: dark;
+}
+input[type="date"]::-webkit-datetime-edit,
+input[type="datetime-local"]::-webkit-datetime-edit,
+input[type="time"]::-webkit-datetime-edit {
+  color: var(--obsidian-text-primary);
+  padding: 0;
+}
+input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+input[type="datetime-local"]::-webkit-datetime-edit-fields-wrapper,
+input[type="time"]::-webkit-datetime-edit-fields-wrapper {
+  background: transparent;
+}
+input[type="date"]::-webkit-datetime-edit-text,
+input[type="datetime-local"]::-webkit-datetime-edit-text,
+input[type="time"]::-webkit-datetime-edit-text {
+  color: var(--obsidian-text-tertiary);
+  padding: 0 2px;
+}
+input[type="date"]::-webkit-datetime-edit-month-field,
+input[type="date"]::-webkit-datetime-edit-day-field,
+input[type="date"]::-webkit-datetime-edit-year-field,
+input[type="datetime-local"]::-webkit-datetime-edit-month-field,
+input[type="datetime-local"]::-webkit-datetime-edit-day-field,
+input[type="datetime-local"]::-webkit-datetime-edit-year-field,
+input[type="datetime-local"]::-webkit-datetime-edit-hour-field,
+input[type="datetime-local"]::-webkit-datetime-edit-minute-field,
+input[type="datetime-local"]::-webkit-datetime-edit-ampm-field,
+input[type="time"]::-webkit-datetime-edit-hour-field,
+input[type="time"]::-webkit-datetime-edit-minute-field,
+input[type="time"]::-webkit-datetime-edit-ampm-field {
+  color: var(--obsidian-text-primary);
+  background: transparent;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+input[type="date"]::-webkit-datetime-edit-month-field:focus,
+input[type="date"]::-webkit-datetime-edit-day-field:focus,
+input[type="date"]::-webkit-datetime-edit-year-field:focus,
+input[type="datetime-local"]::-webkit-datetime-edit-month-field:focus,
+input[type="datetime-local"]::-webkit-datetime-edit-day-field:focus,
+input[type="datetime-local"]::-webkit-datetime-edit-year-field:focus,
+input[type="datetime-local"]::-webkit-datetime-edit-hour-field:focus,
+input[type="datetime-local"]::-webkit-datetime-edit-minute-field:focus,
+input[type="time"]::-webkit-datetime-edit-hour-field:focus,
+input[type="time"]::-webkit-datetime-edit-minute-field:focus {
+  background-color: rgba(91, 126, 255, 0.2);
+  color: var(--obsidian-text-primary);
+  outline: none;
 }
 
 /* Tables */
@@ -655,4 +741,27 @@ code {
 .recharts-wrapper rect[fill="#fff"],
 .recharts-wrapper rect[fill="#ffffff"] {
   fill: var(--obsidian-bg-secondary) !important;
+}
+
+/* ── Brand surface escape hatches ─────────────────────────────────────
+ * Partner / vendor logos ship with dark inks on the assumption of a
+ * light substrate. Re-pinning bg-white globally to obsidian dark would
+ * make them invisible, so we expose explicit opt-out classes that the
+ * footer (and any future brand strip) can use to keep a true light
+ * surface and a real gradient text.
+ */
+.brand-card-light {
+  background-color: #373754 !important;
+  background-image: linear-gradient(135deg, #373754 0%, #8f8fb0 55%, #e6e6f2 100%) !important;
+}
+.brand-gradient-text {
+  background-image: linear-gradient(90deg, #ffffff 0%, #c7d2fe 50%, #ffffff 100%) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  color: transparent !important;
+}
+.brand-footer-bg {
+  background-image: linear-gradient(90deg, #15171a 0%, #1c1f23 50%, #15171a 100%) !important;
+  background-color: #15171a !important;
 }

@@ -5,23 +5,25 @@ import { useSearchParams } from 'react-router-dom'
 import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
-import { searchEvents, getAgents, clearAllEvents, triggerGoogleDrivePoll, triggerOneDrivePoll, getPolicies, type Event, type Agent } from '@/lib/api'
+import { searchEvents, getAllAgents, clearAllEvents, triggerGoogleDrivePoll, triggerOneDrivePoll, getPolicies, type Event } from '@/lib/api'
 import { formatDate, getSeverityColor, cn, truncate, formatDateTimeIST, formatAgentLabel } from '@/lib/utils'
 import toast from 'react-hot-toast'
 
 // Event Detail Modal Component
-function EventDetailModal({ 
-  event, 
-  onClose, 
-  isBlockedTransfer, 
-  formatFileSize, 
-  getDriveLetter 
-}: { 
+function EventDetailModal({
+  event,
+  onClose,
+  isBlockedTransfer,
+  formatFileSize,
+  getDriveLetter,
+  agentLabel,
+}: {
   event: any
   onClose: () => void
   isBlockedTransfer: boolean
   formatFileSize: (bytes: number) => string
   getDriveLetter: (path: string) => string
+  agentLabel: string
 }) {
   const [showRawData, setShowRawData] = useState(false)
 
@@ -170,7 +172,7 @@ function EventDetailModal({
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Agent</label>
                 <p className="text-gray-900 font-medium" title={event.agent_id}>
-                  {formatAgentLabel(event.agent_name, event.agent_code)}
+                  {agentLabel}
                 </p>
               </div>
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -560,6 +562,48 @@ function EventDetailModal({
             </div>
           )}
 
+          {/* Content Changes (file_modified diff) */}
+          {Array.isArray(event.content_changes) && event.content_changes.length > 0 && (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="bg-gray-100 px-4 py-2 flex items-center justify-between text-xs text-gray-700">
+                <span className="font-semibold uppercase tracking-wide">Content Changes</span>
+                <span>
+                  <span className="text-emerald-700">+{event.lines_added ?? 0}</span>
+                  {' '}
+                  <span className="text-rose-700">-{event.lines_removed ?? 0}</span>
+                  {event.content_changes_truncated && (
+                    <span className="ml-2 text-amber-700">(truncated)</span>
+                  )}
+                </span>
+              </div>
+              <div className="max-h-80 overflow-y-auto font-mono text-xs">
+                {event.content_changes.map((c: any, idx: number) => {
+                  const isAdd = c.action === 'added'
+                  return (
+                    <div
+                      key={idx}
+                      className={`px-3 py-1 flex gap-3 border-b border-gray-100 ${
+                        isAdd ? 'bg-emerald-50' : 'bg-rose-50'
+                      }`}
+                    >
+                      <span className="text-gray-500 w-12 shrink-0 text-right select-none">
+                        {c.line ?? ''}
+                      </span>
+                      <span className={`w-3 shrink-0 ${isAdd ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {isAdd ? '+' : '-'}
+                      </span>
+                      <span className={`whitespace-pre-wrap break-words ${
+                        isAdd ? 'text-emerald-900' : 'text-rose-900'
+                      }`}>
+                        {c.content || ''}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Standard Event Details Grid */}
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -575,7 +619,7 @@ function EventDetailModal({
             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
               <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Agent</label>
               <p className="text-gray-900 font-medium" title={event.agent_id}>
-                {formatAgentLabel(event.agent_name, event.agent_code)}
+                {agentLabel}
               </p>
             </div>
             <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -638,33 +682,41 @@ export default function Events() {
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
-  // Update activeQuery when agent parameter changes
+  // When the user clicks an agent from the Agents tab, we land here
+  // with ?agent=<id>. The id is forwarded to the backend as a dedicated
+  // ``agent`` query param (expanded to current + previous_agent_ids
+  // server-side) — NOT stuffed into the free-text search box, since the
+  // search box does substring matching on a single agent_id field and
+  // would silently miss events emitted under a reinstall's prior UUID.
   useEffect(() => {
     if (agentParam) {
-      // Just use the raw agent_id for search
-      setActiveQuery(agentParam)
-      setKqlQuery(agentParam)
+      setKqlQuery('')
+      setActiveQuery('')
     }
   }, [agentParam])
 
-  // Fetch agents to map agent_id to agent name
+  // Fetch agents to map agent_id to agent name. We use /agents/all so the
+  // fallback map covers OFFLINE agents too — /agents/ only returns those
+  // with a recent heartbeat, so an event from a powered-off laptop would
+  // otherwise render as "Unknown Agent" even though the agent exists.
   const { data: agentsData } = useQuery({
-    queryKey: ['agents'],
-    queryFn: getAgents,
+    queryKey: ['agents', 'all-for-events'],
+    queryFn: getAllAgents,
     refetchInterval: 30000, // Refresh every 30s
   })
 
-  // Create agent lookup map: agent_id -> { name, agent_code }
-  // Used as a client-side fallback when an event was returned before the
-  // backend started enriching responses, or when the lookup races a fresh
-  // event whose agent isn't in the cached agents query yet.
+  // Create agent lookup map keyed by both agent_id AND hostname/name, so
+  // legacy events that recorded the hostname as agent_id still resolve.
   const agentMap = useMemo(() => {
     const map = new Map<string, { name: string; agent_code?: number }>()
     if (agentsData && Array.isArray(agentsData)) {
-      agentsData.forEach((agent: Agent) => {
-        if (agent?.agent_id && agent?.name) {
-          map.set(agent.agent_id, { name: agent.name, agent_code: agent.agent_code })
-        }
+      agentsData.forEach((agent: any) => {
+        if (!agent?.name) return
+        const entry = { name: agent.name, agent_code: agent.agent_code }
+        if (agent.agent_id) map.set(agent.agent_id, entry)
+        // Also index by name so a legacy event whose agent_id is actually
+        // the hostname (e.g. "WIN-DESK-01") still finds the agent record.
+        map.set(agent.name, entry)
       })
     }
     return map
@@ -673,7 +725,10 @@ export default function Events() {
   // Resolve an event's agent label using server enrichment first, then
   // the local agentMap. Returns "NAME (NNN)" or "Unknown Agent".
   const getEventAgentLabel = (event: Event): string => {
-    const fallback = event.agent_id ? agentMap.get(event.agent_id) : undefined
+    const hostname = (event as any).hostname || (event as any).agent_hostname
+    const fallback =
+      (event.agent_id ? agentMap.get(event.agent_id) : undefined) ||
+      (hostname ? agentMap.get(hostname) : undefined)
     return formatAgentLabel(
       event.agent_name,
       event.agent_code ?? fallback?.agent_code,
@@ -762,10 +817,11 @@ export default function Events() {
     error,
     refetch,
   } = useQuery({
-    queryKey: ['events', activeQuery, dashboardFilters],
+    queryKey: ['events', activeQuery, agentParam, dashboardFilters],
     queryFn: () => {
       const params: Record<string, any> = { limit: 100 }
       if (activeQuery) params.search = activeQuery
+      if (agentParam) params.agent = agentParam
       // Only include filter params that are actually set.
       for (const [k, v] of Object.entries(dashboardFilters)) {
         if (v) params[k] = v
@@ -1232,12 +1288,13 @@ export default function Events() {
 
       {/* Event Detail Modal */}
       {selectedEvent && (
-        <EventDetailModal 
-          event={selectedEvent} 
+        <EventDetailModal
+          event={selectedEvent}
           onClose={() => setSelectedEvent(null)}
           isBlockedTransfer={isBlockedTransfer(selectedEvent)}
           formatFileSize={formatFileSize}
           getDriveLetter={getDriveLetter}
+          agentLabel={getEventAgentLabel(selectedEvent)}
         />
       )}
     </div>

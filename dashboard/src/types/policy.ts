@@ -15,8 +15,8 @@ export type PolicyType =
   | 'classification_aware_policy'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
-export type ClipboardAction = 'alert' | 'log'
-export type FileSystemAction = 'alert' | 'log'
+export type ClipboardAction = 'alert' | 'log' | 'block'
+export type FileSystemAction = 'alert' | 'log' | 'block' | 'quarantine'
 export type FileTransferAction = 'block' | 'quarantine' | 'alert'
 export type USBDeviceAction = 'alert' | 'log' | 'block'
 export type USBTransferAction = 'block' | 'quarantine' | 'alert'
@@ -38,7 +38,12 @@ export interface FileSystemConfig {
     delete: boolean
     move: boolean
   }
+  patterns?: {
+    predefined: string[]
+    custom: Array<{ regex: string, description?: string }>
+  }
   action: FileSystemAction
+  quarantinePath?: string
 }
 
 export interface FileTransferConfig {
@@ -50,6 +55,10 @@ export interface FileTransferConfig {
     modify: boolean
     delete: boolean
     move: boolean
+  }
+  patterns?: {
+    predefined: string[]
+    custom: Array<{ regex: string, description?: string }>
   }
   action: FileTransferAction
   quarantinePath?: string

@@ -6,6 +6,80 @@ Transforms frontend policy config format to backend conditions/actions format
 from typing import Dict, Any, List, Optional, Tuple
 
 
+# Action precedence used by both the agent's policy parser (clipboard
+# fallback at agent.cpp:3236) and the server's DecisionEngine. Higher
+# rank = stronger enforcement. Used to collapse a multi-action dict
+# into a single effective action so the agent and the dashboard never
+# disagree about what a policy does.
+_ACTION_RANK = {
+    "block": 4,
+    "quarantine": 3,
+    "alert": 2,
+    "log": 1,
+}
+
+
+def effective_action(actions: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Return the strongest action name from an actions dict, or None.
+
+    Mirrors the agent's "block > quarantine > alert > log" priority so
+    the UI listing shows the same thing the endpoint will actually do.
+    """
+    if not isinstance(actions, dict) or not actions:
+        return None
+    return max(actions.keys(), key=lambda k: _ACTION_RANK.get(k, 0))
+
+
+# Monitoring policy types are agent-enforced (clipboard/file/usb/drive).
+# For these, the operator picks ONE action in the dashboard form, so
+# the actions dict must be a single-key map matching config.action.
+# Without this constraint a legacy policy can have actions={block,alert}
+# while the form displays "alert", and the agent silently blocks.
+MONITORING_POLICY_TYPES = {
+    "clipboard_monitoring",
+    "file_system_monitoring",
+    "file_transfer_monitoring",
+    "usb_device_monitoring",
+    "usb_file_transfer_monitoring",
+    "google_drive_local_monitoring",
+}
+
+
+def normalize_monitoring_actions(
+    policy_type: Optional[str],
+    config: Optional[Dict[str, Any]],
+    actions: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Collapse a monitoring policy's actions dict to a single entry.
+
+    Priority:
+      1. ``config.action`` is the dashboard form's source of truth — if
+         set on a monitoring policy, the actions dict is rebuilt to
+         contain ONLY that action (parameters preserved if a matching
+         entry existed previously).
+      2. Otherwise, keep the strongest existing action and drop weaker
+         ones (so a stale {block, alert} pair collapses to {block}).
+      3. Non-monitoring types (classification-aware policies) pass
+         through unchanged — they legitimately carry multiple actions.
+    """
+    actions = actions or {}
+    if not policy_type or policy_type not in MONITORING_POLICY_TYPES:
+        return actions
+
+    config_action = (config or {}).get("action")
+    if isinstance(config_action, str) and config_action:
+        # Preserve parameters if the chosen action was already present
+        # (e.g. quarantine path), otherwise empty params.
+        params = actions.get(config_action) or {}
+        return {config_action: params}
+
+    strongest = effective_action(actions)
+    if strongest:
+        return {strongest: actions.get(strongest) or {}}
+
+    return actions
+
+
 def transform_frontend_config_to_backend(
     policy_type: str, config: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -351,10 +425,19 @@ def _transform_file_system_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any
         "rules": rules,
     }
 
-    # Enforce detection-only semantics (no block/quarantine here)
-    if action not in {"alert", "log"}:
+    # The dashboard form now exposes block/quarantine in addition to
+    # alert/log — these all map straight through; the agent runtime
+    # decides what each action means for a file event (delete, move to
+    # quarantine folder, log, etc.). An unknown value still defaults
+    # to "log" so a corrupt config can't accidentally start deleting
+    # files.
+    if action not in {"alert", "log", "block", "quarantine"}:
         action = "log"
-    actions = {action: {}}
+    quarantine_path = config.get("quarantinePath")
+    if action == "quarantine" and quarantine_path:
+        actions = {"quarantine": {"path": quarantine_path}}
+    else:
+        actions = {action: {}}
 
     return conditions, actions
 
@@ -396,7 +479,7 @@ def _transform_google_drive_local_config(config: Dict[str, Any]) -> Tuple[Dict[s
     # Ensure base_path ends with backslash
     if not base_path.endswith("\\"):
         base_path = base_path + "\\"
-    
+
     monitored_folders = config.get("monitoredFolders", [])
     file_extensions = config.get("fileExtensions", [])
     events = config.get("events", {})

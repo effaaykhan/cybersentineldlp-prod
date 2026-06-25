@@ -18,7 +18,10 @@ from app.core.database import get_db, get_mongodb
 from app.core.cache import get_cache, CacheService
 from app.services.policy_service import PolicyService
 from app.services.audit_service import audit_log
-from app.utils.policy_transformer import transform_frontend_config_to_backend
+from app.utils.policy_transformer import (
+    transform_frontend_config_to_backend,
+    normalize_monitoring_actions,
+)
 from app.models.user import User
 from app.models.google_drive import GoogleDriveProtectedFolder, GoogleDriveConnection
 from app.models.onedrive import OneDriveProtectedFolder, OneDriveConnection
@@ -431,6 +434,11 @@ async def create_policy(
         actions_dict = {action.type: action.parameters for action in (policy.actions or [])}
         print(f"DEBUG: Converted actions_dict={actions_dict}")
 
+    # Keep config.action and actions in sync for monitoring policies so
+    # the dashboard listing and the agent's parser can never disagree
+    # about what the policy actually does.
+    actions_dict = normalize_monitoring_actions(policy.type, policy.config, actions_dict)
+
     try:
         agent_ids = await _normalize_agent_scope(db, policy.agent_id, policy.agent_ids)
 
@@ -511,6 +519,10 @@ async def update_policy(
             "rules": [cond.dict() for cond in (policy.conditions or [])]
         }
         actions_dict = {action.type: action.parameters for action in (policy.actions or [])}
+
+    # Collapse stale multi-action shapes (e.g. {block, alert} left over
+    # from the legacy modal) down to the single canonical action.
+    actions_dict = normalize_monitoring_actions(policy.type, policy.config, actions_dict)
 
     try:
         agent_ids = await _normalize_agent_scope(db, policy.agent_id, policy.agent_ids)

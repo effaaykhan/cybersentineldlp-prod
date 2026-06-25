@@ -104,14 +104,6 @@ export default function Sidebar() {
           <ChevronLeft className="h-5 w-5" />
         )}
       </button>
-
-      {/* Footer */}
-      {!isCollapsed && (
-        <div className="px-6 py-4 border-t border-gray-800 text-xs text-gray-400">
-          <div>Version 2.0.0</div>
-          <div className="mt-1">© 2025 CyberSentinel DLP</div>
-        </div>
-      )}
     </aside>
   )
 }

@@ -269,7 +269,17 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          oss << "]";
          firstItem = false;
      }
-     
+
+     // Embed a raw, pre-formatted JSON fragment (object or array). Used
+     // for structured payloads like content_changes that the
+     // string-only AddArray can't express. Caller is responsible for
+     // the fragment being valid JSON.
+     void AddRaw(const std::string& key, const std::string& rawJson) {
+         if (!firstItem) oss << ",";
+         oss << "\"" << key << "\":" << rawJson;
+         firstItem = false;
+     }
+
      std::string Build() {
          oss << "}";
          return oss.str();
@@ -803,6 +813,12 @@ void Log(const std::string& level, const std::string& message) {
     std::vector<std::string> fileExtensions;
     std::vector<std::string> monitoredPaths;
     std::vector<std::string> monitoredEvents;  // NEW: e.g., ["file_created", "file_modified", "file_deleted"]
+    // File-transfer-only: paths where sensitive originals live. Queried
+    // on-demand when an FT match fires — we hash the just-arrived file
+    // at the destination and look for a same-hash file in this list to
+    // surface the original source path. Empty for FS / clipboard / USB
+    // policies. See HandleFileEvent for the lookup.
+    std::vector<std::string> protectedSourcePaths;
     int minMatchCount = 1;
     bool enabled = true;
     std::string quarantinePath;
@@ -837,8 +853,154 @@ struct USBFileTransferPolicy {
     bool enabled;
 };
  
+ // ==================== Content Diff Helper ====================
+ //
+ // Tracks what changed in a file when a file_modified event fires.
+ // Used to populate the ``content_changes`` field on file events so an
+ // analyst can see exactly which line(s) were altered in a 5000-line
+ // file instead of just "file was modified."
+ //
+ // Algorithm: hash-set line matching. For each line in the new content
+ // we look for an unmatched occurrence of the same line in the old
+ // content; matched lines are skipped, unmatched ones become an
+ // "added" or "removed" entry. This is O(N+M), runs in linear memory,
+ // and gives the exact result the user asked for (1 line edited in
+ // 5000 → one added + one removed). It does NOT compute Myers-style
+ // pairing (no "modified line X: A→B" — instead it reports "line X
+ // removed: A; line X added: B"). That's a deliberate trade-off:
+ // pairing would need O(N*M) LCS which doesn't scale to large files.
+
+ struct LineChange {
+     int lineNum;              // 1-indexed line number in the source side
+     std::string action;       // "added" or "removed"
+     std::string content;      // line content (truncated if very long)
+ };
+
+ // Maximum size we'll diff. Files larger than this skip the diff and
+ // just report a size-change summary — reading two 50 MB strings into
+ // RAM on every save would tank the endpoint.
+ static constexpr size_t MAX_DIFF_FILE_BYTES = 5 * 1024 * 1024;
+ // Maximum line content we emit per change. Long lines (minified JS,
+ // base64 blobs) would blow up the event payload otherwise.
+ static constexpr size_t MAX_DIFF_LINE_CHARS = 500;
+ // Maximum entries in the diff. Past this we truncate and add a flag
+ // so the dashboard can show "+ N more changes." Prevents a complete
+ // rewrite of a large file from producing a 10 MB JSON payload.
+ static constexpr size_t MAX_DIFF_ENTRIES = 500;
+
+ static std::vector<std::string> SplitLines(const std::string& s) {
+     std::vector<std::string> lines;
+     std::string cur;
+     for (char c : s) {
+         if (c == '\n') {
+             lines.push_back(cur);
+             cur.clear();
+         } else if (c != '\r') {
+             cur += c;
+         }
+     }
+     // Always push the trailing segment so a file with no terminating
+     // newline still surfaces its last line.
+     lines.push_back(cur);
+     return lines;
+ }
+
+ static std::string TruncateLine(const std::string& s) {
+     if (s.size() <= MAX_DIFF_LINE_CHARS) return s;
+     return s.substr(0, MAX_DIFF_LINE_CHARS) + "… (truncated)";
+ }
+
+ // Compute line-level diff between two content strings.
+ // ``truncated`` is set to true when the result was capped by
+ // MAX_DIFF_ENTRIES so the caller can flag the event accordingly.
+ static std::vector<LineChange> ComputeLineDiff(
+     const std::string& oldContent,
+     const std::string& newContent,
+     bool& truncated
+ ) {
+     truncated = false;
+     std::vector<LineChange> diff;
+
+     auto oldLines = SplitLines(oldContent);
+     auto newLines = SplitLines(newContent);
+
+     // Map of old line content -> queue of (1-indexed) positions where
+     // it appears. We pop the front as we match so duplicate lines
+     // get paired in document order, which keeps the "added" /
+     // "removed" line numbers monotonic.
+     std::unordered_map<std::string, std::vector<size_t>> oldIndex;
+     oldIndex.reserve(oldLines.size());
+     for (size_t i = 0; i < oldLines.size(); ++i) {
+         oldIndex[oldLines[i]].push_back(i);
+     }
+
+     std::vector<bool> oldMatched(oldLines.size(), false);
+     std::vector<bool> newMatched(newLines.size(), false);
+
+     // First pass: match identical lines, FIFO within duplicates.
+     for (size_t i = 0; i < newLines.size(); ++i) {
+         auto it = oldIndex.find(newLines[i]);
+         if (it == oldIndex.end()) continue;
+         for (size_t& idx : it->second) {
+             if (!oldMatched[idx]) {
+                 oldMatched[idx] = true;
+                 newMatched[i] = true;
+                 break;
+             }
+         }
+     }
+
+     // Emit removed lines first (so an analyst reads top-down: what
+     // disappeared, then what appeared).
+     for (size_t i = 0; i < oldLines.size(); ++i) {
+         if (oldMatched[i]) continue;
+         if (diff.size() >= MAX_DIFF_ENTRIES) { truncated = true; break; }
+         diff.push_back({static_cast<int>(i) + 1, "removed", TruncateLine(oldLines[i])});
+     }
+     for (size_t i = 0; i < newLines.size(); ++i) {
+         if (newMatched[i]) continue;
+         if (diff.size() >= MAX_DIFF_ENTRIES) { truncated = true; break; }
+         diff.push_back({static_cast<int>(i) + 1, "added", TruncateLine(newLines[i])});
+     }
+     return diff;
+ }
+
+ // Render LineChange list as a JSON array suitable for JsonBuilder::AddRaw.
+ static std::string SerializeDiff(const std::vector<LineChange>& diff) {
+     std::ostringstream oss;
+     oss << "[";
+     for (size_t i = 0; i < diff.size(); ++i) {
+         if (i > 0) oss << ",";
+         std::string escaped;
+         for (char c : diff[i].content) {
+             switch (c) {
+                 case '\"': escaped += "\\\""; break;
+                 case '\\': escaped += "\\\\"; break;
+                 case '\b': escaped += "\\b"; break;
+                 case '\f': escaped += "\\f"; break;
+                 case '\n': escaped += "\\n"; break;
+                 case '\r': escaped += "\\r"; break;
+                 case '\t': escaped += "\\t"; break;
+                 default:
+                     if (static_cast<unsigned char>(c) < 0x20) {
+                         char buf[8];
+                         std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                         escaped += buf;
+                     } else {
+                         escaped += c;
+                     }
+             }
+         }
+         oss << "{\"line\":" << diff[i].lineNum
+             << ",\"action\":\"" << diff[i].action << "\""
+             << ",\"content\":\"" << escaped << "\"}";
+     }
+     oss << "]";
+     return oss.str();
+ }
+
  // ==================== Content Classifier ====================
- 
+
  struct ClassificationResult {
      std::vector<std::string> labels;
      std::string severity;
@@ -910,16 +1072,51 @@ static ClassificationResult Classify(const std::string& content,
         if (matchCount >= policy.minMatchCount && matchCount > 0) {
             result.matchedPolicies.push_back(policy.policyId);
             result.labels.insert(result.labels.end(), matchedTypes.begin(), matchedTypes.end());
-            
-            // Update severity based on policy action
-            if (policy.action == "block" || policy.action == "quarantine") {
-                result.severity = "critical";
-                result.suggestedAction = policy.action;
-            } else if (policy.action == "alert" && result.severity != "critical") {
-                result.severity = "high";
-                result.suggestedAction = "alerted";
+
+            // Severity: honor the operator-configured severity on the
+            // policy. We only fall back to an action-derived guess when
+            // the server omitted severity (legacy policies). Without
+            // this, a "Log All Clipboard Activity" policy authored with
+            // severity=low always surfaced as "high" — the agent was
+            // overruling the operator.
+            auto severityRank = [](const std::string& s) -> int {
+                if (s == "critical") return 4;
+                if (s == "high")     return 3;
+                if (s == "medium")   return 2;
+                if (s == "low")      return 1;
+                return 0;
+            };
+            std::string policySeverity = policy.severity;
+            if (policySeverity.empty()) {
+                if (policy.action == "block" || policy.action == "quarantine") {
+                    policySeverity = "critical";
+                } else if (policy.action == "alert") {
+                    policySeverity = "high";
+                } else {
+                    policySeverity = "low";
+                }
             }
-            
+            if (severityRank(policySeverity) > severityRank(result.severity)) {
+                result.severity = policySeverity;
+            }
+
+            // suggestedAction tracks the strongest enforcement across all
+            // matching policies: block > quarantine > alert > log. This
+            // is independent of severity so a "low" severity block still
+            // clears the clipboard.
+            auto actionRank = [](const std::string& a) -> int {
+                if (a == "block")      return 4;
+                if (a == "quarantine") return 3;
+                if (a == "alert")      return 2;
+                if (a == "log")        return 1;
+                return 0;
+            };
+            std::string mapped = policy.action == "alert" ? "alerted" : policy.action;
+            if (actionRank(policy.action) > actionRank(
+                    result.suggestedAction == "alerted" ? "alert" : result.suggestedAction)) {
+                result.suggestedAction = mapped;
+            }
+
             result.score = 0.9;
         }
     }
@@ -1391,6 +1588,15 @@ static ClassificationResult Classify(const std::string& content,
      // Store original file contents for restoration
      std::map<std::string, std::string> originalFileContents;
      std::mutex originalContentsMutex;
+
+     // Rolling baseline used for content_changes diff on file_modified
+     // events. Distinct from ``originalFileContents`` because that map
+     // is the immutable first-seen snapshot we restore from on a
+     // quarantined deletion — overwriting it would defeat that use.
+     // ``lastSeenFileContents`` advances on every modify emit so each
+     // subsequent diff shows only what changed in that save.
+     std::map<std::string, std::string> lastSeenFileContents;
+     std::mutex lastSeenContentsMutex;
      
      std::vector<std::thread> workerThreads;
      HWND usbMonitorWindow = nullptr;
@@ -3304,21 +3510,69 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                     if (patternsPos != std::string::npos) {
                         size_t patternsStart = configObj.find("{", patternsPos);
                         size_t patternsEnd = FindMatchingBracket(configObj, patternsStart, '{', '}');
-                        
+
                         if (patternsStart != std::string::npos && patternsEnd != std::string::npos) {
                             std::string patternsObj = configObj.substr(patternsStart, patternsEnd - patternsStart + 1);
-                            
+
                             std::vector<std::string> predefined = ExtractJsonArray(patternsObj, "predefined");
                             rule.dataTypes.insert(rule.dataTypes.end(), predefined.begin(), predefined.end());
-                            
+
                             std::vector<std::string> custom = ExtractJsonArray(patternsObj, "custom");
                             rule.dataTypes.insert(rule.dataTypes.end(), custom.begin(), custom.end());
                         }
                     }
-                    
+
                     // Fallback for old format
                     if (rule.dataTypes.empty()) {
                         rule.dataTypes = ExtractJsonArray(configObj, "dataTypes");
+                    }
+                }
+
+                // Parse path / extension / event filters for filesystem
+                // policy types. Without this block, file_system_monitoring
+                // policies arrived with empty monitoredPaths so the
+                // directory watcher never started — the policy was
+                // effectively dead on the endpoint.
+                if (policyType == "file_system_monitoring" ||
+                    policyType == "file_transfer_monitoring" ||
+                    policyType == "google_drive_local_monitoring") {
+                    if (policyType == "file_transfer_monitoring") {
+                        // FT semantic: alert when a file from a protected
+                        // source path arrives at one of the watched
+                        // destinations. The directory watcher needs the
+                        // *destinations* in monitoredPaths so it fires on
+                        // arrival; the source list goes into
+                        // protectedSourcePaths and is queried on demand
+                        // for hash-based attribution (see HandleFileEvent).
+                        rule.monitoredPaths = ExtractJsonArray(configObj, "monitoredDestinations");
+                        rule.protectedSourcePaths = ExtractJsonArray(configObj, "protectedPaths");
+                    } else {
+                        rule.monitoredPaths = ExtractJsonArray(configObj, "monitoredPaths");
+                    }
+                    rule.fileExtensions = ExtractJsonArray(configObj, "fileExtensions");
+
+                    // Convert the form's boolean events map
+                    // ({create:true, modify:true, delete:false, move:true})
+                    // into the canonical event_subtype strings the
+                    // runtime matches against (see WatchDirectory
+                    // switch). Without this conversion every file
+                    // event was dropped because monitoredEvents was
+                    // empty and the path filter rejected it too.
+                    size_t eventsPos = configObj.find("\"events\"");
+                    if (eventsPos != std::string::npos) {
+                        size_t eventsStart = configObj.find("{", eventsPos);
+                        size_t eventsEnd = FindMatchingBracket(configObj, eventsStart, '{', '}');
+                        if (eventsStart != std::string::npos && eventsEnd != std::string::npos) {
+                            std::string eventsObj = configObj.substr(eventsStart, eventsEnd - eventsStart + 1);
+                            if (ExtractJsonBool(eventsObj, "create"))
+                                rule.monitoredEvents.push_back("file_created");
+                            if (ExtractJsonBool(eventsObj, "modify"))
+                                rule.monitoredEvents.push_back("file_modified");
+                            if (ExtractJsonBool(eventsObj, "delete"))
+                                rule.monitoredEvents.push_back("file_deleted");
+                            if (ExtractJsonBool(eventsObj, "move"))
+                                rule.monitoredEvents.push_back("file_renamed");
+                        }
                     }
                 }
             }
@@ -3560,15 +3814,50 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         }
     }
      
+     // Wipe the system clipboard. OpenClipboard frequently fails with
+     // "access denied" when another process (Office, browser, Explorer)
+     // still has it open after a copy, so we retry briefly. Returns
+     // true if EmptyClipboard ran at least once.
+     bool ClearClipboardWithRetry() {
+         for (int attempt = 0; attempt < 10; ++attempt) {
+             if (OpenClipboard(NULL)) {
+                 EmptyClipboard();
+                 // Replace with an empty wide string so a paste pulls "" instead
+                 // of whatever was there before (some apps cache the prior frame).
+                 HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(wchar_t));
+                 if (hMem) {
+                     wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
+                     if (pMem) {
+                         pMem[0] = L'\0';
+                         GlobalUnlock(hMem);
+                         SetClipboardData(CF_UNICODETEXT, hMem);
+                     }
+                 }
+                 CloseClipboard();
+                 return true;
+             }
+             // 20ms × 10 = up to ~200ms; well under the source app's hold time.
+             std::this_thread::sleep_for(std::chrono::milliseconds(20));
+         }
+         return false;
+     }
+
      void ClipboardMonitor() {
          logger.Info("Clipboard monitoring started");
-         
+
+         // Poll fast enough that the paste-after-copy race window is small.
+         // 200ms keeps CPU cost negligible (one tiny clipboard read every
+         // 5th of a second) while shrinking the window between a copy and
+         // our enforcement from ~2s down to a couple hundred ms.
+         const auto pollInterval = std::chrono::milliseconds(200);
+         const auto idleInterval = std::chrono::seconds(2);
+
          while (running) {
              if (!hasClipboardPolicies || !allowEvents) {
-                 std::this_thread::sleep_for(std::chrono::seconds(2));
+                 std::this_thread::sleep_for(idleInterval);
                  continue;
              }
-             
+
              try {
                  // Get active window title to detect source file
                  HWND hwnd = GetForegroundWindow();
@@ -3577,7 +3866,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                      GetWindowTextA(hwnd, windowTitle, sizeof(windowTitle));
                      lastActiveWindow = std::string(windowTitle);
                  }
-                 
+
                  if (OpenClipboard(nullptr)) {
                      HANDLE hData = GetClipboardData(CF_UNICODETEXT);
                      if (hData != nullptr) {
@@ -3586,10 +3875,13 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                              std::wstring wtext(pData);
                              std::string text(wtext.begin(), wtext.end());
                              GlobalUnlock(hData);
-                             
+
                              if (!text.empty() && text != lastClipboard) {
                                  lastClipboard = text;
+                                 CloseClipboard();   // release BEFORE classify/enforce
                                  HandleClipboardEvent(text, lastActiveWindow);
+                                 std::this_thread::sleep_for(pollInterval);
+                                 continue;
                              }
                          }
                      }
@@ -3598,8 +3890,8 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              } catch (...) {
                  logger.Debug("Clipboard access error");
              }
-             
-             std::this_thread::sleep_for(std::chrono::seconds(2));
+
+             std::this_thread::sleep_for(pollInterval);
          }
      }
      
@@ -3673,6 +3965,15 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             // If no sensitive content detected, send a Public/Allowed event
             if (classification.detectedContent.empty() || totalMatches == 0) {
                 logger.Info("Clipboard content classified as Public - allowed");
+                // Every event MUST cite the policy that caused the agent to
+                // observe it. For a "no match" outcome we cite the enabled
+                // monitoring policies — they're the reason this copy was
+                // inspected at all. Without this the dashboard renders
+                // orphan rows the analyst can't trace back to any rule.
+                std::vector<std::string> monitoringPolicyIds;
+                for (const auto& policy : policies) {
+                    if (policy.enabled) monitoringPolicyIds.push_back(policy.policyId);
+                }
                 JsonBuilder pubJson;
                 pubJson.AddString("event_id", GenerateUUID());
                 pubJson.AddString("event_type", "clipboard");
@@ -3686,6 +3987,10 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 pubJson.AddString("content", content);
                 pubJson.AddString("classification_level", "Public");
                 pubJson.AddDouble("classification_score", 0.0);
+                pubJson.AddArray("matched_policies", monitoringPolicyIds);
+                if (!monitoringPolicyIds.empty()) {
+                    pubJson.AddString("policy_id", monitoringPolicyIds.front());
+                }
                 pubJson.AddString("timestamp", GetCurrentTimestampISO());
                 if (!windowTitle.empty()) {
                     pubJson.AddString("source_window", windowTitle);
@@ -3824,35 +4129,25 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
 
             json.AddString("timestamp", GetCurrentTimestampISO());
 
-            SendEvent(json.Build());
-
-            // ENFORCEMENT: If policy says block, clear the clipboard completely
+            // ENFORCEMENT (MUST run before the network send): if the policy
+            // says block, wipe the clipboard NOW. SendEvent is a synchronous
+            // HTTP POST and can take 100ms–several seconds — if we cleared
+            // after that, the user has already pasted. Clearing first means
+            // the worst-case paste window is just the poll interval below.
             if (classification.suggestedAction == "block") {
                 logger.Warning("  CLEARING CLIPBOARD — sensitive data detected!");
-
-                // Step 1: Clear traditional clipboard
-                if (OpenClipboard(NULL)) {
-                    EmptyClipboard();
-                    // Set empty text so clipboard history gets an empty entry
-                    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(wchar_t));
-                    if (hMem) {
-                        wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
-                        if (pMem) {
-                            pMem[0] = L'\0';
-                            GlobalUnlock(hMem);
-                            SetClipboardData(CF_UNICODETEXT, hMem);
-                        }
-                    }
-                    CloseClipboard();
+                bool cleared = ClearClipboardWithRetry();
+                if (cleared) {
                     logger.Warning("  Clipboard cleared successfully");
                 } else {
-                    logger.Error("  Failed to clear clipboard");
+                    logger.Error("  Failed to clear clipboard after retries");
                 }
-
-
-                // Update lastClipboard to prevent re-triggering on the empty clipboard
+                // Update lastClipboard regardless so we don't re-trigger on
+                // the (possibly still-stuck) old content next poll.
                 lastClipboard = "";
             }
+
+            SendEvent(json.Build());
 
             // Enhanced console logging
             logger.Warning("\n============================================================");
@@ -5251,10 +5546,82 @@ if (shouldMonitor) {
                 }
             }
             
+            // File Transfer attribution: if any of the matched policies
+            // is a file_transfer_monitoring rule, this event represents
+            // a file arriving at one of its monitored destinations.
+            // Walk the policy's protectedSourcePaths and look for a file
+            // with the same SHA-256 to recover the original source.
+            // Hash matching means a verbatim copy is attributed; a copy
+            // that was modified in transit (re-saved, edited) won't
+            // match — that's intentional, because attributing modified
+            // content back to a specific source would be a guess.
+            std::string transferSourcePath;
+            std::string transferSourceFile;
+            bool isTransferEvent = false;
+            for (const auto& matchedId : classification.matchedPolicies) {
+                std::vector<std::string> srcPaths;
+                std::string ftPolicyType;
+                {
+                    std::lock_guard<std::mutex> lock(policiesMutex);
+                    for (const auto& p : filePolicies) {
+                        if (p.policyId == matchedId &&
+                            p.policyType == "file_transfer_monitoring") {
+                            srcPaths = p.protectedSourcePaths;
+                            ftPolicyType = p.policyType;
+                            break;
+                        }
+                    }
+                }
+                if (srcPaths.empty()) continue;
+                isTransferEvent = true;
+                // Need the destination file's hash to look up the
+                // source. If CalculateFileHash failed earlier we skip
+                // attribution silently — the event still fires with
+                // event_subtype=file_transfer so the operator knows
+                // the policy matched.
+                if (fileHash.empty()) break;
+                for (const auto& src : srcPaths) {
+                    std::string normSrc = NormalizeFilesystemPath(src);
+                    if (normSrc.empty() || !fs::exists(normSrc)) continue;
+                    try {
+                        for (const auto& entry : fs::recursive_directory_iterator(
+                                 normSrc, fs::directory_options::skip_permission_denied)) {
+                            if (!entry.is_regular_file()) continue;
+                            // Skip files larger than max classification
+                            // size — a hash comparison would scan the
+                            // whole file and is pointless if our
+                            // destination hash was computed under that
+                            // cap too.
+                            try {
+                                if (entry.file_size() >
+                                    config.GetClassification().maxFileSizeMB * 1024 * 1024) {
+                                    continue;
+                                }
+                            } catch (...) { continue; }
+                            std::string candidate = CalculateFileHash(entry.path().string());
+                            if (candidate == fileHash) {
+                                transferSourcePath = entry.path().string();
+                                transferSourceFile = entry.path().filename().string();
+                                break;
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        logger.Debug("FT source scan failed for " + normSrc + ": " + e.what());
+                    }
+                    if (!transferSourcePath.empty()) break;
+                }
+                if (!transferSourcePath.empty()) break;
+            }
+            // Promote the subtype so the dashboard surfaces this as a
+            // transfer, not a generic file create — even when source
+            // attribution failed (the policy still matched, the file
+            // just couldn't be traced).
+            std::string emittedSubtype = isTransferEvent ? "file_transfer" : eventSubtype;
+
             JsonBuilder json;
             json.AddString("event_id", GenerateUUID());
             json.AddString("event_type", "file");
-            json.AddString("event_subtype", eventSubtype);
+            json.AddString("event_subtype", emittedSubtype);
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "agent");
             json.AddString("user_email", GetUsername() + "@" + GetHostname());
@@ -5268,13 +5635,89 @@ if (shouldMonitor) {
             json.AddArray("data_types", detectedTypes);
             json.AddArray("matched_policies", classification.matchedPolicies);
             json.AddInt("total_matches", totalMatches);
-            
+            if (isTransferEvent) {
+                json.AddString("destination", filePath);
+                json.AddString("destination_type", "filesystem");
+                if (!transferSourcePath.empty()) {
+                    json.AddString("source_path", transferSourcePath);
+                    if (!transferSourceFile.empty()) {
+                        json.AddString("source_file", transferSourceFile);
+                    }
+                }
+            }
+
             if (!fileHash.empty()) {
                 json.AddString("file_hash", fileHash);
             }
-            
+
+            // Content-change diff: for file_modified events we compare
+            // the current bytes against the previous snapshot and
+            // attach the per-line changes. Skipped for files that are
+            // too large (we won't load 50 MB into RAM) or when we
+            // don't have a baseline (file was created before the agent
+            // started watching).
+            if (eventSubtype == "file_modified" &&
+                !content.empty() &&
+                fileSize <= MAX_DIFF_FILE_BYTES) {
+                std::string oldContent;
+                bool haveBaseline = false;
+                {
+                    std::lock_guard<std::mutex> lock(lastSeenContentsMutex);
+                    auto it = lastSeenFileContents.find(filePath);
+                    if (it != lastSeenFileContents.end()) {
+                        oldContent = it->second;
+                        haveBaseline = true;
+                    }
+                }
+                // Fall back to the first-seen snapshot if no later
+                // baseline exists yet (first modify after creation).
+                if (!haveBaseline) {
+                    std::lock_guard<std::mutex> lock(originalContentsMutex);
+                    auto it = originalFileContents.find(filePath);
+                    if (it != originalFileContents.end()) {
+                        oldContent = it->second;
+                        haveBaseline = true;
+                    }
+                }
+                if (haveBaseline && oldContent != content) {
+                    bool truncated = false;
+                    auto changes = ComputeLineDiff(oldContent, content, truncated);
+                    int linesAdded = 0, linesRemoved = 0;
+                    for (const auto& c : changes) {
+                        if (c.action == "added") ++linesAdded;
+                        else if (c.action == "removed") ++linesRemoved;
+                    }
+                    json.AddRaw("content_changes", SerializeDiff(changes));
+                    json.AddInt("lines_added", linesAdded);
+                    json.AddInt("lines_removed", linesRemoved);
+                    if (truncated) {
+                        json.AddBool("content_changes_truncated", true);
+                    }
+                    logger.Info("  Content diff: +" + std::to_string(linesAdded) +
+                                " / -" + std::to_string(linesRemoved) +
+                                (truncated ? " (truncated)" : ""));
+                }
+                // Advance the rolling baseline so the next modify
+                // shows only what changed in that save (not the
+                // cumulative drift from creation).
+                {
+                    std::lock_guard<std::mutex> lock(lastSeenContentsMutex);
+                    lastSeenFileContents[filePath] = content;
+                }
+            } else if (eventSubtype == "file_created" && !content.empty()) {
+                // Seed the rolling baseline so the first modify after
+                // creation can diff against the original bytes.
+                std::lock_guard<std::mutex> lock(lastSeenContentsMutex);
+                lastSeenFileContents[filePath] = content;
+            } else if (eventSubtype == "file_deleted") {
+                // Drop the baseline so a re-created file at the same
+                // path doesn't diff against unrelated old content.
+                std::lock_guard<std::mutex> lock(lastSeenContentsMutex);
+                lastSeenFileContents.erase(filePath);
+            }
+
             json.AddString("timestamp", GetCurrentTimestampISO());
-            
+
             SendEvent(json.Build());
             
             logger.Warning("============================================================");

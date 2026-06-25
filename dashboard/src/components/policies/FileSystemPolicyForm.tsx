@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { FileSystemConfig } from '@/types/policy'
 import { Plus, Trash2, X } from 'lucide-react'
+import { predefinedPatterns } from '@/utils/policyUtils'
 
 interface FileSystemPolicyFormProps {
   config: FileSystemConfig
@@ -14,6 +15,24 @@ const commonExtensions = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.pp
 export default function FileSystemPolicyForm({ config, onChange }: FileSystemPolicyFormProps) {
   const [newPath, setNewPath] = useState('')
   const [newExtension, setNewExtension] = useState('')
+
+  // Patterns block uses the same predefined list as ClipboardPolicyForm so
+  // a "detect credit card numbers" rule means the same thing across all
+  // monitoring surfaces. Without patterns, the agent has nothing to scan
+  // file contents *against* and the policy fires no events.
+  const selectedPredefined = config.patterns?.predefined ?? []
+  const handlePredefinedToggle = (patternId: string) => {
+    const next = selectedPredefined.includes(patternId)
+      ? selectedPredefined.filter(p => p !== patternId)
+      : [...selectedPredefined, patternId]
+    onChange({
+      ...config,
+      patterns: {
+        predefined: next,
+        custom: config.patterns?.custom ?? [],
+      },
+    })
+  }
 
   const handleAddPath = () => {
     if (!newPath.trim()) {
@@ -217,11 +236,53 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
         </div>
       </div>
 
+      {/* Sensitive Data Patterns */}
+      <div>
+        <label className="block text-sm font-medium text-gray-200 mb-3">
+          Sensitive Data Patterns *
+        </label>
+        <p className="text-xs text-gray-400 mb-3">
+          At least one pattern is required. Files are opened and scanned for these data types — the policy only fires when a match is found.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {predefinedPatterns.map((pattern) => {
+            const isSelected = selectedPredefined.includes(pattern.id)
+            return (
+              <div
+                key={pattern.id}
+                onClick={() => handlePredefinedToggle(pattern.id)}
+                className={`p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                  isSelected
+                    ? 'border-indigo-500 bg-indigo-900/30'
+                    : 'border-gray-600 bg-gray-900/30 hover:border-gray-500'
+                }`}
+              >
+                <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    readOnly
+                    className="mt-1 w-4 h-4 text-indigo-600 rounded"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-sm text-white">{pattern.name}</div>
+                    <div className="text-xs mt-1 opacity-70 font-mono text-gray-400">{pattern.example}</div>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
       {/* Events to Monitor */}
       <div>
         <label className="block text-sm font-medium text-gray-200 mb-3">
           Events to Monitor *
         </label>
+        <p className="text-xs text-gray-400 mb-3">
+          "Create" covers new files, copies/pastes, and downloads (they all produce a new file at the destination).
+        </p>
         <div className="space-y-2">
           {Object.entries(config.events).map(([event, enabled]) => (
             <label
@@ -248,9 +309,39 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
       {/* Action Selection */}
       <div>
         <label className="block text-sm font-medium text-gray-200 mb-3">
-          Action When Event Detected
+          Action When Sensitive File Is Detected
         </label>
         <div className="space-y-2">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+            <input
+              type="radio"
+              name="filesystem-action"
+              value="block"
+              checked={config.action === 'block'}
+              onChange={() => onChange({ ...config, action: 'block', quarantinePath: undefined })}
+              className="w-4 h-4 text-indigo-600"
+            />
+            <div>
+              <div className="text-white font-medium text-sm">Block</div>
+              <div className="text-gray-400 text-xs">Delete the offending file immediately and raise an alert</div>
+            </div>
+          </label>
+
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+            <input
+              type="radio"
+              name="filesystem-action"
+              value="quarantine"
+              checked={config.action === 'quarantine'}
+              onChange={() => onChange({ ...config, action: 'quarantine' })}
+              className="w-4 h-4 text-indigo-600"
+            />
+            <div>
+              <div className="text-white font-medium text-sm">Quarantine</div>
+              <div className="text-gray-400 text-xs">Move the file to a quarantine folder; can be restored by an admin</div>
+            </div>
+          </label>
+
           <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
             <input
               type="radio"
@@ -262,7 +353,7 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
             />
             <div>
               <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-gray-400 text-xs">Send alert notification</div>
+              <div className="text-gray-400 text-xs">Send an alert but leave the file in place</div>
             </div>
           </label>
 
@@ -277,10 +368,28 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
             />
             <div>
               <div className="text-white font-medium text-sm">Log Only</div>
-              <div className="text-gray-400 text-xs">Record events without blocking</div>
+              <div className="text-gray-400 text-xs">Record the event silently with no notification or enforcement</div>
             </div>
           </label>
         </div>
+
+        {config.action === 'quarantine' && (
+          <div className="mt-3">
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Quarantine Folder (optional)
+            </label>
+            <input
+              type="text"
+              value={config.quarantinePath ?? ''}
+              onChange={(e) => onChange({ ...config, quarantinePath: e.target.value || undefined })}
+              placeholder="e.g., C:\\CyberSentinel\\Quarantine"
+              className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-2">
+              Leave empty to use the agent's default quarantine folder.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -23,7 +23,7 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex h-screen bg-canvas">
+    <div className="flex h-screen bg-cs-bg">
       {/* Sidebar */}
       <Sidebar />
 
@@ -33,7 +33,7 @@ export default function Layout() {
         <Header />
 
         {/* Page Content */}
-        <main className="flex-1 overflow-y-auto px-6 py-7">
+        <main className="flex-1 overflow-y-auto px-6 py-6">
           <Outlet />
         </main>
 

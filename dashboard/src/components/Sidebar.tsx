@@ -18,10 +18,9 @@ import {
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
 
-// Nav is grouped by what the analyst is doing — overview, investigating,
-// enforcing, administering — so ten destinations read as four short lists
-// instead of one long scroll. An item shows if the user has ANY of its
-// permissions (empty = always shown); a group with no visible items hides.
+// Nav grouped by what the analyst is doing. An item shows if the user has
+// ANY of its permissions (empty = always shown); a group with no visible
+// items hides entirely.
 type NavItem = {
   name: string
   to: string
@@ -77,21 +76,17 @@ export default function Sidebar() {
   return (
     <aside
       className={cn(
-        'bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800 transition-all duration-300',
-        isCollapsed ? 'w-16' : 'w-64',
+        'bg-cs-panel text-cs-ink-2 flex flex-col border-r border-cs-hair transition-all duration-200',
+        isCollapsed ? 'w-16' : 'w-[226px]',
       )}
     >
-      {/* Brand */}
-      <div className="h-16 flex items-center gap-2.5 px-4 border-b border-slate-800/80">
-        <img
-          src={logo}
-          alt="CyberSentinel DLP"
-          className="h-9 w-9 object-contain flex-shrink-0"
-        />
+      {/* Brand — height matches the 56px top bar */}
+      <div className="h-14 flex items-center gap-2.5 px-4 border-b border-cs-hair shrink-0">
+        <img src={logo} alt="CyberSentinel DLP" className="h-8 w-8 object-contain shrink-0" />
         {!isCollapsed && (
           <div className="min-w-0 leading-tight">
-            <div className="text-[15px] font-semibold text-white truncate">CyberSentinel</div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+            <div className="text-[14px] font-semibold text-cs-ink truncate">CyberSentinel</div>
+            <div className="text-[9.5px] font-semibold uppercase tracking-[0.18em] text-cs-muted-2">
               DLP Console
             </div>
           </div>
@@ -103,7 +98,7 @@ export default function Sidebar() {
         {visibleGroups.map((group) => (
           <div key={group.label}>
             {!isCollapsed && (
-              <p className="px-2.5 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
+              <p className="px-2.5 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-cs-muted-2">
                 {group.label}
               </p>
             )}
@@ -114,10 +109,11 @@ export default function Sidebar() {
                   to={item.to}
                   className={({ isActive }) =>
                     cn(
-                      'group relative flex items-center rounded-lg px-2.5 py-2 text-sm font-medium transition-colors duration-150',
+                      'group relative flex items-center rounded-cs-sm px-2.5 py-2 text-sm font-medium transition-colors duration-150',
+                      'focus-visible:outline-none focus-visible:shadow-focus',
                       isActive
-                        ? 'bg-primary-500/10 text-white'
-                        : 'text-slate-400 hover:bg-white/5 hover:text-slate-100',
+                        ? 'bg-cs-indigo-faint text-cs-indigo'
+                        : 'text-cs-ink-2 hover:bg-cs-hair-2 hover:text-cs-ink',
                       isCollapsed && 'justify-center',
                     )
                   }
@@ -125,18 +121,17 @@ export default function Sidebar() {
                 >
                   {({ isActive }) => (
                     <>
-                      {/* Active accent bar */}
                       <span
                         className={cn(
-                          'absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-primary-400 transition-opacity',
+                          'absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-cs-indigo transition-opacity',
                           isActive ? 'opacity-100' : 'opacity-0',
                         )}
                       />
                       <item.icon
                         className={cn(
-                          'h-[18px] w-[18px] flex-shrink-0 transition-colors',
+                          'h-[18px] w-[18px] shrink-0 transition-colors',
                           !isCollapsed && 'mr-3',
-                          isActive ? 'text-primary-300' : 'text-slate-500 group-hover:text-slate-300',
+                          isActive ? 'text-cs-indigo' : 'text-cs-muted group-hover:text-cs-ink-2',
                         )}
                       />
                       {!isCollapsed && item.name}
@@ -150,10 +145,10 @@ export default function Sidebar() {
       </nav>
 
       {/* Collapse toggle */}
-      <div className="border-t border-slate-800/80 p-2.5">
+      <div className="border-t border-cs-hair p-2.5 shrink-0">
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="w-full p-2 text-slate-400 hover:bg-white/5 hover:text-slate-200 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
+          className="w-full p-2 text-cs-muted hover:bg-cs-hair-2 hover:text-cs-ink-2 rounded-cs-sm transition-colors flex items-center justify-center gap-2 text-xs font-medium focus-visible:outline-none focus-visible:shadow-focus"
           title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {isCollapsed ? (

@@ -119,6 +119,28 @@
     @apply absolute inset-0 rounded-full bg-emerald-500 animate-ping opacity-60;
   }
 
+  /* Token-driven live pulse (uses --cs-ok). */
+  .cs-live-dot {
+    position: relative;
+    display: inline-flex;
+    height: 7px;
+    width: 7px;
+    border-radius: 9999px;
+    background: var(--cs-ok);
+  }
+  .cs-live-dot::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: var(--cs-ok);
+    opacity: 0.55;
+    animation: cs-ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  @keyframes cs-ping {
+    75%, 100% { transform: scale(2.2); opacity: 0; }
+  }
+
   /* ── Buttons ──────────────────────────────────────────────────────
      Primary = solid indigo. Secondary = quiet outline (not a gray fill).
      Focus is a visible indigo ring for keyboard users. */

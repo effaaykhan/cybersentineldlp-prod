@@ -6127,6 +6127,73 @@ if (shouldMonitor) {
         return "";
     }
 
+    // Resolve the *real* product name of a USB mass-storage device.
+    // A flash drive exposes two device nodes: the USB node (whose description
+    // is the generic "USB Mass Storage Device") and the USBSTOR/disk node
+    // (whose friendly name is the real "SanDisk Cruzer Blade USB Device").
+    // We enumerate USBSTOR, match the disk node by the device serial, then
+    // read its friendly name and parse Ven_/Prod_ for manufacturer + model.
+    // Returns false for non-storage devices (keyboards, phones, …) so the
+    // caller keeps whatever the USB node reported.
+    bool ResolveUSBStorageName(const std::string& serial,
+                               std::string& outFriendly,
+                               std::string& outManufacturer,
+                               std::string& outModel) {
+        if (serial.empty()) return false;
+
+        std::string serialUpper = serial;
+        for (auto& c : serialUpper) c = (char)toupper((unsigned char)c);
+
+        HDEVINFO hDevInfo = SetupDiGetClassDevsA(NULL, "USBSTOR", NULL, DIGCF_PRESENT | DIGCF_ALLCLASSES);
+        if (hDevInfo == INVALID_HANDLE_VALUE) return false;
+
+        bool found = false;
+        SP_DEVINFO_DATA devInfoData;
+        devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+        for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &devInfoData); i++) {
+            char instId[512];
+            if (!SetupDiGetDeviceInstanceIdA(hDevInfo, &devInfoData, instId, sizeof(instId), NULL))
+                continue;
+
+            std::string id(instId);
+            std::string idUpper = id;
+            for (auto& c : idUpper) c = (char)toupper((unsigned char)c);
+
+            // Match the disk node that carries this device's serial. Positions
+            // in idUpper and id align (same length), so we locate case-
+            // insensitively but slice the original id to preserve casing.
+            if (idUpper.find(serialUpper) == std::string::npos) continue;
+
+            char buf[256]; DWORD propType;
+            if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_FRIENDLYNAME,
+                    &propType, (BYTE*)buf, sizeof(buf), NULL))
+                outFriendly = buf;
+
+            // Parse Ven_/Prod_ out of the instance id, e.g.
+            // USBSTOR\Disk&Ven_SanDisk&Prod_Cruzer_Blade&Rev_1.00\<serial>&0
+            auto extractField = [&](const std::string& key) -> std::string {
+                size_t p = idUpper.find(key);
+                if (p == std::string::npos) return "";
+                p += key.size();
+                size_t end = id.find('&', p);
+                if (end == std::string::npos) end = id.find('\\', p);
+                if (end == std::string::npos) end = id.size();
+                std::string v = id.substr(p, end - p);
+                for (auto& c : v) if (c == '_') c = ' ';  // Prod_Cruzer_Blade -> "Cruzer Blade"
+                while (!v.empty() && v.back() == ' ') v.pop_back();
+                while (!v.empty() && v.front() == ' ') v.erase(v.begin());
+                return v;
+            };
+            outManufacturer = extractField("VEN_");
+            outModel = extractField("PROD_");
+
+            found = true;
+            break;
+        }
+        SetupDiDestroyDeviceInfoList(hDevInfo);
+        return found;
+    }
+
     // Collect the full metadata set for a USB device. Model/manufacturer come
     // from SetupAPI; volume label/serial/filesystem/capacity come from the
     // mounted drive (empty if the device isn't a mounted mass-storage volume).
@@ -6169,6 +6236,20 @@ if (shouldMonitor) {
                 }
             }
             SetupDiDestroyDeviceInfoList(hDevInfo);
+        }
+
+        // The USB node above reports the generic "USB Mass Storage Device".
+        // For storage devices the real name ("SanDisk Cruzer Blade USB Device")
+        // lives on the USBSTOR/disk node — overlay it, matched by serial.
+        std::string stFriendly, stMfg, stModel;
+        if (ResolveUSBStorageName(d.serialNumber, stFriendly, stMfg, stModel)) {
+            if (!stFriendly.empty()) {
+                d.productName = stFriendly;
+            } else if (!stMfg.empty() || !stModel.empty()) {
+                std::string built = stMfg + (stMfg.empty() || stModel.empty() ? "" : " ") + stModel;
+                if (!built.empty()) d.productName = built;
+            }
+            if (!stMfg.empty()) d.manufacturer = stMfg;  // "SanDisk" beats the generic USB-node MFG
         }
 
         // Volume-level details from the mounted drive (mass-storage only).

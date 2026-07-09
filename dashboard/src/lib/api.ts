@@ -107,11 +107,6 @@ export const deleteAgent = async (agentId: string) => {
   return data
 }
 
-export const decommissionAgent = async (agentId: string) => {
-  const { data } = await apiClient.post(`/agents/${agentId}/decommission`)
-  return data
-}
-
 export const cleanupStaleAgents = async (
   olderThanDays: number,
   dryRun: boolean = true,
@@ -210,15 +205,14 @@ export type Agent = {
   hostname?: string
   os_version?: string
   capabilities?: Record<string, boolean>
-  /** Legacy boolean — true if heartbeat within ``AGENT_TIMEOUT_SECONDS`` (30s).
-   *  Prefer ``lifecycle_status`` for new UI code. */
+  /** True if heartbeat within ``AGENT_TIMEOUT_SECONDS``. Mirrors
+   *  ``lifecycle_status === 'active'``. */
   is_active?: boolean
-  /** Legacy two-state label kept for back-compat with older dashboard
-   *  components. ``lifecycle_status`` is the four-tier replacement. */
+  /** Two-state label mirroring ``lifecycle_status``. */
   status_label?: 'active' | 'disconnected'
-  /** Four-tier freshness ladder computed by the backend.
-   *  active ≤ 30s, disconnected ≤ 24h, inactive ≤ 7d, stale > 7d. */
-  lifecycle_status?: 'active' | 'disconnected' | 'inactive' | 'stale'
+  /** Binary status computed by the backend: "active" if the heartbeat is
+   *  fresh, otherwise "disconnected". */
+  lifecycle_status?: 'active' | 'disconnected'
   /** Heartbeat age in seconds — handy for "Last seen X ago" without
    *  client-side timezone math. */
   last_seen_seconds_ago?: number | null
@@ -227,12 +221,6 @@ export type Agent = {
   is_deleted?: boolean
   deleted_at?: string
   deleted_by?: string
-  /** "Mark as Decommissioned" — agent stays visible but with a retired
-   *  badge. Distinct from is_deleted (which hides it). */
-  decommissioned?: boolean
-  decommissioned_at?: string
-  decommissioned_by?: string
-  decommissioned_reason?: string
 }
 
 export type Event = {

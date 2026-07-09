@@ -1,28 +1,27 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Server, RefreshCw, Trash2, PowerOff, X, Eraser } from 'lucide-react'
+import { Server, RefreshCw, Trash2, X, Eraser } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import {
   getAllAgents,
   deleteAgent,
-  decommissionAgent,
   cleanupStaleAgents,
   type Agent,
 } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/utils'
 
-type LifecycleTier = 'active' | 'disconnected' | 'inactive' | 'stale'
+type LifecycleTier = 'active' | 'disconnected'
 type FilterType = 'all' | LifecycleTier
 
-// Resolve an agent's lifecycle tier with a backwards-compatible fallback.
-// Some older API responses (or in-flight cached payloads) still ship the
-// boolean ``is_active`` only, so we degrade gracefully instead of dropping
-// the row to "stale".
+// Resolve an agent's status to the binary active/disconnected model.
+// Anything that isn't a fresh heartbeat is "disconnected" — including
+// legacy cached payloads that only carry the boolean ``is_active``.
 const resolveTier = (agent: Agent): LifecycleTier => {
-  if (agent.lifecycle_status) return agent.lifecycle_status
+  if (agent.lifecycle_status === 'active') return 'active'
+  if (agent.lifecycle_status === 'disconnected') return 'disconnected'
   return agent.is_active ? 'active' : 'disconnected'
 }
 
@@ -37,30 +36,15 @@ const TIER_BADGE: Record<LifecycleTier, { label: string; className: string; dot:
     className: 'bg-yellow-100 text-yellow-800',
     dot: 'bg-yellow-500',
   },
-  inactive: {
-    label: 'Inactive',
-    className: 'bg-orange-100 text-orange-800',
-    dot: 'bg-orange-500',
-  },
-  stale: {
-    label: 'Stale',
-    className: 'bg-red-100 text-red-800',
-    dot: 'bg-red-600',
-  },
 }
 
 const TIER_HINT: Record<LifecycleTier, string> = {
-  active: 'Heartbeat within last 30 seconds',
-  disconnected: 'No heartbeat for >30 seconds',
-  inactive: 'No heartbeat for >24 hours',
-  stale: 'No heartbeat for >7 days',
+  active: 'Heartbeat received recently',
+  disconnected: 'No recent heartbeat',
 }
-
-type ConfirmAction = 'delete' | 'decommission'
 
 interface ConfirmState {
   agent: Agent
-  action: ConfirmAction
 }
 
 interface CleanupCandidate {
@@ -109,19 +93,6 @@ export default function Agents() {
     },
     onError: () => {
       toast.error('Failed to remove agent')
-    },
-  })
-
-  const decommissionMutation = useMutation({
-    mutationFn: (agentId: string) => decommissionAgent(agentId),
-    onSuccess: (_, agentId) => {
-      toast.success(`Agent ${agentId.slice(0, 8)}… marked as decommissioned`)
-      queryClient.invalidateQueries({ queryKey: ['allAgents'] })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      setConfirm(null)
-    },
-    onError: () => {
-      toast.error('Failed to mark agent as decommissioned')
     },
   })
 
@@ -174,8 +145,6 @@ export default function Agents() {
   const counts: Record<LifecycleTier, number> = {
     active: 0,
     disconnected: 0,
-    inactive: 0,
-    stale: 0,
   }
   list.forEach((a) => {
     counts[resolveTier(a)] += 1
@@ -190,19 +159,13 @@ export default function Agents() {
     navigate(`/events?agent=${agentId}`)
   }
 
-  const confirmTitle =
-    confirm?.action === 'delete' ? 'Remove Agent' : 'Mark as Decommissioned'
+  const confirmTitle = 'Remove Agent'
   const confirmBody =
-    confirm?.action === 'delete'
-      ? 'This soft-deletes the agent record. Event history is preserved, but the agent will no longer appear in this list. Admins can restore it via the API audit view.'
-      : 'This marks the agent as decommissioned. The record stays visible with a "Decommissioned" badge and event history is preserved.'
-  const confirmCta = confirm?.action === 'delete' ? 'Remove' : 'Decommission'
-  const confirmCtaClass =
-    confirm?.action === 'delete'
-      ? 'bg-red-600 hover:bg-red-700 text-white'
-      : 'bg-amber-600 hover:bg-amber-700 text-white'
+    'This soft-deletes the agent record. Event history is preserved, but the agent will no longer appear in this list. If the agent is still installed and heartbeating, it will automatically reappear on its next heartbeat.'
+  const confirmCta = 'Remove'
+  const confirmCtaClass = 'bg-red-600 hover:bg-red-700 text-white'
 
-  const isMutating = deleteMutation.isPending || decommissionMutation.isPending
+  const isMutating = deleteMutation.isPending
 
   return (
     <div className="space-y-6">
@@ -238,7 +201,7 @@ export default function Agents() {
       </div>
 
       {/* Lifecycle Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <div
           className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'all' ? 'ring-2 ring-blue-500' : ''}`}
           onClick={() => setFilter('all')}
@@ -254,7 +217,7 @@ export default function Agents() {
             </div>
           </div>
         </div>
-        {(['active', 'disconnected', 'inactive', 'stale'] as LifecycleTier[]).map((tier) => {
+        {(['active', 'disconnected'] as LifecycleTier[]).map((tier) => {
           const meta = TIER_BADGE[tier]
           return (
             <div
@@ -318,27 +281,13 @@ export default function Agents() {
                       className="cursor-pointer hover:bg-gray-50 transition-colors"
                     >
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
-                        <div className="flex flex-col gap-1">
-                          <span
-                            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${badge.className}`}
-                            title={TIER_HINT[tier]}
-                          >
-                            <span className={`w-2 h-2 rounded-full mr-1.5 ${badge.dot}`}></span>
-                            {badge.label}
-                          </span>
-                          {agent.decommissioned && (
-                            <span
-                              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-700 uppercase tracking-wide"
-                              title={
-                                agent.decommissioned_at
-                                  ? `Decommissioned ${formatRelativeTime(agent.decommissioned_at)}`
-                                  : 'Decommissioned'
-                              }
-                            >
-                              Decommissioned
-                            </span>
-                          )}
-                        </div>
+                        <span
+                          className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${badge.className}`}
+                          title={TIER_HINT[tier]}
+                        >
+                          <span className={`w-2 h-2 rounded-full mr-1.5 ${badge.dot}`}></span>
+                          {badge.label}
+                        </span>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         <code
@@ -389,23 +338,7 @@ export default function Agents() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              setConfirm({ agent, action: 'decommission' })
-                            }}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50"
-                            disabled={agent.decommissioned || isMutating}
-                            title={
-                              agent.decommissioned
-                                ? 'Already decommissioned'
-                                : 'Mark this agent as decommissioned'
-                            }
-                          >
-                            <PowerOff className="h-3.5 w-3.5" />
-                            Decommission
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setConfirm({ agent, action: 'delete' })
+                              setConfirm({ agent })
                             }}
                             className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
                             disabled={isMutating}
@@ -580,13 +513,7 @@ export default function Agents() {
                 Cancel
               </button>
               <button
-                onClick={() => {
-                  if (confirm.action === 'delete') {
-                    deleteMutation.mutate(confirm.agent.agent_id)
-                  } else {
-                    decommissionMutation.mutate(confirm.agent.agent_id)
-                  }
-                }}
+                onClick={() => deleteMutation.mutate(confirm.agent.agent_id)}
                 className={`px-3 py-1.5 rounded text-sm font-medium ${confirmCtaClass} disabled:opacity-50`}
                 disabled={isMutating}
               >

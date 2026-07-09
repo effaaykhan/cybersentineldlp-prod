@@ -23,52 +23,44 @@ from app.core.cache import get_cache, CacheService
 logger = structlog.get_logger()
 router = APIRouter()
 
-# Agent is considered dead if no heartbeat received in 30 seconds.
-# This is the threshold for the boolean ``is_active`` flag we keep around
-# for backward-compatibility with old dashboard code; the new four-tier
-# lifecycle status (active/disconnected/inactive/stale) lives below.
-AGENT_TIMEOUT_SECONDS = 30
+# Agent is considered dead if no heartbeat received in this window.
+# This is the threshold for the boolean ``is_active`` flag and the binary
+# ``lifecycle_status`` (active/disconnected) computed below.
+#
+# Must be comfortably larger than the agents' heartbeat interval or a live
+# agent flickers to "disconnected" between beats. The Windows agent beats
+# every ~30s and real networks drop packets, so 30s left ZERO margin —
+# a single missed/slow beat hid the agent. 120s tolerates a few missed
+# beats while still reflecting a genuinely dead agent within ~2 minutes.
+AGENT_TIMEOUT_SECONDS = 120
 
-# ── Lifecycle status thresholds ──────────────────────────────────────
-# Tiered freshness ladder reported as ``lifecycle_status`` on agent
-# listings. The bands cover the full timeline so every agent maps to
-# exactly one tier — UIs can show a colored badge without computing the
-# math themselves.
+# ── Lifecycle status: binary active / disconnected ───────────────────
+# Agent status is deliberately just two states, reported as
+# ``lifecycle_status`` on agent listings:
 #
-#   active:       last_seen ≤ 30s ago       — heartbeat just arrived
-#   disconnected: 30s  < last_seen ≤ 24h    — recently silent (spec says
-#                                             "< 1 hour" but escalates
-#                                             to inactive only at >24h,
-#                                             so the disconnected band
-#                                             stretches to fill the gap)
-#   inactive:     24h  < last_seen ≤ 7d     — quiet for a while
-#   stale:        last_seen > 7d            — likely abandoned/uninstalled
+#   active:       last_seen within AGENT_TIMEOUT_SECONDS — heartbeat is fresh
+#   disconnected: anything else (no recent heartbeat, or never seen)
 #
-# An agent with no last_seen at all is reported as ``stale`` (it's worse
-# than just silent — we have nothing to time-bound it).
+# The old four-tier ladder (adding "inactive"/"stale") and the separate
+# "decommissioned" concept were removed: if an agent isn't sending a
+# heartbeat it is simply disconnected. Nothing else to reason about.
 LIFECYCLE_ACTIVE_SECONDS = AGENT_TIMEOUT_SECONDS
-LIFECYCLE_DISCONNECTED_SECONDS = 24 * 60 * 60     # 24 hours
-LIFECYCLE_INACTIVE_SECONDS = 7 * 24 * 60 * 60     # 7 days
 
 
 def _compute_lifecycle_status(last_seen: Optional[datetime]) -> str:
-    """Return one of active/disconnected/inactive/stale for the given heartbeat.
+    """Return "active" or "disconnected" for the given heartbeat.
 
-    Treats naive datetimes as UTC (legacy Mongo docs predate the
-    timezone-aware migration).
+    Active means the most recent heartbeat is within
+    ``AGENT_TIMEOUT_SECONDS``; everything else (stale heartbeat or no
+    heartbeat at all) is "disconnected". Treats naive datetimes as UTC
+    (legacy Mongo docs predate the timezone-aware migration).
     """
     if last_seen is None or not isinstance(last_seen, datetime):
-        return "stale"
+        return "disconnected"
     if last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=timezone.utc)
     age = (datetime.now(timezone.utc) - last_seen).total_seconds()
-    if age <= LIFECYCLE_ACTIVE_SECONDS:
-        return "active"
-    if age <= LIFECYCLE_DISCONNECTED_SECONDS:
-        return "disconnected"
-    if age <= LIFECYCLE_INACTIVE_SECONDS:
-        return "inactive"
-    return "stale"
+    return "active" if age <= LIFECYCLE_ACTIVE_SECONDS else "disconnected"
 
 
 async def _next_agent_code() -> Optional[int]:
@@ -216,9 +208,10 @@ async def list_agents(
 
     Query parameters:
     - os: Filter by operating system (windows/linux)
-    
-    Note: Only shows agents that have sent heartbeat within the last 5 minutes.
-    Dead agents are automatically filtered out.
+
+    Note: Only shows agents whose most recent heartbeat is within
+    ``AGENT_TIMEOUT_SECONDS`` (see constant above). Dead agents are
+    automatically filtered out.
     """
     db = get_mongodb()
     agents_collection = db["agents"]
@@ -286,15 +279,13 @@ async def list_all_agents(
     List ALL agents (including disconnected ones) with lifecycle status.
 
     Returns agents with additional computed fields:
-    - is_active: True if agent sent heartbeat within ``AGENT_TIMEOUT_SECONDS``
-      (kept for backward-compatibility with older dashboard code).
-    - status_label: legacy "active"/"disconnected" string.
-    - lifecycle_status: one of active/disconnected/inactive/stale, computed
-      from the freshness of ``last_seen`` (see thresholds above).
+    - is_active: True if agent sent heartbeat within ``AGENT_TIMEOUT_SECONDS``.
+    - status_label: "active"/"disconnected" string (mirrors lifecycle_status).
+    - lifecycle_status: "active" or "disconnected", computed from the
+      freshness of ``last_seen``.
     - last_seen_seconds_ago: numeric age of the heartbeat in seconds, so the
       UI can render "Last seen X ago" without doing client-side timezone math.
-    - is_deleted / decommissioned: lifecycle flags that hide the agent
-      from the default list.
+    - is_deleted: soft-delete flag that hides the agent from the default list.
 
     Soft-deleted agents (``is_deleted=true``) are hidden by default — pass
     ``include_deleted=true`` to surface them in audit views.
@@ -341,18 +332,17 @@ async def list_all_agents(
                 is_active = last_seen >= cutoff_time
                 last_seen_seconds_ago = (now_aware - last_seen).total_seconds()
 
-        # Lifecycle tier — exposed so the UI doesn't reimplement the ladder.
+        # Binary lifecycle status — active if the heartbeat is fresh,
+        # otherwise disconnected. Exposed so the UI doesn't recompute it.
         agent_doc["lifecycle_status"] = _compute_lifecycle_status(last_seen)
         agent_doc["last_seen_seconds_ago"] = last_seen_seconds_ago
 
-        # Legacy fields kept for the existing dashboard code paths.
+        # Kept for existing dashboard code paths; mirror lifecycle_status.
         agent_doc["is_active"] = is_active
         agent_doc["status_label"] = "active" if is_active else "disconnected"
 
-        # Surface lifecycle flags so the UI can show "Decommissioned" badges
-        # and admin views can distinguish deleted-but-retained records.
+        # Soft-delete flag so admin views can distinguish deleted records.
         agent_doc["is_deleted"] = bool(agent_doc.get("is_deleted"))
-        agent_doc["decommissioned"] = bool(agent_doc.get("decommissioned"))
 
         # Normalize datetime fields to ISO format
         for dt_field in (
@@ -360,7 +350,6 @@ async def list_all_agents(
             "created_at",
             "last_heartbeat",
             "deleted_at",
-            "decommissioned_at",
         ):
             if dt_field in agent_doc and isinstance(agent_doc[dt_field], datetime):
                 dt_val = agent_doc[dt_field]
@@ -428,7 +417,19 @@ async def register_agent(
             "last_seen": now,
             "capabilities": capabilities,
             "api_key": api_key,
+            # Re-enrollment is an explicit "this endpoint is back in
+            # service" signal (fresh install / restart). Clear any stale
+            # removal or decommission flags so the returning agent becomes
+            # visible again instead of silently staying hidden behind an
+            # old soft-delete.
+            "is_deleted": False,
+            "decommissioned": False,
         }
+        if existing.get("is_deleted") or existing.get("decommissioned"):
+            logger.info(
+                "Re-registration revived a removed/decommissioned agent",
+                agent_id=existing["agent_id"],
+            )
         update_ops: Dict[str, Any] = {"$set": update_fields}
         if stored_id != agent_id:
             previous_ids = list(existing.get("previous_agent_ids") or [])
@@ -575,7 +576,17 @@ async def agent_heartbeat(
 
     # Update last_seen and optionally other fields
     update_data = {
-        "last_seen": heartbeat_time
+        "last_seen": heartbeat_time,
+        # A live heartbeat is definitive proof the endpoint is still
+        # running. If this agent had been soft-deleted ("Remove Agent")
+        # or swept by cleanup-stale, it must NOT stay hidden: every agent
+        # listing filters out ``is_deleted`` docs, so a still-running
+        # agent would remain invisible on the dashboard forever despite
+        # heartbeating successfully (HTTP 200). Reviving it here closes
+        # that blind spot — the correct way to remove a live agent is to
+        # uninstall it (which stops the heartbeats), not to hide a machine
+        # that is actively touching data.
+        "is_deleted": False,
     }
 
     if heartbeat and heartbeat.ip_address:
@@ -592,15 +603,26 @@ async def agent_heartbeat(
     # Resolve rolled UUIDs (reinstalled agent) by also matching previous_agent_ids.
     # An agent whose local state file kept an old UUID may still be heartbeating
     # under it; that UUID now lives in this record's previous_agent_ids array.
-    result = await agents_collection.update_one(
+    #
+    # find_one_and_update returns the pre-update document (ReturnDocument.BEFORE
+    # by default), so we learn — atomically, without an extra read — whether
+    # this heartbeat just revived a soft-deleted agent, and can log that
+    # transition for the audit trail.
+    previous = await agents_collection.find_one_and_update(
         {"$or": [{"agent_id": agent_id}, {"previous_agent_ids": agent_id}]},
-        {"$set": update_data}
+        {"$set": update_data},
     )
 
-    if result.matched_count == 0:
+    if previous is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Agent {agent_id} not found"
+        )
+
+    if previous.get("is_deleted"):
+        logger.info(
+            "Revived soft-deleted agent on live heartbeat — a running endpoint cannot stay hidden",
+            agent_id=agent_id,
         )
 
     logger.debug("Agent heartbeat", agent_id=agent_id, timestamp=heartbeat_time.isoformat())
@@ -623,9 +645,9 @@ async def unregister_agent(
     We deliberately do NOT hard-delete the agent record here. Doing so
     would orphan event history (event_id → agent_id lookups would fail
     enrichment) and erase audit trails for an agent that produced real
-    activity. Instead we mark the doc as decommissioned so the UI shows
-    a clear "Decommissioned" badge and admins can later soft-delete
-    intentionally if they want it gone.
+    activity. Instead we soft-delete it so it drops out of the active
+    inventory. If the agent is ever reinstalled, its first heartbeat /
+    re-registration revives the record automatically.
     """
     db = get_mongodb()
     agents_collection = db["agents"]
@@ -634,9 +656,9 @@ async def unregister_agent(
     result = await agents_collection.update_one(
         {"agent_id": agent_id},
         {"$set": {
-            "decommissioned": True,
-            "decommissioned_at": now,
-            "decommissioned_reason": "agent_self_uninstall",
+            "is_deleted": True,
+            "deleted_at": now,
+            "deleted_reason": "agent_self_uninstall",
         }},
     )
 
@@ -644,7 +666,7 @@ async def unregister_agent(
         # Already gone or never registered — uninstall is idempotent.
         logger.debug("Agent not found for unregister", agent_id=agent_id)
     else:
-        logger.info("Agent self-decommissioned via uninstall", agent_id=agent_id)
+        logger.info("Agent self-removed via uninstall", agent_id=agent_id)
 
     return None
 
@@ -697,53 +719,6 @@ async def delete_agent(
 
     logger.info("Agent soft-deleted", agent_id=agent_id, user=actor)
     return None
-
-
-@router.post("/{agent_id}/decommission", status_code=status.HTTP_200_OK)
-async def decommission_agent(
-    agent_id: str,
-    current_user: dict = Depends(require_role("admin")),
-) -> Dict[str, Any]:
-    """
-    Mark an agent as decommissioned (admin action — "Mark as Decommissioned"
-    in the UI). Unlike soft-delete this keeps the agent visible in the
-    listing with a "Decommissioned" badge — the intent is "this device is
-    retired but I want it on the inventory" rather than "hide it".
-    """
-    db = get_mongodb()
-    agents_collection = db["agents"]
-    now = datetime.now(timezone.utc)
-    actor = current_user.get("email") if isinstance(current_user, dict) else getattr(current_user, "email", None)
-
-    result = await agents_collection.update_one(
-        {"agent_id": agent_id},
-        {"$set": {
-            "decommissioned": True,
-            "decommissioned_at": now,
-            "decommissioned_by": actor,
-            "decommissioned_reason": "admin_action",
-        }},
-    )
-
-    if result.matched_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Agent {agent_id} not found",
-        )
-
-    try:
-        from app.services.audit_service import audit_log
-        user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
-        await audit_log(user_id, "agent.decommission", {"agent_id": agent_id})
-    except Exception as e:
-        logger.warning("Failed to record agent.decommission audit log", error=str(e))
-
-    logger.info("Agent decommissioned", agent_id=agent_id, user=actor)
-    return {
-        "status": "decommissioned",
-        "agent_id": agent_id,
-        "decommissioned_at": now.isoformat(),
-    }
 
 
 @router.post("/cleanup-stale", status_code=status.HTTP_200_OK)

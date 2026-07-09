@@ -46,8 +46,10 @@ async def get_dashboard_overview(
     # Total agents
     total_agents = await agents_collection.count_documents({})
 
-    # Active agents (agents with heartbeat within last 30 seconds)
-    AGENT_TIMEOUT_SECONDS = 30
+    # Active agents (heartbeat within the timeout window). Kept in sync
+    # with agents.py::AGENT_TIMEOUT_SECONDS — 30s left no margin over the
+    # agents' ~30s heartbeat interval, so a live agent flickered to zero.
+    AGENT_TIMEOUT_SECONDS = 120
     cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
     cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 
@@ -155,8 +157,9 @@ async def get_agents_stats(
     db = get_mongodb()
     agents_collection = db["agents"]
 
-    # Agent is considered active if heartbeat within 30 seconds
-    AGENT_TIMEOUT_SECONDS = 30
+    # Agent is considered active if heartbeat within the timeout window.
+    # Kept in sync with agents.py::AGENT_TIMEOUT_SECONDS.
+    AGENT_TIMEOUT_SECONDS = 120
     cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
     cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 

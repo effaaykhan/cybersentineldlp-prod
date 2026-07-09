@@ -11,7 +11,7 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen bg-cs-hair-2 flex items-center justify-center p-4 relative overflow-hidden">
       {/* Subtle blueprint grid — the console backdrop */}
       <div
         className="absolute inset-0 bg-[linear-gradient(rgba(15,23,42,.045)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.045)_1px,transparent_1px)] bg-[size:44px_44px] [mask-image:radial-gradient(ellipse_75%_60%_at_50%_45%,#000,transparent)]"

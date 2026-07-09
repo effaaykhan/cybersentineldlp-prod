@@ -26,19 +26,19 @@ export default function PolicyTable({
   return (
     <div className="card p-0">
       {/* Table Header */}
-      <div className="px-6 py-4 border-b border-slate-200">
+      <div className="px-6 py-4 border-b border-cs-hair">
         <h3 className="section-title">{title}</h3>
-        <p className="text-sm text-slate-600 mt-1">
-          <span className="font-mono tabular-nums">{policies.length}</span> {policies.length === 1 ? 'policy' : 'policies'}
+        <p className="text-sm text-cs-ink-2 mt-1">
+          <span className="num">{policies.length}</span> {policies.length === 1 ? 'policy' : 'policies'}
         </p>
       </div>
 
       {/* Table Body */}
-      <div className="divide-y divide-slate-200">
+      <div className="divide-y divide-cs-hair">
         {policies.length === 0 ? (
           <div className="p-12 text-center">
-            <Shield className="h-12 w-12 text-slate-400 mx-auto mb-3" />
-            <p className="text-slate-600 font-medium">{emptyMessage}</p>
+            <Shield className="h-12 w-12 text-cs-muted-2 mx-auto mb-3" />
+            <p className="text-cs-ink-2 font-medium">{emptyMessage}</p>
           </div>
         ) : (
           policies.map((policy) => (

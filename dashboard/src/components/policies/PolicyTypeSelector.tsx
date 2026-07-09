@@ -74,29 +74,29 @@ export default function PolicyTypeSelector({ selectedType, onSelectType }: Polic
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-lg font-semibold text-white mb-2">Select Policy Type (v2)</h3>
-        <p className="text-sm text-gray-400">Choose the type of monitoring policy you want to create</p>
+        <h3 className="text-lg font-semibold text-cs-ink mb-2">Select Policy Type (v2)</h3>
+        <p className="text-sm text-cs-muted">Choose the type of monitoring policy you want to create</p>
       </div>
-      
+
       <div className="grid grid-cols-2 gap-4">
         {policyTypes.map(({ type, label, description, icon: Icon }) => {
           const isSelected = selectedType === type
-          
+
           return (
             <button
               key={type}
               onClick={() => onSelectType(type)}
-              className={`p-4 rounded-xl border-2 transition-all text-left ${
+              className={`p-4 rounded-cs-card border-2 transition-all text-left ${
                 isSelected
-                  ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                  : 'border-gray-600 bg-gray-900/30 text-gray-400 hover:border-gray-500 hover:text-gray-300'
+                  ? 'border-cs-indigo bg-cs-indigo-faint text-cs-ink'
+                  : 'border-cs-hair bg-cs-hair-2 text-cs-ink-2 hover:border-cs-muted-2 hover:text-cs-ink'
               }`}
             >
               <div className="flex items-start gap-3">
-                <div className={`p-2 rounded-lg ${
-                  isSelected 
-                    ? 'bg-indigo-800/50 text-indigo-300' 
-                    : 'bg-gray-800/50 text-gray-500'
+                <div className={`p-2 rounded-cs-sm ${
+                  isSelected
+                    ? 'bg-cs-indigo-faint text-cs-indigo'
+                    : 'bg-cs-hair-2 text-cs-muted'
                 }`}>
                   <Icon className="w-5 h-5" />
                 </div>

@@ -69,8 +69,8 @@ export default function Settings() {
       {/* Page Header */}
       <div>
         <p className="eyebrow mb-1.5">Configuration</p>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Settings</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <h1 className="text-2xl font-bold tracking-tight text-cs-ink">Settings</h1>
+        <p className="mt-1 text-sm text-cs-ink-2">
           Configure system settings and preferences
         </p>
       </div>
@@ -80,30 +80,30 @@ export default function Settings() {
         {/* Account Security */}
         <div className="card">
           <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-primary-50 rounded-lg">
-              <Lock className="h-5 w-5 text-primary-600" />
+            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
+              <Lock className="h-5 w-5 text-cs-indigo" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900">Account Security</h3>
-              <p className="text-sm text-slate-500">Update the password for your admin account.</p>
+              <h3 className="section-title">Account Security</h3>
+              <p className="text-sm text-cs-muted">Update the password for your admin account.</p>
             </div>
           </div>
 
           <form onSubmit={handleChangePassword} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 Username
               </label>
               <input
                 type="text"
-                className="input bg-slate-50"
+                className="input bg-cs-hair-2 num"
                 value={user?.email || ''}
                 readOnly
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 Current Password
               </label>
               <input
@@ -117,7 +117,7 @@ export default function Settings() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 New Password
               </label>
               <input
@@ -131,7 +131,7 @@ export default function Settings() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 Confirm New Password
               </label>
               <input
@@ -142,7 +142,7 @@ export default function Settings() {
                 placeholder="Confirm new password"
                 required
               />
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-cs-muted">
                 Must be at least 7 characters with uppercase, lowercase, digit, and special character.
               </p>
             </div>
@@ -160,33 +160,33 @@ export default function Settings() {
         {/* System Settings */}
         <div className="card">
           <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-primary-50 rounded-lg">
-              <Server className="h-5 w-5 text-primary-600" />
+            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
+              <Server className="h-5 w-5 text-cs-indigo" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900">System Settings</h3>
-              <p className="text-sm text-slate-500">Manager endpoint and data refresh behavior.</p>
+              <h3 className="section-title">System Settings</h3>
+              <p className="text-sm text-cs-muted">Manager endpoint and data refresh behavior.</p>
             </div>
           </div>
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 Manager URL
               </label>
               <input
                 type="text"
-                className="input font-mono tabular-nums"
+                className="input num"
                 defaultValue={API_URL}
                 readOnly
               />
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-cs-muted">
                 The manager API endpoint
               </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 Refresh Interval
               </label>
               <select className="input">
@@ -195,7 +195,7 @@ export default function Settings() {
                 <option>30 seconds</option>
                 <option>60 seconds</option>
               </select>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-cs-muted">
                 How often to refresh data automatically
               </p>
             </div>
@@ -205,54 +205,54 @@ export default function Settings() {
         {/* Database Settings */}
         <div className="card">
           <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-primary-50 rounded-lg">
-              <Database className="h-5 w-5 text-primary-600" />
+            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
+              <Database className="h-5 w-5 text-cs-indigo" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900">OpenSearch Settings</h3>
-              <p className="text-sm text-slate-500">Index storage and event retention configuration.</p>
+              <h3 className="section-title">OpenSearch Settings</h3>
+              <p className="text-sm text-cs-muted">Index storage and event retention configuration.</p>
             </div>
           </div>
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 OpenSearch Host
               </label>
               <input
                 type="text"
-                className="input font-mono tabular-nums"
+                className="input num"
                 defaultValue={defaultOpenSearchUrl}
                 readOnly
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 Index Prefix
               </label>
               <input
                 type="text"
-                className="input font-mono tabular-nums"
+                className="input num"
                 defaultValue="cybersentinel"
                 readOnly
               />
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-cs-muted">
                 Prefix for all indices (e.g., cybersentinel-events-2025.01.12)
               </p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
+              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
                 Retention Days
               </label>
               <input
                 type="number"
-                className="input font-mono tabular-nums"
+                className="input num"
                 defaultValue="90"
                 readOnly
               />
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-cs-muted">
                 Number of days to retain event data
               </p>
             </div>
@@ -262,39 +262,39 @@ export default function Settings() {
         {/* Notification Settings */}
         <div className="card">
           <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-primary-50 rounded-lg">
-              <Bell className="h-5 w-5 text-primary-600" />
+            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
+              <Bell className="h-5 w-5 text-cs-indigo" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900">Notifications</h3>
-              <p className="text-sm text-slate-500">Choose how alerts are delivered to you.</p>
+              <h3 className="section-title">Notifications</h3>
+              <p className="text-sm text-cs-muted">Choose how alerts are delivered to you.</p>
             </div>
           </div>
 
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-slate-900">Email Notifications</p>
-                <p className="text-sm text-slate-600">
+                <p className="font-medium text-cs-ink">Email Notifications</p>
+                <p className="text-sm text-cs-ink-2">
                   Send email alerts for critical events
                 </p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input type="checkbox" className="sr-only peer" defaultChecked />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                <div className="w-11 h-6 bg-cs-hair-2 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cs-indigo-faint rounded-cs-pill peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-cs-hair after:border after:rounded-cs-pill after:h-5 after:w-5 after:transition-all peer-checked:bg-cs-indigo"></div>
               </label>
             </div>
 
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-slate-900">Desktop Notifications</p>
-                <p className="text-sm text-slate-600">
+                <p className="font-medium text-cs-ink">Desktop Notifications</p>
+                <p className="text-sm text-cs-ink-2">
                   Show browser notifications for new alerts
                 </p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input type="checkbox" className="sr-only peer" />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                <div className="w-11 h-6 bg-cs-hair-2 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cs-indigo-faint rounded-cs-pill peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-cs-hair after:border after:rounded-cs-pill after:h-5 after:w-5 after:transition-all peer-checked:bg-cs-indigo"></div>
               </label>
             </div>
           </div>
@@ -303,15 +303,15 @@ export default function Settings() {
         {/* Cloud Connectors */}
         <div className="card">
           <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-primary-50 rounded-lg">
-              <Globe className="h-5 w-5 text-primary-600" />
+            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
+              <Globe className="h-5 w-5 text-cs-indigo" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900">Cloud Connectors</h3>
-              <p className="text-sm text-slate-500">Link cloud storage providers for monitoring.</p>
+              <h3 className="section-title">Cloud Connectors</h3>
+              <p className="text-sm text-cs-muted">Link cloud storage providers for monitoring.</p>
             </div>
           </div>
-          <p className="text-sm text-slate-600 mb-4">
+          <p className="text-sm text-cs-ink-2 mb-4">
             Use these temporary actions to open OAuth flows for testing. We&apos;ll relocate them once the full UI ships.
           </p>
           <div className="flex flex-col sm:flex-row gap-3">
@@ -335,31 +335,31 @@ export default function Settings() {
         {/* About */}
         <div className="card">
           <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-primary-50 rounded-lg">
-              <SettingsIcon className="h-5 w-5 text-primary-600" />
+            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
+              <SettingsIcon className="h-5 w-5 text-cs-indigo" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900">About</h3>
-              <p className="text-sm text-slate-500">Platform version and component details.</p>
+              <h3 className="section-title">About</h3>
+              <p className="text-sm text-cs-muted">Platform version and component details.</p>
             </div>
           </div>
 
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-slate-600">Version</span>
-              <span className="font-mono tabular-nums font-medium text-slate-900">2.0.0</span>
+              <span className="text-cs-ink-2">Version</span>
+              <span className="num font-medium text-cs-ink">2.0.0</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-600">Backend API</span>
-              <span className="font-mono tabular-nums font-medium text-slate-900">FastAPI 0.109.0</span>
+              <span className="text-cs-ink-2">Backend API</span>
+              <span className="num font-medium text-cs-ink">FastAPI 0.109.0</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-600">OpenSearch</span>
-              <span className="font-mono tabular-nums font-medium text-slate-900">2.11.0</span>
+              <span className="text-cs-ink-2">OpenSearch</span>
+              <span className="num font-medium text-cs-ink">2.11.0</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-600">License</span>
-              <span className="font-mono tabular-nums font-medium text-slate-900">Apache 2.0</span>
+              <span className="text-cs-ink-2">License</span>
+              <span className="num font-medium text-cs-ink">Apache 2.0</span>
             </div>
           </div>
         </div>

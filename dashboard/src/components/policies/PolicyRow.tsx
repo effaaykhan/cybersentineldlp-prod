@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { MoreVertical, Shield } from 'lucide-react'
+import { MoreVertical } from 'lucide-react'
 import { Policy } from '@/types/policy'
 import { getPolicyTypeIcon, getPolicyTypeLabel, formatPolicyConfig, getSeverityColorLight } from '@/utils/policyUtils'
+import { dotColor } from '@/components/ui/Dot'
 import PolicyContextMenu from './PolicyContextMenu'
 
 interface PolicyRowProps {
@@ -57,24 +58,24 @@ export default function PolicyRow({
   }
 
   return (
-    <div className="p-4 hover:bg-gray-50 transition-colors border-b border-gray-200 last:border-b-0">
+    <div className="p-4 hover:bg-cs-hair-2 transition-colors border-b border-cs-hair last:border-b-0">
       <div className="flex items-start gap-4">
         {/* Icon */}
-        <div className={`p-2 rounded-lg ${severityColor.bg}`}>
-          <Icon className={`h-5 w-5 ${severityColor.icon}`} />
+        <div className="p-2 rounded-cs-sm bg-cs-hair-2">
+          <Icon className="h-5 w-5" style={{ color: dotColor(policy.severity) }} />
         </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <h4 className="font-semibold text-gray-900">{policy.name}</h4>
+            <h4 className="font-semibold text-cs-ink">{policy.name}</h4>
             <span className={`badge ${severityColor.badge}`}>
               {policy.severity}
             </span>
             <span className="badge badge-info">
               {getPolicyTypeLabel(policy.type)}
             </span>
-            <span className="badge bg-gray-100 text-gray-700">
+            <span className="badge bg-cs-hair-2 text-cs-ink-2">
               {policy.agentIds && policy.agentIds.length > 0
                 ? `Scoped (${policy.agentIds.length})`
                 : 'All agents'}
@@ -82,36 +83,36 @@ export default function PolicyRow({
             {policy.enabled ? (
               <span className="badge badge-success">Active</span>
             ) : (
-              <span className="badge bg-gray-100 text-gray-600">Inactive</span>
+              <span className="badge bg-cs-hair-2 text-cs-muted">Inactive</span>
             )}
           </div>
 
           {policy.description && (
-            <p className="text-sm text-gray-600 mb-2 line-clamp-1">
+            <p className="text-sm text-cs-ink-2 mb-2 line-clamp-1">
               {policy.description}
             </p>
           )}
 
-          <div className="flex items-center gap-3 text-sm text-gray-600">
-            <span className="text-xs text-gray-500">
+          <div className="flex items-center gap-3 text-sm text-cs-ink-2">
+            <span className="text-xs text-cs-muted">
               {formatPolicyConfig(policy)}
             </span>
-            <span className="text-gray-400">•</span>
+            <span className="text-cs-muted-2">•</span>
             <span>
-              <span className="text-gray-500">Priority:</span>{' '}
-              <span className="font-medium text-gray-900">{policy.priority}</span>
+              <span className="text-cs-muted">Priority:</span>{' '}
+              <span className="num font-medium text-cs-ink">{policy.priority}</span>
             </span>
             {policy.violations !== undefined && (
               <>
-                <span className="text-gray-400">•</span>
+                <span className="text-cs-muted-2">•</span>
                 <span>
-                  <span className="text-gray-500">Violations:</span>{' '}
-                  <span className="font-medium text-gray-900">{policy.violations}</span>
+                  <span className="text-cs-muted">Violations:</span>{' '}
+                  <span className="num font-medium text-cs-ink">{policy.violations}</span>
                 </span>
               </>
             )}
-            <span className="text-gray-400">•</span>
-            <span>Updated {formatDate(policy.updatedAt)}</span>
+            <span className="text-cs-muted-2">•</span>
+            <span>Updated <span className="num">{formatDate(policy.updatedAt)}</span></span>
           </div>
         </div>
 
@@ -120,10 +121,10 @@ export default function PolicyRow({
           <button
             ref={buttonRef}
             onClick={() => setShowMenu(!showMenu)}
-            className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            className="p-2 rounded-cs-sm hover:bg-cs-hair-2 transition-colors"
             aria-label="Policy actions"
           >
-            <MoreVertical className="h-5 w-5 text-gray-400" />
+            <MoreVertical className="h-5 w-5 text-cs-muted-2" />
           </button>
 
           {showMenu && (

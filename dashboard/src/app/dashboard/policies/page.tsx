@@ -238,8 +238,8 @@ export default function PoliciesPage() {
       {/* Header */}
       <div>
         <p className="eyebrow mb-1.5">Policies</p>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">DLP Policies</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <h1 className="text-2xl font-bold tracking-tight text-cs-ink">DLP Policies</h1>
+        <p className="mt-1 text-sm text-cs-ink-2">
           Create and manage data loss prevention policies
         </p>
       </div>
@@ -265,8 +265,8 @@ export default function PoliciesPage() {
           </button>
         </div>
         {lastRefreshAt && (
-          <p className="w-full text-sm text-slate-500">
-            Last refresh triggered {formatDistanceToNow(lastRefreshAt, { addSuffix: true })}
+          <p className="w-full text-sm text-cs-muted">
+            Last refresh triggered <span className="num">{formatDistanceToNow(lastRefreshAt, { addSuffix: true })}</span>
           </p>
         )}
       </div>
@@ -276,12 +276,12 @@ export default function PoliciesPage() {
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600">Total Policies</p>
-              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
+              <p className="text-sm font-medium text-cs-ink-2">Total Policies</p>
+              <p className="num mt-2 text-3xl font-semibold text-cs-ink">
                 {isStatsLoading ? '—' : stats.total}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-primary-50 text-primary-600">
+            <div className="p-3 rounded-cs-sm bg-cs-indigo-faint text-cs-indigo">
               <Shield className="h-6 w-6" />
             </div>
           </div>
@@ -290,12 +290,12 @@ export default function PoliciesPage() {
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600">Active Policies</p>
-              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
+              <p className="text-sm font-medium text-cs-ink-2">Active Policies</p>
+              <p className="num mt-2 text-3xl font-semibold text-cs-ink">
                 {isStatsLoading ? '—' : stats.active}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-success-50 text-success-600">
+            <div className="p-3 rounded-cs-sm bg-[color-mix(in_srgb,var(--cs-ok)_12%,var(--cs-panel))] text-cs-ok">
               <CheckCircle className="h-6 w-6" />
             </div>
           </div>
@@ -304,12 +304,12 @@ export default function PoliciesPage() {
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600">Inactive Policies</p>
-              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
+              <p className="text-sm font-medium text-cs-ink-2">Inactive Policies</p>
+              <p className="num mt-2 text-3xl font-semibold text-cs-ink">
                 {isStatsLoading ? '—' : stats.inactive}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-slate-100 text-slate-500">
+            <div className="p-3 rounded-cs-sm bg-cs-hair-2 text-cs-muted">
               <XCircle className="h-6 w-6" />
             </div>
           </div>
@@ -318,12 +318,12 @@ export default function PoliciesPage() {
         <div className="card md:col-span-3">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-600">Violations (last 24h)</p>
-              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
+              <p className="text-sm font-medium text-cs-ink-2">Violations (last 24h)</p>
+              <p className="num mt-2 text-3xl font-semibold text-cs-ink">
                 {isStatsLoading ? '—' : stats.violations}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-danger-50 text-danger-600">
+            <div className="p-3 rounded-cs-sm bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] text-cs-crit">
               <Shield className="h-6 w-6" />
             </div>
           </div>

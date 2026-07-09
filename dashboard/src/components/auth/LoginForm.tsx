@@ -78,47 +78,47 @@ export default function LoginForm() {
 
   const isChangePassword = mode === 'changePassword'
 
-  const eyeButtonClass = "absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-slate-400 hover:text-slate-600 transition-colors"
-  const fieldClass = "block w-full pl-10 pr-3 py-2.5 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500 transition-shadow disabled:bg-slate-50"
+  const eyeButtonClass = "absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-cs-muted-2 hover:text-cs-ink-2 transition-colors"
+  const fieldClass = "input pl-10 py-2.5 disabled:bg-cs-hair-2"
 
   return (
     <div className="w-full max-w-md">
-      <div className="bg-white rounded-2xl shadow-card-hover p-8 border border-slate-200">
+      <div className="bg-cs-panel rounded-cs-card shadow-card-hover p-8 border border-cs-hair">
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-primary-600 rounded-xl mb-4 shadow-sm">
+          <div className="inline-flex items-center justify-center w-14 h-14 bg-cs-indigo rounded-cs-card mb-4 shadow-sm">
             {isChangePassword ? (
               <KeyRound className="w-7 h-7 text-white" />
             ) : (
               <Shield className="w-7 h-7 text-white" />
             )}
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">CyberSentinel DLP</h1>
-          <p className="text-slate-500 mt-1.5 text-sm">
+          <h1 className="text-2xl font-bold tracking-tight text-cs-ink">CyberSentinel DLP</h1>
+          <p className="text-cs-muted mt-1.5 text-sm">
             {isChangePassword ? 'Change your password' : 'Enterprise Data Loss Prevention'}
           </p>
         </div>
 
         {/* Success Alert */}
         {success && (
-          <div className="mb-6 p-4 bg-success-50 border border-success-200 rounded-lg flex items-start gap-3">
-            <CheckCircle className="w-5 h-5 text-success-600 flex-shrink-0 mt-0.5" />
+          <div className="mb-6 p-4 bg-[color-mix(in_srgb,var(--cs-ok)_12%,var(--cs-panel))] border border-[color-mix(in_srgb,var(--cs-ok)_30%,var(--cs-panel))] rounded-cs-sm flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 text-cs-ok flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h3 className="text-sm font-medium text-success-800">Success</h3>
-              <p className="text-sm text-success-700 mt-1">{success}</p>
+              <h3 className="text-sm font-medium text-cs-ok">Success</h3>
+              <p className="text-sm text-cs-ink-2 mt-1">{success}</p>
             </div>
           </div>
         )}
 
         {/* Error Alert */}
         {error && (
-          <div className="mb-6 p-4 bg-danger-50 border border-danger-200 rounded-lg flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-danger-600 flex-shrink-0 mt-0.5" />
+          <div className="mb-6 p-4 bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] border border-[color-mix(in_srgb,var(--cs-crit)_30%,var(--cs-panel))] rounded-cs-sm flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-cs-crit flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h3 className="text-sm font-medium text-danger-800">
+              <h3 className="text-sm font-medium text-cs-crit">
                 {isChangePassword ? 'Password change failed' : 'Authentication failed'}
               </h3>
-              <p className="text-sm text-danger-700 mt-1">{error}</p>
+              <p className="text-sm text-cs-ink-2 mt-1">{error}</p>
             </div>
           </div>
         )}
@@ -127,12 +127,12 @@ export default function LoginForm() {
         <form onSubmit={isChangePassword ? handleChangePassword : handleLogin} className="space-y-5">
           {/* Username Field */}
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
+            <label htmlFor="email" className="block text-sm font-medium text-cs-ink-2 mb-1.5">
               Username
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Mail className="h-4 w-4 text-slate-400" />
+                <Mail className="h-4 w-4 text-cs-muted-2" />
               </div>
               <input
                 id="email"
@@ -149,12 +149,12 @@ export default function LoginForm() {
 
           {/* Current Password Field */}
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1.5">
+            <label htmlFor="password" className="block text-sm font-medium text-cs-ink-2 mb-1.5">
               {isChangePassword ? 'Current password' : 'Password'}
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Lock className="h-4 w-4 text-slate-400" />
+                <Lock className="h-4 w-4 text-cs-muted-2" />
               </div>
               <input
                 id="password"
@@ -181,12 +181,12 @@ export default function LoginForm() {
           {isChangePassword && (
             <>
               <div>
-                <label htmlFor="newPassword" className="block text-sm font-medium text-slate-700 mb-1.5">
+                <label htmlFor="newPassword" className="block text-sm font-medium text-cs-ink-2 mb-1.5">
                   New password
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <KeyRound className="h-4 w-4 text-slate-400" />
+                    <KeyRound className="h-4 w-4 text-cs-muted-2" />
                   </div>
                   <input
                     id="newPassword"
@@ -210,12 +210,12 @@ export default function LoginForm() {
               </div>
 
               <div>
-                <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-700 mb-1.5">
+                <label htmlFor="confirmPassword" className="block text-sm font-medium text-cs-ink-2 mb-1.5">
                   Confirm new password
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <KeyRound className="h-4 w-4 text-slate-400" />
+                    <KeyRound className="h-4 w-4 text-cs-muted-2" />
                   </div>
                   <input
                     id="confirmPassword"
@@ -238,7 +238,7 @@ export default function LoginForm() {
                 </div>
               </div>
 
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-cs-muted">
                 Password must be at least 7 characters with uppercase, lowercase, digit, and special character.
               </p>
             </>
@@ -269,14 +269,14 @@ export default function LoginForm() {
           {isChangePassword ? (
             <button
               onClick={() => switchMode('login')}
-              className="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
+              className="text-sm font-medium text-cs-indigo hover:text-cs-indigo-d transition-colors"
             >
               Back to sign in
             </button>
           ) : (
             <button
               onClick={() => switchMode('changePassword')}
-              className="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
+              className="text-sm font-medium text-cs-indigo hover:text-cs-indigo-d transition-colors"
             >
               Change password
             </button>
@@ -284,13 +284,13 @@ export default function LoginForm() {
         </div>
 
         {/* Footer */}
-        <div className="mt-5 pt-5 border-t border-slate-100 text-center text-xs text-slate-500">
+        <div className="mt-5 pt-5 border-t border-cs-hair-2 text-center text-xs text-cs-muted">
           <p>Secure access to your organization's DLP platform</p>
         </div>
       </div>
 
       {/* Version Info */}
-      <div className="mt-4 text-center text-xs text-slate-400">
+      <div className="mt-4 text-center text-xs text-cs-muted-2">
         <p>Version <span className="num">1.0.0</span> · Enterprise Edition</p>
       </div>
     </div>

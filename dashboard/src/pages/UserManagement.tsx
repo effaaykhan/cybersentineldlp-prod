@@ -122,13 +122,13 @@ export default function UserManagement() {
   if (!canManage) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="w-16 h-16 rounded-xl bg-primary-50 text-primary-600 flex items-center justify-center mb-4">
+        <div className="w-16 h-16 rounded-cs-card bg-cs-indigo-faint text-cs-indigo flex items-center justify-center mb-4">
           <Shield className="w-8 h-8" />
         </div>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-900 mb-2">
+        <h2 className="text-2xl font-bold tracking-tight text-cs-ink mb-2">
           You don't have access to User Management
         </h2>
-        <p className="text-slate-500 max-w-md">
+        <p className="text-cs-muted max-w-md">
           The <code>manage_users</code> permission is required. Contact your
           administrator if you believe this is an error.
         </p>
@@ -141,13 +141,13 @@ export default function UserManagement() {
       <div className="flex items-center justify-between">
         <div>
           <p className="eyebrow mb-1.5">Administration</p>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2.5">
-            <span className="w-9 h-9 rounded-lg bg-primary-50 text-primary-600 flex items-center justify-center">
+          <h1 className="text-2xl font-bold tracking-tight text-cs-ink flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-cs-sm bg-cs-indigo-faint text-cs-indigo flex items-center justify-center">
               <UsersIcon className="w-5 h-5" />
             </span>
             User Management
           </h1>
-          <p className="text-slate-500 mt-1">
+          <p className="text-cs-muted mt-1">
             Create, edit, revoke, and permanently delete DLP accounts. All
             actions are audited.
           </p>
@@ -161,28 +161,28 @@ export default function UserManagement() {
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-card overflow-hidden">
+      <div className="bg-cs-panel rounded-cs-card border border-cs-hair shadow-card overflow-hidden">
         {usersQ.isLoading ? (
           <div className="flex items-center justify-center p-12">
-            <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
+            <Loader2 className="w-8 h-8 text-cs-indigo animate-spin" />
           </div>
         ) : usersQ.isError ? (
           <div className="p-8 text-center">
-            <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
-            <p className="text-slate-700 font-medium">Failed to load users.</p>
+            <AlertCircle className="w-10 h-10 text-cs-crit mx-auto mb-3" />
+            <p className="text-cs-ink-2 font-medium">Failed to load users.</p>
             <button
               onClick={() => usersQ.refetch()}
-              className="mt-3 text-primary-600 hover:underline"
+              className="mt-3 text-cs-indigo hover:underline"
             >
               Retry
             </button>
           </div>
         ) : sortedUsers.length === 0 ? (
-          <div className="p-12 text-center text-slate-500">No users yet.</div>
+          <div className="p-12 text-center text-cs-muted">No users yet.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="bg-cs-hair-2 border-b border-cs-hair">
                 <tr>
                   <Th>Email</Th>
                   <Th>Username</Th>
@@ -195,17 +195,17 @@ export default function UserManagement() {
                   <Th className="text-right pr-6">Actions</Th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-cs-hair">
                 {sortedUsers.map((u) => (
-                  <tr key={u.id} className="hover:bg-slate-50 transition-colors">
-                    <Td className="font-medium text-slate-900">{u.email}</Td>
-                    <Td>{u.username || <span className="text-slate-400">—</span>}</Td>
+                  <tr key={u.id} className="hover:bg-cs-hair-2 transition-colors">
+                    <Td className="font-medium text-cs-ink">{u.email}</Td>
+                    <Td>{u.username || <span className="text-cs-muted-2">—</span>}</Td>
                     <Td>{u.full_name}</Td>
-                    <Td>{u.department || <span className="text-slate-400">—</span>}</Td>
+                    <Td>{u.department || <span className="text-cs-muted-2">—</span>}</Td>
                     <Td>
                       <RoleBadge role={u.role} />
                     </Td>
-                    <Td className="font-mono tabular-nums">{u.clearance_level}</Td>
+                    <Td className="num">{u.clearance_level}</Td>
                     <Td>
                       <PermissionSummary
                         effective={u.permissions?.length ?? 0}
@@ -298,7 +298,7 @@ export default function UserManagement() {
 function Th({ children, className = '' }: any) {
   return (
     <th
-      className={`px-6 py-3 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider ${className}`}
+      className={`px-6 py-3 text-left text-[11px] font-semibold text-cs-muted uppercase tracking-wider ${className}`}
     >
       {children}
     </th>
@@ -307,7 +307,7 @@ function Th({ children, className = '' }: any) {
 
 function Td({ children, className = '' }: any) {
   return (
-    <td className={`px-6 py-4 whitespace-nowrap text-sm text-slate-700 ${className}`}>
+    <td className={`px-6 py-4 whitespace-nowrap text-sm text-cs-ink-2 ${className}`}>
       {children}
     </td>
   )
@@ -315,15 +315,15 @@ function Td({ children, className = '' }: any) {
 
 function RoleBadge({ role }: { role: string }) {
   const colors: Record<string, string> = {
-    ADMIN:   'bg-red-50 text-red-700 ring-red-600/20',
-    ANALYST: 'bg-primary-50 text-primary-700 ring-primary-600/20',
-    MANAGER: 'bg-purple-50 text-purple-700 ring-purple-600/20',
-    VIEWER:  'bg-slate-100 text-slate-700 ring-slate-500/20',
-    AGENT:   'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
+    ADMIN:   'bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] text-cs-crit',
+    ANALYST: 'bg-cs-indigo-faint text-cs-indigo',
+    MANAGER: 'bg-[color-mix(in_srgb,var(--cs-high)_14%,var(--cs-panel))] text-cs-high',
+    VIEWER:  'bg-cs-hair-2 text-cs-ink-2',
+    AGENT:   'bg-[color-mix(in_srgb,var(--cs-ok)_14%,var(--cs-panel))] text-cs-ok',
   }
-  const cls = colors[role?.toUpperCase()] || 'bg-slate-100 text-slate-700 ring-slate-500/20'
+  const cls = colors[role?.toUpperCase()] || 'bg-cs-hair-2 text-cs-ink-2'
   return (
-    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset ${cls}`}>
+    <span className={`inline-flex px-2 py-0.5 rounded-cs-pill text-xs font-semibold ${cls}`}>
       {role}
     </span>
   )
@@ -331,13 +331,13 @@ function RoleBadge({ role }: { role: string }) {
 
 function StatusBadge({ active }: { active: boolean }) {
   return active ? (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-50 text-green-700 ring-1 ring-inset ring-green-600/20">
-      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-cs-pill text-xs font-semibold bg-[color-mix(in_srgb,var(--cs-ok)_14%,var(--cs-panel))] text-cs-ok">
+      <span className="w-1.5 h-1.5 rounded-cs-pill bg-cs-ok" />
       Active
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-500/20">
-      <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-cs-pill text-xs font-semibold bg-cs-hair-2 text-cs-muted">
+      <span className="w-1.5 h-1.5 rounded-cs-pill bg-cs-muted-2" />
       Inactive
     </span>
   )
@@ -354,13 +354,13 @@ function PermissionSummary({
 }) {
   return (
     <span
-      className="text-xs text-slate-600 font-mono tabular-nums"
+      className="text-xs text-cs-ink-2 num"
       title={`${effective} effective permissions (role defaults + ${direct} direct grant${direct === 1 ? '' : 's'})`}
     >
-      <span className="font-semibold text-slate-800">{effective}</span>
-      <span className="text-slate-400"> / {total}</span>
+      <span className="font-semibold text-cs-ink">{effective}</span>
+      <span className="text-cs-muted-2"> / {total}</span>
       {direct > 0 && (
-        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-600/20">
+        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-cs-pill text-[10px] font-semibold bg-cs-indigo-faint text-cs-indigo">
           +{direct} direct
         </span>
       )}
@@ -382,16 +382,16 @@ function IconButton({
   disabled?: boolean
 }) {
   const colorMap: Record<string, string> = {
-    indigo: 'hover:bg-primary-50 text-primary-600',
-    yellow: 'hover:bg-amber-50 text-amber-600',
-    red:    'hover:bg-red-50 text-red-600',
+    indigo: 'hover:bg-cs-indigo-faint text-cs-indigo',
+    yellow: 'hover:bg-[color-mix(in_srgb,var(--cs-med)_14%,var(--cs-panel))] text-cs-med',
+    red:    'hover:bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] text-cs-crit',
   }
   return (
     <button
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={`p-1.5 rounded-lg ${colorMap[color]} disabled:opacity-50 transition-colors`}
+      className={`p-1.5 rounded-cs-sm ${colorMap[color]} disabled:opacity-50 transition-colors`}
     >
       {children}
     </button>
@@ -636,9 +636,9 @@ function EditUserDialog({
             type="checkbox"
             checked={!!form.is_active}
             onChange={(e) => update('is_active', e.target.checked)}
-            className="h-4 w-4 accent-primary-600"
+            className="h-4 w-4 accent-cs-indigo"
           />
-          <label htmlFor="active-toggle" className="text-sm text-slate-700">
+          <label htmlFor="active-toggle" className="text-sm text-cs-ink-2">
             Account is active
           </label>
         </div>
@@ -674,9 +674,9 @@ function HardDeleteDialog({
   return (
     <Modal title="Delete user permanently" onClose={onClose}>
       <div className="space-y-4">
-        <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 border border-red-200">
-          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-          <div className="text-sm text-red-800">
+        <div className="flex items-start gap-3 p-3 rounded-cs-sm bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] border border-[color-mix(in_srgb,var(--cs-crit)_24%,var(--cs-panel))]">
+          <AlertCircle className="w-5 h-5 text-cs-crit flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-cs-crit">
             <p className="font-semibold">This cannot be undone.</p>
             <p className="mt-1">
               The row will be removed from the database. Audit entries they
@@ -684,8 +684,8 @@ function HardDeleteDialog({
             </p>
           </div>
         </div>
-        <p className="text-sm text-slate-700">
-          Type <code className="px-1 py-0.5 bg-slate-100 rounded font-mono text-slate-900">{user.email}</code> to confirm.
+        <p className="text-sm text-cs-ink-2">
+          Type <code className="px-1 py-0.5 bg-cs-hair-2 rounded-cs-sm font-mono text-cs-ink">{user.email}</code> to confirm.
         </p>
         <input
           type="text"
@@ -753,49 +753,49 @@ function PermissionPicker({
 
   if (permsCatalog.length === 0) {
     return (
-      <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-500">
+      <div className="p-3 rounded-cs-sm bg-cs-hair-2 border border-cs-hair text-sm text-cs-muted">
         Loading permission catalog…
       </div>
     )
   }
 
   return (
-    <div className="rounded-lg border border-slate-200 p-3">
+    <div className="rounded-cs-sm border border-cs-hair p-3">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-slate-800">
+        <span className="text-sm font-medium text-cs-ink">
           Direct Permissions
-          <span className="ml-2 text-xs text-slate-500 font-normal font-mono tabular-nums">
+          <span className="ml-2 text-xs text-cs-muted font-normal num">
             {selected.length} of {permsCatalog.length} selected
           </span>
         </span>
       </div>
       {helpText && (
-        <p className="text-xs text-slate-500 mb-3">{helpText}</p>
+        <p className="text-xs text-cs-muted mb-3">{helpText}</p>
       )}
       <div className="space-y-3">
         {Object.entries(groups).map(([group, perms]) => (
           <div key={group}>
-            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+            <div className="text-[11px] font-semibold text-cs-muted-2 uppercase tracking-wider mb-1.5">
               {group}
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
               {perms.map((p) => (
                 <label
                   key={p.id}
-                  className="flex items-start gap-2 cursor-pointer hover:bg-slate-50 px-2 py-1 rounded-lg"
+                  className="flex items-start gap-2 cursor-pointer hover:bg-cs-hair-2 px-2 py-1 rounded-cs-sm"
                 >
                   <input
                     type="checkbox"
-                    className="h-4 w-4 mt-0.5 accent-primary-600"
+                    className="h-4 w-4 mt-0.5 accent-cs-indigo"
                     checked={selectedSet.has(p.name)}
                     onChange={() => onToggle(p.name)}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-slate-800 font-mono truncate">
+                    <div className="text-sm text-cs-ink font-mono truncate">
                       {p.name}
                     </div>
                     {p.description && (
-                      <div className="text-xs text-slate-500 truncate">
+                      <div className="text-xs text-cs-muted truncate">
                         {p.description}
                       </div>
                     )}
@@ -849,17 +849,17 @@ function Modal({
       <div
         // max-h caps the card to leave breathing room top+bottom; min-h-0 on
         // the flex child lets the body's overflow-y-auto actually scroll.
-        className={`bg-white rounded-xl border border-slate-200 shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
+        className={`bg-cs-panel rounded-cs-card border border-cs-hair shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
           wide ? 'max-w-2xl' : 'max-w-md'
         }`}
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 shrink-0">
-          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-cs-hair shrink-0">
+          <h2 className="text-lg font-semibold text-cs-ink">{title}</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"
+            className="p-1 rounded-cs-sm hover:bg-cs-hair-2 text-cs-muted transition-colors"
             aria-label="Close dialog"
           >
             <X className="w-5 h-5" />
@@ -882,9 +882,9 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="block text-sm font-medium text-slate-700 mb-1">
+      <span className="block text-sm font-medium text-cs-ink-2 mb-1">
         {label}
-        {required && <span className="text-red-500 ml-1">*</span>}
+        {required && <span className="text-cs-crit ml-1">*</span>}
       </span>
       {children}
     </label>

@@ -1,90 +1,126 @@
-// Obsidian Vault theme tokens for Recharts. Hex values mirror the
-// CSS variables defined in dashboard/src/styles/obsidian-vault.css —
-// keep both in sync if the palette is ever retuned.
+// Central Recharts theme. Hex values MIRROR styles/tokens.css — Recharts/SVG
+// need concrete colors, so keep these in sync with the CSS variables.
 
+// Monochrome indigo ramp for the "Events by Type" donut — the one place
+// categorical color is deliberately withheld (severity owns hue).
+export const TYPE_RAMP = [
+  '#312e81', '#3730a3', '#4338ca', '#4f46e5', '#6366f1', '#818cf8', '#a5b4fc',
+] as const
+
+// Severity is the ONLY categorical use of semantic hue.
+export const SEVERITY_COLOR: Record<string, string> = {
+  critical: '#dc2626',
+  high: '#ea580c',
+  medium: '#d0a215',
+  low: '#64748b',
+  info: '#64748b',
+}
+
+export function severityColor(s?: string): string {
+  return SEVERITY_COLOR[(s || '').toLowerCase()] ?? '#7a808b'
+}
+
+/** Opacity for a chart segment: full unless a filter is active and this
+ *  segment isn't the selected one, in which case it dims to 0.3. */
+export function dimOpacity(hasSelection: boolean, isSelected: boolean): number {
+  return !hasSelection || isSelected ? 1 : 0.3
+}
+
+// The theme object new code should consume.
+export const CHART = {
+  indigo: '#4f46e5',
+  indigoDeep: '#4338ca',
+  indigoLight: '#818cf8',
+  blocked: '#a5b4fc', // lighter overlay line for the "blocked" series
+  ramp: TYPE_RAMP,
+  grid: '#e6e8ec', // --cs-hair
+  axis: '#7a808b', // --cs-muted
+  areaFrom: 0.28, // area gradient top opacity
+  areaTo: 0.02, //   area gradient bottom opacity
+  panel: '#ffffff', // slice/dot separators
+  tooltipBg: '#1b1e26',
+  tooltipBorder: '#2b2f3a',
+  tooltipText: '#ffffff',
+  tooltipMuted: '#9aa0aa',
+  mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+} as const
+
+// ── Back-compat exports (consumed by Dashboard.tsx, CustomTooltip,
+//    EventsTimeline). Values retuned to the light instrument theme. ──
 export const CHART_COLORS = {
-  primary: '#4f46e5',
-  secondary: '#2DD4BF',
-  success: '#2DD4BF',
-  warning: '#FB923C',
-  critical: '#F87171',
-  info: '#4f46e5',
+  primary: CHART.indigo,
+  secondary: CHART.indigoLight,
+  success: '#22a558',
+  warning: '#d0a215',
+  critical: '#dc2626',
+  info: CHART.indigo,
 
-  palette: [
-    '#4f46e5',
-    '#2DD4BF',
-    '#FB923C',
-    '#F87171',
-    '#6366f1',
-    '#34D399',
-    '#FBBF24',
-    '#60A5FA',
-  ],
+  palette: [...TYPE_RAMP],
 
   backgrounds: {
     dark: '#0A0A0D',
-    surface: '#ffffff',   // slice/dot separators read white on light cards
-    tertiary: '#1E1E2E',
+    surface: CHART.panel, // white slice/dot separators on light cards
+    tertiary: CHART.tooltipBorder,
   },
 
   text: {
-    primary: '#E8E8F0',
-    secondary: '#A0A0B8',
-    tertiary: '#606080',
+    primary: CHART.tooltipText,   // for the dark tooltip
+    secondary: '#cbd0d8',
+    tertiary: CHART.tooltipMuted,
   },
 
   line: {
-    stroke: '#4f46e5',
-    fill: 'rgba(91, 126, 255, 0.1)',
-    dot: '#4f46e5',
+    stroke: CHART.indigo,
+    fill: 'rgba(79, 70, 229, 0.12)',
+    dot: CHART.indigo,
   },
 
   bar: {
-    primary: '#4f46e5',
-    hover: '#6366f1',
+    primary: CHART.indigo,
+    hover: CHART.indigoLight,
   },
 
   pie: {
-    colors: ['#4f46e5', '#2DD4BF', '#FB923C', '#F87171', '#6366f1'],
+    colors: [...TYPE_RAMP],
   },
 } as const
 
 export const RECHARTS_CONFIG = {
-  // Light-card values: a slate hairline grid + readable slate ticks. The
-  // tooltip stays a crisp dark chip (matches the app's toasts) for contrast.
-  gridStroke: '#e2e8f0',
-  gridOpacity: 0.7,
+  gridStroke: CHART.grid,
+  gridOpacity: 1,
 
-  axisStroke: '#e2e8f0',
-  axisTickFill: '#64748b',
-  axisLabelFill: '#64748b',
-  axisTickFontSize: 12,
+  axisStroke: CHART.grid,
+  axisTickFill: CHART.axis,
+  axisLabelFill: CHART.axis,
+  axisTickFontSize: 11,
 
-  tooltipBackground: '#0f172a',
-  tooltipBorder: '#334155',
-  tooltipTextColor: '#e2e8f0',
+  tooltipBackground: CHART.tooltipBg,
+  tooltipBorder: CHART.tooltipBorder,
+  tooltipTextColor: CHART.tooltipText,
   tooltipPadding: 12,
-  tooltipBorderRadius: 6,
+  tooltipBorderRadius: 8,
 
-  cursorStroke: '#4f46e5',
+  cursorStroke: CHART.indigo,
   cursorOpacity: 0.5,
 
-  legendTextColor: '#A0A0B8',
+  legendTextColor: CHART.axis,
   legendFontSize: 12,
 } as const
 
 export const tooltipContentStyle = {
   backgroundColor: RECHARTS_CONFIG.tooltipBackground,
-  border: `0.5px solid ${RECHARTS_CONFIG.tooltipBorder}`,
+  border: `1px solid ${RECHARTS_CONFIG.tooltipBorder}`,
   borderRadius: RECHARTS_CONFIG.tooltipBorderRadius,
   padding: RECHARTS_CONFIG.tooltipPadding,
   boxShadow: 'none',
   color: RECHARTS_CONFIG.tooltipTextColor,
+  fontFamily: CHART.mono,
 }
 
 export const tickStyle = {
   fill: RECHARTS_CONFIG.axisTickFill,
   fontSize: RECHARTS_CONFIG.axisTickFontSize,
+  fontFamily: CHART.mono,
 }
 
 export const labelStyle = {

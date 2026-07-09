@@ -18,7 +18,7 @@ import {
 } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { drillDownUrl, DRILL_TOOLTIP } from '@/lib/drilldown'
-import { CHART_COLORS, RECHARTS_CONFIG, tickStyle } from '@/styles/charts'
+import { CHART_COLORS, RECHARTS_CONFIG, tickStyle, TYPE_RAMP, CHART } from '@/styles/charts'
 
 // ── Time formatting (IST) ───────────────────────────────────────────────
 const IST_TIMEZONE = 'Asia/Kolkata'
@@ -31,24 +31,19 @@ const formatDateTimeIST = (d: Date) =>
     timeZone: IST_TIMEZONE, dateStyle: 'long', timeStyle: 'long',
   }).format(d)
 
-// ── Color tokens ────────────────────────────────────────────────────────
-// Stable severity → hex map. Critical+High lean red/orange (alarm),
-// medium amber, low blue. Driven by spec PART 1.
+// ── Color tokens (mirror styles/tokens.css) ────────────────────────────
+// Severity is the only categorical use of semantic hue.
 const SEVERITY_COLORS: Record<string, string> = {
   critical: '#dc2626',
   high:     '#ea580c',
-  medium:   '#f59e0b',
-  low:      '#3b82f6',
+  medium:   '#d0a215',
+  low:      '#64748b',
   info:     '#64748b',
 }
 
-// Distinct, harmonious palette for event-type pie segments. Avoids the
-// default rainbow and keeps colours from clashing with the severity
-// red/orange family.
-const TYPE_PALETTE = [
-  '#4f46e5', '#0ea5e9', '#10b981', '#f59e0b',
-  '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6',
-]
+// Events-by-type donut uses the deliberate MONOCHROME indigo ramp — color
+// is reserved for severity, so type is distinguished by luminance alone.
+const TYPE_PALETTE = [...TYPE_RAMP]
 
 // ── Custom tooltips (PART 4 hover tooltips) ─────────────────────────────
 function ChartTooltip({
@@ -57,10 +52,10 @@ function ChartTooltip({
   if (!active || !payload?.length) return null
   return (
     <div
-      className="rounded-md px-3 py-2 text-xs"
+      className="rounded-lg px-3 py-2 text-xs font-mono"
       style={{
         background: RECHARTS_CONFIG.tooltipBackground,
-        border: `0.5px solid ${RECHARTS_CONFIG.tooltipBorder}`,
+        border: `1px solid ${RECHARTS_CONFIG.tooltipBorder}`,
         color: CHART_COLORS.text.primary,
         boxShadow: 'none',
       }}
@@ -232,8 +227,8 @@ export default function Dashboard() {
               <AreaChart data={timeSeries} margin={{ top: 10, right: 8, left: -12, bottom: 0 }}>
                 <defs>
                   <linearGradient id="grad-events" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={CHART_COLORS.primary} stopOpacity={0.45} />
-                    <stop offset="100%" stopColor={CHART_COLORS.primary} stopOpacity={0} />
+                    <stop offset="0%" stopColor={CHART.indigo} stopOpacity={CHART.areaFrom} />
+                    <stop offset="100%" stopColor={CHART.indigo} stopOpacity={CHART.areaTo} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={RECHARTS_CONFIG.gridStroke} vertical={false} />
@@ -263,11 +258,25 @@ export default function Dashboard() {
                   type="monotone"
                   dataKey="count"
                   name="Events"
-                  stroke={CHART_COLORS.primary}
+                  stroke={CHART.indigo}
                   strokeWidth={2.25}
                   fill="url(#grad-events)"
                   activeDot={{ r: 5, strokeWidth: 2, stroke: CHART_COLORS.backgrounds.surface }}
                 />
+                {/* Lighter "blocked" overlay line — only when the series
+                    actually carries blocked counts (no fabricated data). */}
+                {timeSeries.some((d: any) => d?.blocked != null) && (
+                  <Area
+                    type="monotone"
+                    dataKey="blocked"
+                    name="Blocked"
+                    stroke={CHART.blocked}
+                    strokeWidth={1.75}
+                    strokeDasharray="4 3"
+                    fill="none"
+                    activeDot={{ r: 4 }}
+                  />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           )}

@@ -1606,6 +1606,24 @@ static ClassificationResult Classify(const std::string& content,
      std::mutex usbFilesMutex;
      std::map<std::string, std::string> usbDriveToDeviceId;  // drive letter -> device ID
 
+     // Rich USB device metadata (serial, model, volume label, capacity …).
+     // Volume-level fields are only readable while the drive is mounted, so
+     // we collect them at connect time and cache them keyed by device id.
+     // A later disconnect (when the volume is already gone) then reports the
+     // same details instead of blanks.
+     struct USBDeviceDetails {
+         std::string serialNumber;   // hardware serial parsed from the device instance id
+         std::string manufacturer;   // SPDRP_MFG
+         std::string productName;    // friendly name / device description (the model)
+         std::string volumeLabel;    // the "USB name" the user sees in Explorer
+         std::string volumeSerial;   // filesystem volume serial (XXXX-XXXX)
+         std::string fileSystem;     // FAT32 / exFAT / NTFS …
+         std::string driveLetter;    // e.g. "E:"
+         std::string capacityBytes;  // total size in bytes (string to avoid 32-bit overflow)
+     };
+     std::map<std::string, USBDeviceDetails> usbDeviceDetailsCache;  // deviceId -> details
+     std::mutex usbDeviceDetailsMutex;
+
      // USB File Transfer Monitoring
     std::map<std::string, FileMetadata> monitoredFiles;  // Key: relative path
     std::map<std::string, ShadowEntry> shadowCopies;     // For BLOCK mode
@@ -1683,7 +1701,12 @@ static ClassificationResult Classify(const std::string& content,
         if (!allowEvents || !hasUsbDevicePolicies) return;
     
         std::string betterDeviceName = GetBetterDeviceName(deviceId);
-        
+
+        // Snapshot device details NOW, while the drive is still mounted — a
+        // BLOCK policy ejects the drive before the blocked-event is sent, so
+        // this is the only chance to record its volume label/serial/capacity.
+        USBDeviceDetails arrivalDetails = CollectUSBDeviceDetails(deviceId);
+
         std::cout << "[DEBUG] ===========================================" << std::endl;
         std::cout << "[DEBUG] HandleUsbDeviceArrival" << std::endl;
         std::cout << "[DEBUG] Device name: " << betterDeviceName << std::endl;
@@ -4596,10 +4619,38 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             if (pidPos != std::string::npos) {
                 productId = deviceId.substr(pidPos + 4, 4);
             }
-            
+
+            // Rich device details (serial, model, volume label, capacity …).
+            // On connect the volume is mounted, so we read everything and cache
+            // it; on disconnect the volume is already gone, so we reuse the
+            // cached connect-time snapshot (falling back to a fresh read for
+            // devices that were already plugged in when the agent started).
+            USBDeviceDetails details;
+            if (eventType == "connect") {
+                details = CollectUSBDeviceDetails(deviceId);
+                std::lock_guard<std::mutex> lock(usbDeviceDetailsMutex);
+                usbDeviceDetailsCache[deviceId] = details;
+            } else {
+                std::lock_guard<std::mutex> lock(usbDeviceDetailsMutex);
+                auto it = usbDeviceDetailsCache.find(deviceId);
+                if (it != usbDeviceDetailsCache.end()) {
+                    details = it->second;
+                    usbDeviceDetailsCache.erase(it);
+                } else {
+                    details = CollectUSBDeviceDetails(deviceId);
+                }
+            }
+            if (details.serialNumber.empty()) details.serialNumber = ParseUSBSerial(deviceId);
+
             // Build comprehensive description
             std::string description = "USB Device " + eventType;
             description += "\nDevice: " + deviceName;
+            if (!details.productName.empty())  description += "\nModel: " + details.productName;
+            if (!details.manufacturer.empty()) description += "\nManufacturer: " + details.manufacturer;
+            if (!details.serialNumber.empty()) description += "\nSerial: " + details.serialNumber;
+            if (!details.volumeLabel.empty())  description += "\nVolume: " + details.volumeLabel;
+            if (!details.fileSystem.empty())   description += "\nFilesystem: " + details.fileSystem;
+            if (!details.driveLetter.empty())  description += "\nDrive: " + details.driveLetter;
             description += "\nVendor ID: " + vendorId;
             description += "\nProduct ID: " + productId;
             description += "\nPolicy: " + matchedPolicyName;
@@ -4622,6 +4673,15 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("device_id", deviceId);
             json.AddString("vendor_id", vendorId);
             json.AddString("product_id", productId);
+            // Rich USB device identity — the details the user asked to capture.
+            json.AddString("serial_number", details.serialNumber);
+            json.AddString("manufacturer", details.manufacturer);
+            json.AddString("product_name", details.productName);
+            json.AddString("volume_label", details.volumeLabel);
+            json.AddString("volume_serial", details.volumeSerial);
+            json.AddString("file_system", details.fileSystem);
+            json.AddString("drive_letter", details.driveLetter);
+            json.AddString("capacity_bytes", details.capacityBytes);
             json.AddString("policy_id", matchedPolicyId);
             json.AddString("policy_name", matchedPolicyName);
             json.AddString("event_action", eventType);
@@ -6042,6 +6102,101 @@ if (shouldMonitor) {
         logger.Info("  Files scanned: " + std::to_string(filesScanned));
         logger.Info("  Baselines stored: " + std::to_string(filesStored));
         logger.Info("========================================");
+    }
+
+    // Parse the hardware serial from a USB device-interface path / instance id.
+    // Format: \\?\USB#VID_090C&PID_1000#0334120060005327#{guid}
+    // The token after the VID/PID segment is the serial. Devices that expose
+    // no real serial get a Windows-generated id here (contains '&') — we still
+    // return it; it's the best stable identifier available.
+    std::string ParseUSBSerial(const std::string& deviceId) {
+        std::string s = deviceId;
+        size_t guidPos = s.find("#{");
+        if (guidPos != std::string::npos) s = s.substr(0, guidPos);
+
+        std::vector<std::string> parts;
+        size_t start = 0, pos;
+        while ((pos = s.find('#', start)) != std::string::npos) {
+            parts.push_back(s.substr(start, pos - start));
+            start = pos + 1;
+        }
+        parts.push_back(s.substr(start));
+
+        // parts: ["\\?\USB", "VID_xxxx&PID_yyyy", "<serial>"]
+        if (parts.size() >= 3 && !parts.back().empty()) return parts.back();
+        return "";
+    }
+
+    // Collect the full metadata set for a USB device. Model/manufacturer come
+    // from SetupAPI; volume label/serial/filesystem/capacity come from the
+    // mounted drive (empty if the device isn't a mounted mass-storage volume).
+    USBDeviceDetails CollectUSBDeviceDetails(const std::string& deviceId) {
+        USBDeviceDetails d;
+        d.serialNumber = ParseUSBSerial(deviceId);
+
+        std::string vendorId, productId;
+        size_t vidPos = deviceId.find("VID_");
+        if (vidPos != std::string::npos && vidPos + 8 <= deviceId.length())
+            vendorId = deviceId.substr(vidPos + 4, 4);
+        size_t pidPos = deviceId.find("PID_");
+        if (pidPos != std::string::npos && pidPos + 8 <= deviceId.length())
+            productId = deviceId.substr(pidPos + 4, 4);
+
+        // Manufacturer + model via SetupAPI registry properties.
+        HDEVINFO hDevInfo = SetupDiGetClassDevsA(NULL, "USB", NULL, DIGCF_PRESENT | DIGCF_ALLCLASSES);
+        if (hDevInfo != INVALID_HANDLE_VALUE) {
+            SP_DEVINFO_DATA devInfoData;
+            devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+            for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &devInfoData); i++) {
+                char currentDeviceId[256];
+                if (SetupDiGetDeviceInstanceIdA(hDevInfo, &devInfoData, currentDeviceId, sizeof(currentDeviceId), NULL)) {
+                    std::string cur(currentDeviceId);
+                    if (!vendorId.empty() && !productId.empty() &&
+                        cur.find(vendorId) != std::string::npos &&
+                        cur.find(productId) != std::string::npos) {
+                        char buf[256]; DWORD propType;
+                        if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_MFG,
+                                &propType, (BYTE*)buf, sizeof(buf), NULL))
+                            d.manufacturer = buf;
+                        if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_FRIENDLYNAME,
+                                &propType, (BYTE*)buf, sizeof(buf), NULL))
+                            d.productName = buf;
+                        else if (SetupDiGetDeviceRegistryPropertyA(hDevInfo, &devInfoData, SPDRP_DEVICEDESC,
+                                &propType, (BYTE*)buf, sizeof(buf), NULL))
+                            d.productName = buf;
+                        break;
+                    }
+                }
+            }
+            SetupDiDestroyDeviceInfoList(hDevInfo);
+        }
+
+        // Volume-level details from the mounted drive (mass-storage only).
+        std::string driveLetter = GetDriveLetterForDevice(deviceId);  // e.g. "E:"
+        if (!driveLetter.empty()) {
+            d.driveLetter = driveLetter;
+            std::string root = driveLetter + "\\";  // GetVolumeInformation wants "E:\\"
+
+            char volName[MAX_PATH + 1] = {0};
+            char fsName[MAX_PATH + 1] = {0};
+            DWORD volSerial = 0, maxCompLen = 0, fsFlags = 0;
+            if (GetVolumeInformationA(root.c_str(), volName, sizeof(volName), &volSerial,
+                                      &maxCompLen, &fsFlags, fsName, sizeof(fsName))) {
+                d.volumeLabel = volName;
+                d.fileSystem = fsName;
+                char serialHex[16];
+                snprintf(serialHex, sizeof(serialHex), "%04X-%04X",
+                         (volSerial >> 16) & 0xFFFF, volSerial & 0xFFFF);
+                d.volumeSerial = serialHex;
+            }
+
+            ULARGE_INTEGER freeBytes, totalBytes, totalFree;
+            if (GetDiskFreeSpaceExA(root.c_str(), &freeBytes, &totalBytes, &totalFree)) {
+                d.capacityBytes = std::to_string(totalBytes.QuadPart);
+            }
+        }
+
+        return d;
     }
 
     std::string GetBetterDeviceName(const std::string& deviceId) {

@@ -628,6 +628,39 @@ function EventDetailModal({
             </div>
           </div>
 
+          {/* USB Device Details — shown for USB events that carry device metadata */}
+          {event.event_type?.toLowerCase() === 'usb' &&
+            (event.device_name || event.product_name || event.serial_number ||
+             event.volume_label || event.manufacturer || event.vendor_id) && (
+            <div className="rounded-lg border border-gray-200 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 border-b border-gray-200">
+                <Usb className="w-4 h-4 text-gray-600" />
+                <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">USB Device Details</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-px bg-gray-200">
+                {[
+                  ['Device', event.product_name || event.device_name],
+                  ['Manufacturer', event.manufacturer],
+                  ['Serial Number', event.serial_number],
+                  ['Volume Label', event.volume_label],
+                  ['Volume Serial', event.volume_serial],
+                  ['Filesystem', event.file_system],
+                  ['Drive Letter', event.drive_letter],
+                  ['Capacity', event.capacity_bytes ? formatFileSize(Number(event.capacity_bytes)) : null],
+                  ['Vendor ID', event.vendor_id ? `VID_${event.vendor_id}` : null],
+                  ['Product ID', event.product_id ? `PID_${event.product_id}` : null],
+                ]
+                  .filter(([, v]) => v)
+                  .map(([label, value]) => (
+                    <div key={label as string} className="bg-white p-3">
+                      <label className="text-[11px] text-gray-500 uppercase font-medium mb-0.5 block">{label}</label>
+                      <p className="text-gray-900 text-sm font-medium break-words">{value}</p>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
           {/* Raw JSON Data (Expandable) */}
           <div className="border-t border-gray-200 pt-4">
             <button

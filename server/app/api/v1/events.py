@@ -41,6 +41,22 @@ class EventCreate(BaseModel):
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., removable_drive, network_share)")
     content: Optional[str] = Field(None, description="Raw content captured (clipboard, file snippet, etc.)")
     usb_event_type: Optional[str] = Field(None, description="USB event subtype (connect, disconnect, transfer)")
+    # USB device identity captured by the endpoint agent on connect/disconnect.
+    # All arrive as strings (the agent sends capacity as a decimal string and
+    # may send "" when a field is unavailable), so keep them Optional[str] —
+    # declaring capacity as int would 422 on an empty string and drop the event.
+    device_name: Optional[str] = Field(None, description="Human-readable device description")
+    device_id: Optional[str] = Field(None, description="Raw device instance path / interface id")
+    vendor_id: Optional[str] = Field(None, description="USB vendor ID (VID)")
+    product_id: Optional[str] = Field(None, description="USB product ID (PID)")
+    serial_number: Optional[str] = Field(None, description="Hardware serial number of the device")
+    manufacturer: Optional[str] = Field(None, description="Device manufacturer")
+    product_name: Optional[str] = Field(None, description="Device model / friendly name")
+    volume_label: Optional[str] = Field(None, description="Mounted volume label (the 'USB name')")
+    volume_serial: Optional[str] = Field(None, description="Filesystem volume serial (XXXX-XXXX)")
+    file_system: Optional[str] = Field(None, description="Filesystem type (FAT32/exFAT/NTFS)")
+    drive_letter: Optional[str] = Field(None, description="Mounted drive letter, e.g. 'E:'")
+    capacity_bytes: Optional[str] = Field(None, description="Total volume capacity in bytes (decimal string)")
     blocked: Optional[bool] = Field(None, description="Whether action was blocked")
     event_subtype: Optional[str] = Field(None, description="Event subtype")
     description: Optional[str] = Field(None, description="Event description")
@@ -398,6 +414,31 @@ async def create_event(
         event_doc["lines_removed"] = event.lines_removed
     if event.content_changes_truncated is not None:
         event_doc["content_changes_truncated"] = event.content_changes_truncated
+
+    # USB device identity (connect/disconnect events). Persist the fields the
+    # agent captured — serial, model, volume label, capacity, etc. Written
+    # both as top-level keys (the read model DLPEvent has extra="allow", so
+    # they flow straight to the event-detail UI) and mirrored under a "usb"
+    # object that the action processor / title builder consume. Blank/absent
+    # fields are dropped so we never store empty placeholders.
+    usb_device_fields = {
+        "device_name": event.device_name,
+        "device_id": event.device_id,
+        "vendor_id": event.vendor_id,
+        "product_id": event.product_id,
+        "serial_number": event.serial_number,
+        "manufacturer": event.manufacturer,
+        "product_name": event.product_name,
+        "volume_label": event.volume_label,
+        "volume_serial": event.volume_serial,
+        "file_system": event.file_system,
+        "drive_letter": event.drive_letter,
+        "capacity_bytes": event.capacity_bytes,
+    }
+    usb_device_fields = {k: v for k, v in usb_device_fields.items() if v not in (None, "")}
+    if usb_device_fields:
+        event_doc.update(usb_device_fields)
+        event_doc["usb"] = {**event_doc.get("usb", {}), **usb_device_fields}
 
     # Hydrate agent-asserted matched policies. The agent ran the policy
     # bundle against the content and is authoritative on which monitoring

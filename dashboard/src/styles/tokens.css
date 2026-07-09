@@ -1,0 +1,46 @@
+/*
+ * CyberSentinel DLP — design tokens (single source of truth).
+ * These CSS custom properties back both raw CSS and the Tailwind theme
+ * (tailwind.config.cjs maps `cs.*` colors / radii / fonts to these vars),
+ * so components must reference tokens (via `cs-*` utilities or var(...))
+ * rather than ad-hoc hex values.
+ */
+:root {
+  /* surfaces */
+  --cs-bg:        #f5f6f8;
+  --cs-panel:     #ffffff;
+  --cs-hair:      #e6e8ec;   /* card border */
+  --cs-hair-2:    #eef0f3;   /* inner dividers */
+  /* ink */
+  --cs-ink:       #15171c;
+  --cs-ink-2:     #3b3f47;
+  --cs-muted:     #7a808b;
+  --cs-muted-2:   #9aa0aa;
+  /* accent (single) */
+  --cs-indigo:    #4f46e5;
+  --cs-indigo-d:  #4338ca;
+  --cs-indigo-faint: #eef0fe;
+  /* semantic — ONLY for severity + status */
+  --cs-crit:      #dc2626;
+  --cs-high:      #ea580c;
+  --cs-med:       #d0a215;
+  --cs-low:       #64748b;
+  --cs-ok:        #22a558;   /* live / online */
+  /* fonts */
+  --cs-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  --cs-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* geometry */
+  --cs-r-card: 10px;  --cs-r-pill: 20px;  --cs-r-sm: 7px;
+  --cs-pad:    22px;  --cs-gap:   14px;
+  --cs-focus:  0 0 0 3px var(--cs-indigo-faint);
+
+  /* Monochrome indigo ramp for the "Events by Type" donut — the one place
+     where categorical color is deliberately withheld (severity owns hue). */
+  --cs-ramp-0: #312e81;
+  --cs-ramp-1: #3730a3;
+  --cs-ramp-2: #4338ca;
+  --cs-ramp-3: #4f46e5;
+  --cs-ramp-4: #6366f1;
+  --cs-ramp-5: #818cf8;
+  --cs-ramp-6: #a5b4fc;
+}

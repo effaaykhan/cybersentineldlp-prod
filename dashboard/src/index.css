@@ -4,18 +4,29 @@
 
 @layer base {
   * {
-    @apply border-slate-200;
+    border-color: var(--cs-hair);
   }
   html {
-    @apply font-sans;
+    font-family: var(--cs-sans);
   }
   body {
-    @apply bg-canvas text-slate-900 antialiased;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    background: var(--cs-bg);
+    color: var(--cs-ink);
+    font-family: var(--cs-sans);
+    @apply antialiased;
   }
   /* Headings read a touch tighter for a more engineered feel. */
   h1, h2, h3 {
     @apply tracking-tight;
+  }
+  /* Reduced-motion: kill pulses/flashes for users who ask for it. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 

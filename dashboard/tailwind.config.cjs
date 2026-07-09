@@ -8,19 +8,32 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        // UI sans — a clean humanist stack. No external CDN (blocked by CSP).
-        sans: [
-          '"Inter var"', 'Inter', '-apple-system', 'BlinkMacSystemFont',
-          '"Segoe UI"', 'system-ui', 'Roboto', 'Helvetica', 'Arial', 'sans-serif',
-        ],
-        // Data / telemetry mono — every number, id and timestamp is set in
-        // this so quantitative data reads like an instrument readout.
-        mono: [
-          'ui-monospace', '"JetBrains Mono"', '"SF Mono"', 'SFMono-Regular',
-          'Menlo', 'Consolas', '"Liberation Mono"', 'monospace',
-        ],
+        // Tied to the design tokens (styles/tokens.css) so there is a single
+        // source of truth. `font-sans` / `font-mono` resolve to --cs-sans/mono.
+        sans: ['var(--cs-sans)'],
+        mono: ['var(--cs-mono)'],
       },
       colors: {
+        // ── Design tokens (styles/tokens.css) surfaced as Tailwind colors ──
+        // Use `bg-cs-panel`, `text-cs-ink`, `border-cs-hair`, `text-cs-crit`…
+        cs: {
+          bg: 'var(--cs-bg)',
+          panel: 'var(--cs-panel)',
+          hair: 'var(--cs-hair)',
+          'hair-2': 'var(--cs-hair-2)',
+          ink: 'var(--cs-ink)',
+          'ink-2': 'var(--cs-ink-2)',
+          muted: 'var(--cs-muted)',
+          'muted-2': 'var(--cs-muted-2)',
+          indigo: 'var(--cs-indigo)',
+          'indigo-d': 'var(--cs-indigo-d)',
+          'indigo-faint': 'var(--cs-indigo-faint)',
+          crit: 'var(--cs-crit)',
+          high: 'var(--cs-high)',
+          med: 'var(--cs-med)',
+          low: 'var(--cs-low)',
+          ok: 'var(--cs-ok)',
+        },
         // Single brand accent — indigo. The dashboard already leaned indigo
         // in places while `primary` was blue; unifying removes the split.
         primary: {
@@ -57,7 +70,12 @@ module.exports = {
         // Refined, low-contrast elevation — precision over softness.
         card: '0 1px 2px rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.06)',
         'card-hover': '0 2px 8px rgba(15,23,42,0.06), 0 8px 24px rgba(15,23,42,0.08)',
-        focus: '0 0 0 3px rgba(79,70,229,0.18)',
+        focus: 'var(--cs-focus)',
+      },
+      borderRadius: {
+        'cs-card': 'var(--cs-r-card)',
+        'cs-pill': 'var(--cs-r-pill)',
+        'cs-sm': 'var(--cs-r-sm)',
       },
     },
   },

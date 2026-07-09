@@ -237,8 +237,9 @@ export default function PoliciesPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">DLP Policies</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <p className="eyebrow mb-1.5">Policies</p>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">DLP Policies</h1>
+        <p className="mt-1 text-sm text-slate-600">
           Create and manage data loss prevention policies
         </p>
       </div>
@@ -250,21 +251,21 @@ export default function PoliciesPage() {
           <button
             onClick={() => refreshBundlesMutation.mutate()}
             disabled={refreshBundlesMutation.isPending}
-            className="flex items-center gap-2 border border-gray-300 text-gray-800 px-4 py-3 rounded-xl hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+            className="btn-secondary gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <RefreshCw className={`w-4 h-4 ${refreshBundlesMutation.isPending ? 'animate-spin' : ''}`} />
             {refreshBundlesMutation.isPending ? 'Refreshing…' : 'Refresh Bundles'}
           </button>
           <button
             onClick={handleCreatePolicy}
-            className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-3 rounded-xl hover:from-indigo-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all"
+            className="btn-primary gap-2"
           >
             <Plus className="w-5 h-5" />
             Create Policy
           </button>
         </div>
         {lastRefreshAt && (
-          <p className="w-full text-sm text-gray-500">
+          <p className="w-full text-sm text-slate-500">
             Last refresh triggered {formatDistanceToNow(lastRefreshAt, { addSuffix: true })}
           </p>
         )}
@@ -275,12 +276,12 @@ export default function PoliciesPage() {
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Total Policies</p>
-              <p className="mt-2 text-3xl font-semibold text-gray-900">
+              <p className="text-sm font-medium text-slate-600">Total Policies</p>
+              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
                 {isStatsLoading ? '—' : stats.total}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-blue-100 text-blue-600">
+            <div className="p-3 rounded-lg bg-primary-50 text-primary-600">
               <Shield className="h-6 w-6" />
             </div>
           </div>
@@ -289,12 +290,12 @@ export default function PoliciesPage() {
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Active Policies</p>
-              <p className="mt-2 text-3xl font-semibold text-gray-900">
+              <p className="text-sm font-medium text-slate-600">Active Policies</p>
+              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
                 {isStatsLoading ? '—' : stats.active}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-green-100 text-green-600">
+            <div className="p-3 rounded-lg bg-success-50 text-success-600">
               <CheckCircle className="h-6 w-6" />
             </div>
           </div>
@@ -303,12 +304,12 @@ export default function PoliciesPage() {
         <div className="card">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Inactive Policies</p>
-              <p className="mt-2 text-3xl font-semibold text-gray-900">
+              <p className="text-sm font-medium text-slate-600">Inactive Policies</p>
+              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
                 {isStatsLoading ? '—' : stats.inactive}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-gray-100 text-gray-600">
+            <div className="p-3 rounded-lg bg-slate-100 text-slate-500">
               <XCircle className="h-6 w-6" />
             </div>
           </div>
@@ -317,12 +318,12 @@ export default function PoliciesPage() {
         <div className="card md:col-span-3">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Violations (last 24h)</p>
-              <p className="mt-2 text-3xl font-semibold text-gray-900">
+              <p className="text-sm font-medium text-slate-600">Violations (last 24h)</p>
+              <p className="mt-2 font-mono text-3xl font-semibold tabular-nums text-slate-900">
                 {isStatsLoading ? '—' : stats.violations}
               </p>
             </div>
-            <div className="p-3 rounded-lg bg-red-100 text-red-600">
+            <div className="p-3 rounded-lg bg-danger-50 text-danger-600">
               <Shield className="h-6 w-6" />
             </div>
           </div>

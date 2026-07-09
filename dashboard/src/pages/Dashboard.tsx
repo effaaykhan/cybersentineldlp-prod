@@ -144,22 +144,23 @@ export default function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <header className="flex items-start justify-between gap-4 flex-wrap">
+      <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">
+          <p className="eyebrow mb-1.5">Overview</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
             Security Operations
           </h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-slate-500">
             Real-time view of DLP activity across endpoints and channels.
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
+        <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500 shadow-card">
           <span className="live-dot" />
-          <span className="font-medium text-gray-700">Live</span>
-          <span aria-hidden>·</span>
-          <span>Refreshes every 5s</span>
+          <span className="font-medium text-slate-700">Live</span>
+          <span className="text-slate-300" aria-hidden>·</span>
+          <span><span className="num text-slate-700">5s</span> refresh</span>
           {isFetching && (
-            <span className="text-indigo-600 font-medium ml-1">syncing…</span>
+            <span className="text-primary-600 font-medium">· syncing…</span>
           )}
         </div>
       </header>
@@ -434,25 +435,25 @@ function ChartCard({
   className?: string
   children: React.ReactNode
 }) {
-  const accentMap = {
-    indigo: 'from-indigo-500 to-blue-500',
-    red:    'from-red-500 to-rose-500',
-    orange: 'from-orange-500 to-amber-500',
-    green:  'from-emerald-500 to-green-500',
+  const chipMap = {
+    indigo: 'bg-primary-50 text-primary-600',
+    red:    'bg-danger-50 text-danger-600',
+    orange: 'bg-warning-50 text-warning-600',
+    green:  'bg-success-50 text-success-600',
   }
   return (
-    <section className={cn('card-static relative overflow-hidden', className)}>
-      <div className={cn(
-        'absolute inset-x-0 top-0 h-[2px] rounded-t-2xl bg-gradient-to-r',
-        accentMap[accent],
-      )} />
-      <header className="flex items-start justify-between gap-3 mb-4">
-        <div>
-          <h3 className="section-title flex items-center gap-2">
-            {Icon && <Icon className="h-4 w-4 text-gray-500" />}
-            {title}
-          </h3>
-          {subtitle && <p className="mt-0.5 text-xs text-gray-500">{subtitle}</p>}
+    <section className={cn('card-static', className)}>
+      <header className="flex items-start justify-between gap-3 mb-5">
+        <div className="flex items-center gap-2.5">
+          {Icon && (
+            <span className={cn('h-8 w-8 rounded-lg flex items-center justify-center shrink-0', chipMap[accent])}>
+              <Icon className="h-4 w-4" />
+            </span>
+          )}
+          <div>
+            <h3 className="section-title">{title}</h3>
+            {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
+          </div>
         </div>
       </header>
       {children}
@@ -501,16 +502,17 @@ function ActionsPanel({
   ]
 
   return (
-    <section className="card-static relative overflow-hidden">
-      <div className="absolute inset-x-0 top-0 h-[2px] rounded-t-2xl bg-gradient-to-r from-indigo-500 via-orange-500 to-red-500" />
-      <header className="mb-4">
-        <h3 className="section-title flex items-center gap-2">
-          <Shield className="h-4 w-4 text-gray-500" />
-          DLP Enforcement
-        </h3>
-        <p className="mt-0.5 text-xs text-gray-500">Live policy outcomes — click to investigate</p>
+    <section className="card-static">
+      <header className="flex items-center gap-2.5 mb-5">
+        <span className="h-8 w-8 rounded-lg flex items-center justify-center bg-primary-50 text-primary-600 shrink-0">
+          <Shield className="h-4 w-4" />
+        </span>
+        <div>
+          <h3 className="section-title">DLP Enforcement</h3>
+          <p className="mt-0.5 text-xs text-slate-500">Live policy outcomes — click to investigate</p>
+        </div>
       </header>
-      <ul className="space-y-3">
+      <ul className="space-y-2.5">
         {rows.map((r) => (
           <ActionRow key={r.label} {...r} />
         ))}
@@ -531,9 +533,9 @@ function ActionRow({
 }) {
   const navigate = useNavigate()
   const map = {
-    red:    { bg: 'from-red-50 to-rose-50',         text: 'text-red-700',     iconBg: 'bg-red-100 text-red-600',         border: 'border-red-100' },
-    orange: { bg: 'from-orange-50 to-amber-50',     text: 'text-orange-700',  iconBg: 'bg-orange-100 text-orange-600',   border: 'border-orange-100' },
-    indigo: { bg: 'from-indigo-50 to-blue-50',      text: 'text-indigo-700',  iconBg: 'bg-indigo-100 text-indigo-600',   border: 'border-indigo-100' },
+    red:    { text: 'text-danger-700',  iconBg: 'bg-danger-50 text-danger-600' },
+    orange: { text: 'text-warning-700', iconBg: 'bg-warning-50 text-warning-600' },
+    indigo: { text: 'text-primary-700', iconBg: 'bg-primary-50 text-primary-600' },
   } as const
   const m = map[accent]
   return (
@@ -550,22 +552,21 @@ function ActionRow({
       title={`${DRILL_TOOLTIP}: ${label}`}
       aria-label={`${label}: ${value.toLocaleString()}. ${DRILL_TOOLTIP}.`}
       className={cn(
-        'group relative flex items-center justify-between gap-3 p-3 rounded-xl border cursor-pointer',
-        'bg-gradient-to-br', m.bg, m.border,
-        'transition-all duration-200 hover:shadow-md hover:-translate-y-0.5',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2',
+        'group relative flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-200 cursor-pointer bg-white',
+        'transition-colors duration-150 hover:bg-slate-50 hover:border-slate-300',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-1',
       )}
     >
       <div className="flex items-center gap-3 min-w-0">
-        <div className={cn('h-10 w-10 rounded-lg flex items-center justify-center', m.iconBg)}>
-          <Icon className="h-5 w-5" />
+        <div className={cn('h-9 w-9 rounded-lg flex items-center justify-center shrink-0', m.iconBg)}>
+          <Icon className="h-[18px] w-[18px]" />
         </div>
         <div className="min-w-0">
-          <p className="font-semibold text-gray-900 truncate">{label}</p>
-          <p className="text-xs text-gray-600 truncate">{sub}</p>
+          <p className="font-semibold text-slate-900 truncate text-sm">{label}</p>
+          <p className="text-xs text-slate-500 truncate">{sub}</p>
         </div>
       </div>
-      <span className={cn('text-2xl font-bold tabular-nums', m.text)}>
+      <span className={cn('num text-xl font-semibold', m.text)}>
         {value.toLocaleString()}
       </span>
     </li>

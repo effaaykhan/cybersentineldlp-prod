@@ -13,97 +13,159 @@ import {
   List,
   AlertTriangle,
   Search,
-  ClipboardList,
   UserCog,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
 
-// Each nav item declares the permissions that would make it relevant.
-// An item is shown if the user has ANY of the listed permissions, OR if
-// the list is empty (always-shown). ADMIN is implicitly granted everything
-// via usePermission.hasAny.
+// Nav is grouped by what the analyst is doing — overview, investigating,
+// enforcing, administering — so ten destinations read as four short lists
+// instead of one long scroll. An item shows if the user has ANY of its
+// permissions (empty = always shown); a group with no visible items hides.
 type NavItem = {
   name: string
   to: string
   icon: typeof LayoutDashboard
   requires: string[]
 }
+type NavGroup = { label: string; items: NavItem[] }
 
-const navigation: NavItem[] = [
-  { name: 'Dashboard',        to: '/dashboard',     icon: LayoutDashboard, requires: ['view_dashboard'] },
-  { name: 'Agents',       to: '/agents',       icon: Server,          requires: ['view_events'] },
-  { name: 'Events',       to: '/events',       icon: FileText,        requires: ['view_events'] },
-  { name: 'Alerts',       to: '/alerts',       icon: AlertCircle,     requires: ['view_alerts'] },
-  { name: 'Incidents',    to: '/incidents',    icon: AlertTriangle,   requires: ['view_alerts'] },
-  { name: 'Log Explorer', to: '/log-explorer', icon: Search,          requires: ['view_events'] },
-  { name: 'Rules',        to: '/rules',        icon: List,            requires: ['create_policy', 'update_policy'] },
-  { name: 'Policies',        to: '/policies',     icon: Shield,     requires: ['create_policy', 'update_policy'] },
-  { name: 'User Management', to: '/admin/users',  icon: UserCog,    requires: ['manage_users'] },
-  { name: 'Settings',        to: '/settings',     icon: Settings,   requires: ['manage_users', 'manage_roles'] },
+const groups: NavGroup[] = [
+  {
+    label: 'Overview',
+    items: [
+      { name: 'Dashboard', to: '/dashboard', icon: LayoutDashboard, requires: ['view_dashboard'] },
+    ],
+  },
+  {
+    label: 'Monitor',
+    items: [
+      { name: 'Agents',       to: '/agents',       icon: Server,        requires: ['view_events'] },
+      { name: 'Events',       to: '/events',       icon: FileText,      requires: ['view_events'] },
+      { name: 'Alerts',       to: '/alerts',       icon: AlertCircle,   requires: ['view_alerts'] },
+      { name: 'Incidents',    to: '/incidents',    icon: AlertTriangle, requires: ['view_alerts'] },
+      { name: 'Log Explorer', to: '/log-explorer', icon: Search,        requires: ['view_events'] },
+    ],
+  },
+  {
+    label: 'Enforce',
+    items: [
+      { name: 'Rules',    to: '/rules',    icon: List,   requires: ['create_policy', 'update_policy'] },
+      { name: 'Policies', to: '/policies', icon: Shield, requires: ['create_policy', 'update_policy'] },
+    ],
+  },
+  {
+    label: 'Administer',
+    items: [
+      { name: 'User Management', to: '/admin/users', icon: UserCog,  requires: ['manage_users'] },
+      { name: 'Settings',        to: '/settings',    icon: Settings, requires: ['manage_users', 'manage_roles'] },
+    ],
+  },
 ]
 
 export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false)
   const { hasAny } = usePermission()
-  const visibleNav = navigation.filter(
-    (item) => item.requires.length === 0 || hasAny(item.requires),
-  )
+
+  const visibleGroups = groups
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((i) => i.requires.length === 0 || hasAny(i.requires)),
+    }))
+    .filter((g) => g.items.length > 0)
 
   return (
-    <aside className={cn(
-      "bg-[#1a1d1f] text-white flex flex-col transition-all duration-300",
-      isCollapsed ? "w-16" : "w-64"
-    )}>
-      {/* Logo */}
-      <div className="h-16 flex items-center justify-between px-3 border-b border-gray-800">
-        <div className="flex items-center overflow-hidden">
-          <img
-            src={logo}
-            alt="CyberSentinel-DLP Logo"
-            className="h-12 w-12 object-contain flex-shrink-0"
-          />
-          {!isCollapsed && (
-            <span className="ml-1 text-xl font-semibold whitespace-nowrap">CyberSentinel-DLP</span>
-          )}
-        </div>
+    <aside
+      className={cn(
+        'bg-slate-900 text-slate-300 flex flex-col border-r border-slate-800 transition-all duration-300',
+        isCollapsed ? 'w-16' : 'w-64',
+      )}
+    >
+      {/* Brand */}
+      <div className="h-16 flex items-center gap-2.5 px-4 border-b border-slate-800/80">
+        <img
+          src={logo}
+          alt="CyberSentinel DLP"
+          className="h-9 w-9 object-contain flex-shrink-0"
+        />
+        {!isCollapsed && (
+          <div className="min-w-0 leading-tight">
+            <div className="text-[15px] font-semibold text-white truncate">CyberSentinel</div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+              DLP Console
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto">
-        {visibleNav.map((item) => (
-          <NavLink
-            key={item.name}
-            to={item.to}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-200',
-                isActive
-                  ? 'bg-primary-600 text-white'
-                  : 'text-gray-300 hover:bg-[#2a2d2f] hover:text-white',
-                isCollapsed && 'justify-center'
-              )
-            }
-            title={isCollapsed ? item.name : undefined}
-          >
-            <item.icon className={cn("h-5 w-5", !isCollapsed && "mr-3")} />
-            {!isCollapsed && item.name}
-          </NavLink>
+      <nav className="flex-1 px-2.5 py-4 space-y-5 overflow-y-auto scrollbar-thin">
+        {visibleGroups.map((group) => (
+          <div key={group.label}>
+            {!isCollapsed && (
+              <p className="px-2.5 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
+                {group.label}
+              </p>
+            )}
+            <div className="space-y-0.5">
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.name}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    cn(
+                      'group relative flex items-center rounded-lg px-2.5 py-2 text-sm font-medium transition-colors duration-150',
+                      isActive
+                        ? 'bg-primary-500/10 text-white'
+                        : 'text-slate-400 hover:bg-white/5 hover:text-slate-100',
+                      isCollapsed && 'justify-center',
+                    )
+                  }
+                  title={isCollapsed ? item.name : undefined}
+                >
+                  {({ isActive }) => (
+                    <>
+                      {/* Active accent bar */}
+                      <span
+                        className={cn(
+                          'absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-primary-400 transition-opacity',
+                          isActive ? 'opacity-100' : 'opacity-0',
+                        )}
+                      />
+                      <item.icon
+                        className={cn(
+                          'h-[18px] w-[18px] flex-shrink-0 transition-colors',
+                          !isCollapsed && 'mr-3',
+                          isActive ? 'text-primary-300' : 'text-slate-500 group-hover:text-slate-300',
+                        )}
+                      />
+                      {!isCollapsed && item.name}
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
 
-      {/* Toggle Button */}
-      <button
-        onClick={() => setIsCollapsed(!isCollapsed)}
-        className="mx-3 mb-3 p-2 hover:bg-[#2a2d2f] rounded-lg transition-colors flex items-center justify-center"
-        title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-      >
-        {isCollapsed ? (
-          <ChevronRight className="h-5 w-5" />
-        ) : (
-          <ChevronLeft className="h-5 w-5" />
-        )}
-      </button>
+      {/* Collapse toggle */}
+      <div className="border-t border-slate-800/80 p-2.5">
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className="w-full p-2 text-slate-400 hover:bg-white/5 hover:text-slate-200 rounded-lg transition-colors flex items-center justify-center gap-2 text-xs font-medium"
+          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {isCollapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <>
+              <ChevronLeft className="h-4 w-4" />
+              Collapse
+            </>
+          )}
+        </button>
+      </div>
     </aside>
   )
 }

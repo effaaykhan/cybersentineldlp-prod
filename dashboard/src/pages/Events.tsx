@@ -55,7 +55,7 @@ function EventDetailModal({
     if (normalized.includes('deleted')) return 'text-red-600 bg-red-50 border-red-200'
     if (normalized.includes('moved') || normalized.includes('renamed')) return 'text-orange-600 bg-orange-50 border-orange-200'
     if (normalized.includes('copied')) return 'text-purple-600 bg-purple-50 border-purple-200'
-    return 'text-gray-600 bg-gray-50 border-gray-200'
+    return 'text-slate-600 bg-slate-50 border-slate-200'
   }
 
   const getEventSubtypeLabel = (subtype: string, changeType?: string) => {
@@ -84,21 +84,21 @@ function EventDetailModal({
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50" onClick={onClose}>
-        <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-white rounded-xl shadow-card max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-gray-200">
+          <div className="flex items-center justify-between p-6 border-b border-slate-200">
             <div className="flex items-center gap-4">
               <div className={`p-3 rounded-xl ${blocked ? 'bg-red-100 border border-red-300' : 'bg-orange-100 border border-orange-300'}`}>
                 <Shield className={`w-8 h-8 ${blocked ? 'text-red-600' : 'text-orange-600'}`} />
               </div>
               <div>
-                <h3 className="text-2xl font-bold text-gray-900">
+                <h3 className="text-2xl font-bold tracking-tight text-slate-900">
                   {blocked ? 'File Transfer Blocked' : 'Transfer Attempt Detected'}
                 </h3>
-                <p className="text-gray-500 text-sm mt-1">{formatDateTimeIST(event.timestamp)}</p>
+                <p className="text-slate-500 text-sm mt-1 font-mono tabular-nums">{formatDateTimeIST(event.timestamp)}</p>
               </div>
             </div>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
               <X className="w-6 h-6" />
             </button>
           </div>
@@ -124,41 +124,41 @@ function EventDetailModal({
             </div>
 
             {/* Transfer Flow Visualization */}
-            <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
+            <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
               <div className="flex items-center justify-between gap-4">
                 {/* Source */}
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-2">
-                    <File className="w-5 h-5 text-blue-600" />
-                    <label className="text-sm text-gray-600 uppercase font-medium">Source</label>
+                    <File className="w-5 h-5 text-primary-600" />
+                    <label className="text-sm text-slate-600 uppercase font-medium">Source</label>
                   </div>
-                  <div className="bg-white rounded-lg p-4 border border-gray-200">
-                    <p className="text-gray-900 font-semibold text-lg mb-1">{fileName}</p>
-                    <p className="text-gray-600 text-sm font-mono truncate" title={sourcePath}>
+                  <div className="bg-white rounded-lg p-4 border border-slate-200">
+                    <p className="text-slate-900 font-semibold text-lg mb-1">{fileName}</p>
+                    <p className="text-slate-600 text-sm font-mono truncate" title={sourcePath}>
                       {sourcePath}
                     </p>
-                    <p className="text-gray-500 text-xs mt-2">{fileSize}</p>
+                    <p className="text-slate-500 text-xs mt-2 font-mono tabular-nums">{fileSize}</p>
                   </div>
                 </div>
 
                 {/* Arrow */}
                 <div className="flex flex-col items-center gap-2">
-                  <ArrowRight className="w-6 h-6 text-gray-400" />
-                  <span className="text-xs text-gray-500 font-medium">Copied to</span>
+                  <ArrowRight className="w-6 h-6 text-slate-400" />
+                  <span className="text-xs text-slate-500 font-medium">Copied to</span>
                 </div>
 
                 {/* Destination */}
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-2">
                     <HardDrive className="w-5 h-5 text-red-600" />
-                    <label className="text-sm text-gray-600 uppercase font-medium">Destination</label>
+                    <label className="text-sm text-slate-600 uppercase font-medium">Destination</label>
                   </div>
                   <div className="bg-white rounded-lg p-4 border border-red-300">
                     <div className="flex items-center gap-2 mb-1">
                       <Usb className="w-4 h-4 text-red-600" />
                       <p className="text-red-600 font-semibold">{driveLetter || 'Destination'}</p>
                     </div>
-                    <p className="text-gray-600 text-sm font-mono truncate" title={destPath}>
+                    <p className="text-slate-600 text-sm font-mono truncate" title={destPath}>
                       {destPath}
                     </p>
                     <p className="text-red-600 text-xs mt-2 font-medium">Blocked</p>
@@ -169,46 +169,46 @@ function EventDetailModal({
 
             {/* Event Details Grid */}
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Agent</label>
-                <p className="text-gray-900 font-medium" title={event.agent_id}>
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">Agent</label>
+                <p className="text-slate-900 font-medium" title={event.agent_id}>
                   {agentLabel}
                 </p>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">User</label>
-                <p className="text-gray-900 font-medium">{event.user_email}</p>
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">User</label>
+                <p className="text-slate-900 font-medium">{event.user_email}</p>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Transfer Type</label>
-                <p className="text-gray-900 font-medium capitalize">{event.transfer_type || 'File Transfer'}</p>
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">Transfer Type</label>
+                <p className="text-slate-900 font-medium capitalize">{event.transfer_type || 'File Transfer'}</p>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Action Taken</label>
-                <p className="text-gray-900 font-medium capitalize">{event.action_taken || event.action || 'Blocked'}</p>
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">Action Taken</label>
+                <p className="text-slate-900 font-medium capitalize">{event.action_taken || event.action || 'Blocked'}</p>
               </div>
             </div>
 
             {/* File Hash (if available) */}
             {event.file_hash && (
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <label className="text-xs text-gray-600 uppercase font-medium mb-2 block">File Hash (SHA256)</label>
-                <p className="text-gray-700 font-mono text-xs break-all">{event.file_hash}</p>
+              <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <label className="text-xs text-slate-600 uppercase font-medium mb-2 block">File Hash (SHA256)</label>
+                <p className="text-slate-700 font-mono text-xs break-all">{event.file_hash}</p>
               </div>
             )}
 
             {/* Raw JSON Data (Expandable) */}
-            <div className="border-t border-gray-200 pt-4">
+            <div className="border-t border-slate-200 pt-4">
               <button
                 onClick={() => setShowRawData(!showRawData)}
-                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors w-full"
+                className="flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors w-full"
               >
                 {showRawData ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                 <span className="text-sm font-medium">View Raw Event Data</span>
               </button>
               {showRawData && (
-                <div className="mt-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <pre className="text-xs text-gray-700 overflow-x-auto">
+                <div className="mt-4 bg-slate-50 rounded-lg p-4 border border-slate-200">
+                  <pre className="text-xs text-slate-700 overflow-x-auto">
                     {JSON.stringify(event, null, 2)}
                   </pre>
                 </div>
@@ -244,9 +244,9 @@ function EventDetailModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-card max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-slate-200">
           <div className="flex items-center gap-4">
             <div className={`p-3 rounded-xl ${
               event.severity === 'critical' ? 'bg-red-100 border border-red-300' :
@@ -260,23 +260,23 @@ function EventDetailModal({
               )}
             </div>
             <div>
-              <h3 className="text-2xl font-bold text-gray-900">
+              <h3 className="text-2xl font-bold tracking-tight text-slate-900">
                 {isClipboard ? 'Clipboard Violation' : isFile ? (
                   // Show action type and file name prominently for file events
                   event.event_subtype ? (
                     <>
                       {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
                       {fileName && fileName !== 'Unknown' && (
-                        <span className="text-gray-600 font-normal">: {fileName}</span>
+                        <span className="text-slate-600 font-normal">: {fileName}</span>
                       )}
                     </>
                   ) : event.description || (fileName ? `File Event: ${fileName}` : 'File Event')
                 ) : 'Event Details'}
               </h3>
-              <p className="text-gray-500 text-sm mt-1">{formatDateTimeIST(event.timestamp)}</p>
+              <p className="text-slate-500 text-sm mt-1 font-mono tabular-nums">{formatDateTimeIST(event.timestamp)}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
             <X className="w-6 h-6" />
           </button>
         </div>
@@ -303,7 +303,7 @@ function EventDetailModal({
               event.action_taken === 'blocked' ? 'bg-red-100 border-red-300 text-red-700' :
               event.action_taken === 'alerted' ? 'bg-yellow-100 border-yellow-300 text-yellow-700' :
               event.action_taken === 'quarantined' || event.quarantined ? 'bg-blue-100 border-blue-300 text-blue-700' :
-              'bg-gray-100 border-gray-300 text-gray-700'
+              'bg-slate-100 border-slate-300 text-slate-700'
             }`}>
               {getActionIcon(event.action_taken || event.action || (event.quarantined ? 'quarantined' : 'logged'))}
               {event.action_taken || (event.quarantined ? 'quarantined' : event.action) || 'Logged'}
@@ -318,50 +318,50 @@ function EventDetailModal({
 
           {/* Activity Details Section - For OneDrive/Google Drive events */}
           {(event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && event.event_subtype && (
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200">
+            <div className="bg-primary-50 rounded-xl p-6 border border-primary-100">
               <div className="flex items-center gap-3 mb-4">
                 <div className={`p-2 rounded-lg ${getEventSubtypeColor(event.event_subtype)}`}>
                   {getEventSubtypeIcon(event.event_subtype)}
                 </div>
-                <label className="text-sm text-gray-700 uppercase font-semibold">Activity Details</label>
+                <label className="text-sm text-slate-700 uppercase font-semibold">Activity Details</label>
               </div>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-xs text-gray-600 mb-1 block">Action Performed</label>
+                    <label className="text-xs text-slate-600 mb-1 block">Action Performed</label>
                     <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${getEventSubtypeColor(event.event_subtype)}`}>
                       {getEventSubtypeIcon(event.event_subtype)}
                       {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
                     </div>
                   </div>
                   <div>
-                    <label className="text-xs text-gray-600 mb-1 block">Timestamp</label>
-                    <p className="text-gray-900 font-medium">{formatDateTimeIST(event.timestamp)}</p>
+                    <label className="text-xs text-slate-600 mb-1 block">Timestamp</label>
+                    <p className="text-slate-900 font-medium font-mono tabular-nums">{formatDateTimeIST(event.timestamp)}</p>
                   </div>
                 </div>
                 {event.user_email && event.user_email !== 'unknown@onedrive' && (
                   <div>
-                    <label className="text-xs text-gray-600 mb-1 block">Performed By</label>
-                    <p className="text-gray-900 font-medium">{event.user_email}</p>
+                    <label className="text-xs text-slate-600 mb-1 block">Performed By</label>
+                    <p className="text-slate-900 font-medium">{event.user_email}</p>
                   </div>
                 )}
                 {event.details?.change_type && (
                   <div>
-                    <label className="text-xs text-gray-600 mb-1 block">Change Type</label>
-                    <p className="text-gray-900 font-mono text-sm bg-white px-3 py-1.5 rounded border border-gray-300 inline-block">
+                    <label className="text-xs text-slate-600 mb-1 block">Change Type</label>
+                    <p className="text-slate-900 font-mono text-sm bg-white px-3 py-1.5 rounded border border-slate-300 inline-block">
                       {event.details.change_type}
                     </p>
                   </div>
                 )}
                 {/* Show additional context for moved/renamed files */}
                 {(event.event_subtype?.includes('moved') || event.event_subtype?.includes('renamed')) && event.details?.raw_delta_item && (
-                  <div className="bg-white rounded-lg p-4 border border-gray-200">
-                    <label className="text-xs text-gray-500 mb-2 block uppercase font-medium">Additional Context</label>
+                  <div className="bg-white rounded-lg p-4 border border-slate-200">
+                    <label className="text-xs text-slate-500 mb-2 block uppercase font-medium">Additional Context</label>
                     {event.details.raw_delta_item.parentReference && (
                       <div className="space-y-2">
                         <div>
-                          <span className="text-xs text-gray-600">Current Location: </span>
-                          <span className="text-gray-900 font-mono text-sm">{event.details.raw_delta_item.parentReference.path || 'Root'}</span>
+                          <span className="text-xs text-slate-600">Current Location: </span>
+                          <span className="text-slate-900 font-mono text-sm">{event.details.raw_delta_item.parentReference.path || 'Root'}</span>
                         </div>
                       </div>
                     )}
@@ -373,13 +373,13 @@ function EventDetailModal({
 
           {/* Clipboard Event - Show Clipboard Content */}
           {isClipboard && displayContent && (
-            <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
+            <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
               <div className="flex items-center gap-2 mb-4">
-                <Clipboard className="w-5 h-5 text-blue-600" />
-                <label className="text-sm text-gray-600 uppercase font-medium">Clipboard Content</label>
+                <Clipboard className="w-5 h-5 text-primary-600" />
+                <label className="text-sm text-slate-600 uppercase font-medium">Clipboard Content</label>
               </div>
-              <div className="bg-white rounded-lg p-4 border border-gray-200">
-                <p className="text-gray-900 font-mono text-sm whitespace-pre-wrap break-words">
+              <div className="bg-white rounded-lg p-4 border border-slate-200">
+                <p className="text-slate-900 font-mono text-sm whitespace-pre-wrap break-words">
                   {displayContent}
                 </p>
               </div>
@@ -390,39 +390,39 @@ function EventDetailModal({
           {isFile && (
             <>
               {/* File Information */}
-              <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
+              <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
                 <div className="flex items-center gap-2 mb-4">
-                  <File className="w-5 h-5 text-blue-600" />
-                  <label className="text-sm text-gray-600 uppercase font-medium">File Information</label>
+                  <File className="w-5 h-5 text-primary-600" />
+                  <label className="text-sm text-slate-600 uppercase font-medium">File Information</label>
                 </div>
                 <div className="space-y-3">
                   <div>
-                    <label className="text-xs text-gray-500 mb-1 block">File Name</label>
-                    <p className="text-gray-900 font-semibold text-lg">{fileName}</p>
+                    <label className="text-xs text-slate-500 mb-1 block">File Name</label>
+                    <p className="text-slate-900 font-semibold text-lg">{fileName}</p>
                   </div>
                   {event.file_path && (
                     <div>
-                      <label className="text-xs text-gray-500 mb-1 block">File Path</label>
-                      <p className="text-gray-900 font-mono text-sm break-all">{event.file_path}</p>
+                      <label className="text-xs text-slate-500 mb-1 block">File Path</label>
+                      <p className="text-slate-900 font-mono text-sm break-all">{event.file_path}</p>
                     </div>
                   )}
                   <div className="grid grid-cols-3 gap-4">
                     {fileSize && (
                       <div>
-                        <label className="text-xs text-gray-500 mb-1 block">Size</label>
-                        <p className="text-gray-900 font-medium">{fileSize}</p>
+                        <label className="text-xs text-slate-500 mb-1 block">Size</label>
+                        <p className="text-slate-900 font-medium font-mono tabular-nums">{fileSize}</p>
                       </div>
                     )}
                     {fileExtension && (
                       <div>
-                        <label className="text-xs text-gray-500 mb-1 block">Extension</label>
-                        <p className="text-gray-900 font-medium">.{fileExtension}</p>
+                        <label className="text-xs text-slate-500 mb-1 block">Extension</label>
+                        <p className="text-slate-900 font-medium">.{fileExtension}</p>
                       </div>
                     )}
                     {event.file_hash && (
                       <div>
-                        <label className="text-xs text-gray-500 mb-1 block">Hash (SHA256)</label>
-                        <p className="text-gray-900 font-mono text-xs break-all" title={event.file_hash}>
+                        <label className="text-xs text-slate-500 mb-1 block">Hash (SHA256)</label>
+                        <p className="text-slate-900 font-mono text-xs break-all" title={event.file_hash}>
                           {event.file_hash.substring(0, 16)}...
                         </p>
                       </div>
@@ -446,13 +446,13 @@ function EventDetailModal({
 
               {/* File Content Snippet */}
               {displayContent && (
-                <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
+                <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
                   <div className="flex items-center gap-2 mb-4">
-                    <Eye className="w-5 h-5 text-purple-600" />
-                    <label className="text-sm text-gray-600 uppercase font-medium">Content That Triggered Violation</label>
+                    <Eye className="w-5 h-5 text-primary-600" />
+                    <label className="text-sm text-slate-600 uppercase font-medium">Content That Triggered Violation</label>
                   </div>
-                  <div className="bg-white rounded-lg p-4 border border-gray-200 max-h-64 overflow-y-auto">
-                    <pre className="text-gray-900 font-mono text-xs whitespace-pre-wrap break-words">
+                  <div className="bg-white rounded-lg p-4 border border-slate-200 max-h-64 overflow-y-auto">
+                    <pre className="text-slate-900 font-mono text-xs whitespace-pre-wrap break-words">
                       {displayContent.length > 2000 ? displayContent.substring(0, 2000) + '\n\n... (truncated)' : displayContent}
                     </pre>
                   </div>
@@ -463,15 +463,15 @@ function EventDetailModal({
 
           {/* Classification Level and Confidence Score */}
           {(event.classification_level || event.classification_score) && (
-            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl p-6 border border-purple-200">
+            <div className="bg-primary-50 rounded-xl p-6 border border-primary-100">
               <div className="flex items-center gap-2 mb-4">
-                <Shield className="w-5 h-5 text-purple-600" />
-                <label className="text-sm text-gray-700 uppercase font-semibold">Classification Result</label>
+                <Shield className="w-5 h-5 text-primary-600" />
+                <label className="text-sm text-slate-700 uppercase font-semibold">Classification Result</label>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 {event.classification_level && (
                   <div>
-                    <label className="text-xs text-gray-600 mb-1 block">Classification Level</label>
+                    <label className="text-xs text-slate-600 mb-1 block">Classification Level</label>
                     <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-base font-bold ${
                       event.classification_level === 'Restricted' ? 'bg-red-100 border-red-300 text-red-700' :
                       event.classification_level === 'Confidential' ? 'bg-orange-100 border-orange-300 text-orange-700' :
@@ -484,8 +484,8 @@ function EventDetailModal({
                 )}
                 {event.classification_score != null && event.classification_score > 0 && (
                   <div>
-                    <label className="text-xs text-gray-600 mb-1 block">Confidence Score</label>
-                    <p className="text-2xl font-bold text-gray-900">
+                    <label className="text-xs text-slate-600 mb-1 block">Confidence Score</label>
+                    <p className="font-mono text-2xl font-semibold tabular-nums text-slate-900">
                       {Math.round(event.classification_score * 100)}%
                     </p>
                   </div>
@@ -496,10 +496,10 @@ function EventDetailModal({
 
           {/* Classification Labels - What Was Detected */}
           {classificationLabels.length > 0 && (
-            <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
+            <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
               <div className="flex items-center gap-2 mb-4">
                 <AlertTriangle className="w-5 h-5 text-yellow-600" />
-                <label className="text-sm text-gray-600 uppercase font-medium">Detected Sensitive Data</label>
+                <label className="text-sm text-slate-600 uppercase font-medium">Detected Sensitive Data</label>
               </div>
               <div className="flex flex-wrap gap-2">
                 {classificationLabels.map((label: string, idx: number) => {
@@ -521,22 +521,22 @@ function EventDetailModal({
 
           {/* Matched Policies */}
           {matchedPolicies.length > 0 && (
-            <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
+            <div className="bg-slate-50 rounded-xl p-6 border border-slate-200">
               <div className="flex items-center gap-2 mb-4">
-                <Shield className="w-5 h-5 text-indigo-600" />
-                <label className="text-sm text-gray-600 uppercase font-medium">Matched Policies</label>
+                <Shield className="w-5 h-5 text-primary-600" />
+                <label className="text-sm text-slate-600 uppercase font-medium">Matched Policies</label>
               </div>
               <div className="space-y-3">
                 {matchedPolicies.map((policy: any, idx: number) => (
-                  <div key={idx} className="bg-white rounded-lg p-4 border border-gray-200">
+                  <div key={idx} className="bg-white rounded-lg p-4 border border-slate-200">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <p className="text-gray-900 font-semibold">{policy.policy_name || 'Unknown Policy'}</p>
+                        <p className="text-slate-900 font-semibold">{policy.policy_name || 'Unknown Policy'}</p>
                         {policy.matched_rules && policy.matched_rules.length > 0 && (
                           <div className="mt-2 space-y-1">
-                            <p className="text-xs text-gray-500">Matched Rules:</p>
+                            <p className="text-xs text-slate-500">Matched Rules:</p>
                             {policy.matched_rules.map((rule: any, ruleIdx: number) => (
-                              <p key={ruleIdx} className="text-xs text-gray-600 font-mono ml-2">
+                              <p key={ruleIdx} className="text-xs text-slate-600 font-mono ml-2">
                                 • {rule.field} {rule.operator} {Array.isArray(rule.value) ? rule.value.join(', ') : rule.value}
                               </p>
                             ))}
@@ -552,7 +552,7 @@ function EventDetailModal({
                           {policy.severity}
                         </span>
                         {policy.priority && (
-                          <span className="text-xs text-gray-500">Priority: {policy.priority}</span>
+                          <span className="text-xs text-slate-500">Priority: <span className="num">{policy.priority}</span></span>
                         )}
                       </div>
                     </div>
@@ -564,8 +564,8 @@ function EventDetailModal({
 
           {/* Content Changes (file_modified diff) */}
           {Array.isArray(event.content_changes) && event.content_changes.length > 0 && (
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
-              <div className="bg-gray-100 px-4 py-2 flex items-center justify-between text-xs text-gray-700">
+            <div className="border border-slate-200 rounded-lg overflow-hidden">
+              <div className="bg-slate-100 px-4 py-2 flex items-center justify-between text-xs text-slate-700">
                 <span className="font-semibold uppercase tracking-wide">Content Changes</span>
                 <span>
                   <span className="text-emerald-700">+{event.lines_added ?? 0}</span>
@@ -582,11 +582,11 @@ function EventDetailModal({
                   return (
                     <div
                       key={idx}
-                      className={`px-3 py-1 flex gap-3 border-b border-gray-100 ${
+                      className={`px-3 py-1 flex gap-3 border-b border-slate-100 ${
                         isAdd ? 'bg-emerald-50' : 'bg-rose-50'
                       }`}
                     >
-                      <span className="text-gray-500 w-12 shrink-0 text-right select-none">
+                      <span className="text-slate-500 w-12 shrink-0 text-right select-none">
                         {c.line ?? ''}
                       </span>
                       <span className={`w-3 shrink-0 ${isAdd ? 'text-emerald-700' : 'text-rose-700'}`}>
@@ -606,25 +606,25 @@ function EventDetailModal({
 
           {/* Standard Event Details Grid */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-              <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Event Type</label>
-              <p className="text-gray-900 font-medium capitalize">
+            <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+              <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">Event Type</label>
+              <p className="text-slate-900 font-medium capitalize">
                 {event.event_subtype ? event.event_subtype.replace(/_/g, ' ') : event.event_type}
               </p>
             </div>
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-              <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">User</label>
-              <p className="text-gray-900 font-medium">{event.user_email}</p>
+            <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+              <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">User</label>
+              <p className="text-slate-900 font-medium">{event.user_email}</p>
             </div>
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-              <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Agent</label>
-              <p className="text-gray-900 font-medium" title={event.agent_id}>
+            <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+              <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">Agent</label>
+              <p className="text-slate-900 font-medium" title={event.agent_id}>
                 {agentLabel}
               </p>
             </div>
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-              <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Description</label>
-              <p className="text-gray-900 font-medium text-sm">{event.description || 'N/A'}</p>
+            <div className="bg-slate-50 rounded-lg p-4 border border-slate-200">
+              <label className="text-xs text-slate-600 uppercase font-medium mb-1 block">Description</label>
+              <p className="text-slate-900 font-medium text-sm">{event.description || 'N/A'}</p>
             </div>
           </div>
 
@@ -632,12 +632,12 @@ function EventDetailModal({
           {event.event_type?.toLowerCase() === 'usb' &&
             (event.device_name || event.product_name || event.serial_number ||
              event.volume_label || event.manufacturer || event.vendor_id) && (
-            <div className="rounded-lg border border-gray-200 overflow-hidden">
-              <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 border-b border-gray-200">
-                <Usb className="w-4 h-4 text-gray-600" />
-                <span className="text-xs font-semibold text-gray-700 uppercase tracking-wide">USB Device Details</span>
+            <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 border-b border-slate-200">
+                <Usb className="w-4 h-4 text-slate-500" />
+                <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">USB Device Details</span>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-px bg-gray-200">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-px bg-slate-200">
                 {[
                   ['Device', event.product_name || event.device_name],
                   ['Manufacturer', event.manufacturer],
@@ -653,8 +653,8 @@ function EventDetailModal({
                   .filter(([, v]) => v)
                   .map(([label, value]) => (
                     <div key={label as string} className="bg-white p-3">
-                      <label className="text-[11px] text-gray-500 uppercase font-medium mb-0.5 block">{label}</label>
-                      <p className="text-gray-900 text-sm font-medium break-words">{value}</p>
+                      <label className="text-[11px] text-slate-500 uppercase font-medium mb-0.5 block">{label}</label>
+                      <p className="text-slate-900 text-sm font-medium break-words">{value}</p>
                     </div>
                   ))}
               </div>
@@ -662,17 +662,17 @@ function EventDetailModal({
           )}
 
           {/* Raw JSON Data (Expandable) */}
-          <div className="border-t border-gray-200 pt-4">
+          <div className="border-t border-slate-200 pt-4">
             <button
               onClick={() => setShowRawData(!showRawData)}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors w-full"
+              className="flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors w-full"
             >
               {showRawData ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
               <span className="text-sm font-medium">View Raw Event Data</span>
             </button>
             {showRawData && (
-              <div className="mt-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <pre className="text-xs text-gray-700 overflow-x-auto">
+              <div className="mt-4 bg-slate-50 rounded-lg p-4 border border-slate-200">
+                <pre className="text-xs text-slate-700 overflow-x-auto">
                   {JSON.stringify(event, null, 2)}
                 </pre>
               </div>
@@ -824,7 +824,7 @@ export default function Events() {
     if (normalized.includes('deleted')) return 'text-red-600 bg-red-50 border-red-200'
     if (normalized.includes('moved') || normalized.includes('renamed')) return 'text-orange-600 bg-orange-50 border-orange-200'
     if (normalized.includes('copied')) return 'text-purple-600 bg-purple-50 border-purple-200'
-    return 'text-gray-600 bg-gray-50 border-gray-200'
+    return 'text-slate-600 bg-slate-50 border-slate-200'
   }
 
   const getEventSubtypeLabel = (subtype: string, changeType?: string) => {
@@ -1029,25 +1029,26 @@ export default function Events() {
     <div className="space-y-6">
       {/* Page Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Events</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <p className="eyebrow mb-1.5">Monitoring</p>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Events</h1>
+        <p className="mt-1 text-sm text-slate-600">
           Search and analyze DLP events by keyword
         </p>
       </div>
 
       {/* Active dashboard drill-down filters */}
       {activeDashboardFilters.length > 0 && (
-        <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+        <div className="bg-primary-50 border border-primary-200 rounded-xl px-4 py-3 flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-indigo-900 font-medium">
+            <span className="text-sm text-primary-900 font-medium">
               Drill-down from dashboard:
             </span>
             {activeDashboardFilters.map(([k, v]) => (
               <span
                 key={k}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-indigo-200 text-xs font-medium text-indigo-800"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white border border-primary-200 text-xs font-medium text-primary-800"
               >
-                {k}=<span className="font-mono">{v}</span>
+                {k}=<span className="font-mono tabular-nums">{v}</span>
               </span>
             ))}
           </div>
@@ -1057,7 +1058,7 @@ export default function Events() {
               for (const [k] of activeDashboardFilters) next.delete(k)
               setSearchParams(next, { replace: true })
             }}
-            className="text-xs text-indigo-700 hover:text-indigo-900 hover:underline font-medium"
+            className="text-xs text-primary-700 hover:text-primary-900 hover:underline font-medium"
           >
             Clear filters
           </button>
@@ -1068,7 +1069,7 @@ export default function Events() {
       <div className="card">
         <div className="flex gap-3">
           <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
             <input
               type="text"
               placeholder='Search events (e.g., usb, clipboard, google drive, block, etc.)'
@@ -1092,8 +1093,8 @@ export default function Events() {
 
         {/* Quick Filters */}
         {showFilters && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <p className="text-sm font-medium text-gray-700 mb-2">
+          <div className="mt-4 pt-4 border-t border-slate-200">
+            <p className="text-sm font-medium text-slate-700 mb-2">
               Quick Filters:
             </p>
             <div className="flex flex-wrap gap-2">
@@ -1104,7 +1105,7 @@ export default function Events() {
                     setKqlQuery(filter.query)
                     setActiveQuery(filter.query)
                   }}
-                  className="px-3 py-1 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  className="px-3 py-1 text-sm border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors"
                 >
                   {filter.label}
                 </button>
@@ -1114,8 +1115,8 @@ export default function Events() {
         )}
 
         {/* KQL Help */}
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <p className="text-xs text-gray-600">
+        <div className="mt-4 pt-4 border-t border-slate-200">
+          <p className="text-xs text-slate-600">
             <strong>KQL Examples:</strong> field:value, field:"exact value",
             field:* (wildcard), field:(value1 OR value2), field &gt; 100, NOT field:value
           </p>
@@ -1125,14 +1126,14 @@ export default function Events() {
       {/* Results */}
       <div className="card p-0">
         {/* Results Header */}
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between gap-4 flex-wrap">
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h3 className="font-semibold text-gray-900">Search Results</h3>
-            <p className="text-sm text-gray-600 mt-1">
-              {total.toLocaleString()} events found
+            <h3 className="section-title">Search Results</h3>
+            <p className="text-sm text-slate-600 mt-1">
+              <span className="num">{total.toLocaleString()}</span> events found
               {activeQuery && (
                 <span className="ml-2">
-                  for query: <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">{activeQuery}</code>
+                  for query: <code className="text-xs font-mono bg-slate-100 px-1 py-0.5 rounded">{activeQuery}</code>
                 </span>
               )}
             </p>
@@ -1140,7 +1141,7 @@ export default function Events() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleManualRefresh}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={isRefreshing}
             >
               {isRefreshing ? (
@@ -1152,7 +1153,7 @@ export default function Events() {
             </button>
             <button
               onClick={handleClearLogs}
-              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn-danger disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={events.length === 0}
             >
               <Trash2 className="w-4 h-4" />
@@ -1162,7 +1163,7 @@ export default function Events() {
         </div>
 
         {/* Results List */}
-        <div className="divide-y divide-gray-200">
+        <div className="divide-y divide-slate-200">
           {isLoading ? (
             <LoadingSpinner />
           ) : error ? (
@@ -1171,9 +1172,9 @@ export default function Events() {
             </div>
           ) : events.length === 0 ? (
             <div className="p-12 text-center">
-              <FileText className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-              <p className="text-gray-600 font-medium">No events found</p>
-              <p className="text-sm text-gray-500 mt-1">
+              <FileText className="h-12 w-12 text-slate-400 mx-auto mb-3" />
+              <p className="text-slate-600 font-medium">No events found</p>
+              <p className="text-sm text-slate-500 mt-1">
                 Try adjusting your search query
               </p>
             </div>
@@ -1181,7 +1182,7 @@ export default function Events() {
             events.map((event) => (
               <div
                 key={event.id || event.event_id}
-                className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                className="p-4 hover:bg-slate-50 cursor-pointer transition-colors"
                 onClick={() => setSelectedEvent(event)}
               >
                 <div className="flex items-start gap-4">
@@ -1199,11 +1200,11 @@ export default function Events() {
                     )}
                   >
                     {event.event_type === 'file' ? (
-                      <FileText className="h-5 w-5 text-gray-700" />
+                      <FileText className="h-5 w-5 text-slate-700" />
                     ) : event.event_type === 'usb' ? (
-                      <Shield className="h-5 w-5 text-gray-700" />
+                      <Shield className="h-5 w-5 text-slate-700" />
                     ) : (
-                      <AlertTriangle className="h-5 w-5 text-gray-700" />
+                      <AlertTriangle className="h-5 w-5 text-slate-700" />
                     )}
                   </div>
 
@@ -1211,7 +1212,7 @@ export default function Events() {
                   <div className="flex-1 min-w-0">
                     {/* Event Title */}
                     {event.title && (
-                      <h4 className="font-semibold text-gray-900 mb-2 text-base">
+                      <h4 className="font-semibold text-slate-900 mb-2 text-base">
                         {event.title}
                       </h4>
                     )}
@@ -1239,30 +1240,30 @@ export default function Events() {
                         <span className="badge badge-danger">blocked</span>
                       )}
                       {event.classification_labels && event.classification_labels.length > 0 && (
-                        <span className="badge bg-purple-100 text-purple-800">
+                        <span className="badge bg-purple-50 text-purple-700 ring-purple-600/20">
                           {event.classification_labels[0]}
                         </span>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-3 text-sm text-gray-600">
+                    <div className="flex items-center gap-3 text-sm text-slate-600">
                       <span>
-                        <span className="text-gray-500">Agent:</span>{' '}
-                        <span className="font-medium text-gray-900" title={event.agent_id}>
+                        <span className="text-slate-500">Agent:</span>{' '}
+                        <span className="font-medium text-slate-900" title={event.agent_id}>
                           {getEventAgentLabel(event)}
                         </span>
                       </span>
-                      <span className="text-gray-400">•</span>
-                      <span>{formatDate(event.timestamp, 'PPpp')}</span>
-                      <span className="text-gray-400">•</span>
-                      <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">
+                      <span className="text-slate-400">•</span>
+                      <span className="font-mono tabular-nums">{formatDate(event.timestamp, 'PPpp')}</span>
+                      <span className="text-slate-400">•</span>
+                      <code className="text-xs font-mono bg-slate-100 px-1 py-0.5 rounded">
                         {event.id || event.event_id}
                       </code>
                     </div>
 
                     {/* Event Details */}
                     {event.file_path && (
-                      <p className="mt-2 text-sm text-gray-700">
+                      <p className="mt-2 text-sm text-slate-700">
                         <strong>File:</strong>{' '}
                         {(event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && event.event_subtype ? (
                           <>
@@ -1284,7 +1285,7 @@ export default function Events() {
                             .map((name: string) => (
                               <span
                                 key={`${event.id}-policy-${name}`}
-                                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-indigo-100 text-indigo-800"
+                                className="inline-flex items-center px-2 py-1 text-xs font-medium rounded-full bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-600/20"
                               >
                                 {name}
                               </span>
@@ -1293,21 +1294,21 @@ export default function Events() {
                       )}
 
                     {event.usb && (
-                      <p className="mt-2 text-sm text-gray-700">
+                      <p className="mt-2 text-sm text-slate-700">
                         <strong>USB:</strong> {event.usb.vendor} {event.usb.product}
                         {event.usb.serial && ` (${event.usb.serial})`}
                       </p>
                     )}
 
                     {event.policy && (
-                      <p className="mt-2 text-sm text-gray-700">
+                      <p className="mt-2 text-sm text-slate-700">
                         <strong>Policy:</strong> {event.policy.policy_name} (
                         {event.policy.action})
                       </p>
                     )}
 
                     {event.content_redacted && (
-                      <div className="mt-2 p-2 bg-gray-100 rounded text-xs font-mono">
+                      <div className="mt-2 p-2 bg-slate-100 rounded text-xs font-mono">
                         {truncate(event.content_redacted, 200)}
                       </div>
                     )}

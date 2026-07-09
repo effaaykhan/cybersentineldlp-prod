@@ -78,60 +78,61 @@ export default function LoginForm() {
 
   const isChangePassword = mode === 'changePassword'
 
-  const eyeButtonClass = "absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-gray-400 hover:text-gray-200 transition-colors"
+  const eyeButtonClass = "absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-slate-400 hover:text-slate-600 transition-colors"
+  const fieldClass = "block w-full pl-10 pr-3 py-2.5 text-sm bg-white border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500 transition-shadow disabled:bg-slate-50"
 
   return (
     <div className="w-full max-w-md">
-      <div className="bg-gray-800/50 backdrop-blur-xl rounded-3xl shadow-2xl p-8 border border-gray-700/50">
+      <div className="bg-white rounded-2xl shadow-card-hover p-8 border border-slate-200">
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-2xl mb-4 shadow-lg transform hover:scale-105 transition-transform">
+          <div className="inline-flex items-center justify-center w-14 h-14 bg-primary-600 rounded-xl mb-4 shadow-sm">
             {isChangePassword ? (
-              <KeyRound className="w-10 h-10 text-white" />
+              <KeyRound className="w-7 h-7 text-white" />
             ) : (
-              <Shield className="w-10 h-10 text-white" />
+              <Shield className="w-7 h-7 text-white" />
             )}
           </div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">CyberSentinel DLP</h1>
-          <p className="text-gray-200 mt-3 font-medium">
-            {isChangePassword ? 'Change Your Password' : 'Enterprise Data Loss Prevention'}
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">CyberSentinel DLP</h1>
+          <p className="text-slate-500 mt-1.5 text-sm">
+            {isChangePassword ? 'Change your password' : 'Enterprise Data Loss Prevention'}
           </p>
         </div>
 
         {/* Success Alert */}
         {success && (
-          <div className="mb-6 p-4 bg-green-900/30 border border-green-500/50 rounded-lg flex items-start gap-3">
-            <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+          <div className="mb-6 p-4 bg-success-50 border border-success-200 rounded-lg flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 text-success-600 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h3 className="text-sm font-medium text-green-300">Success</h3>
-              <p className="text-sm text-green-200 mt-1">{success}</p>
+              <h3 className="text-sm font-medium text-success-800">Success</h3>
+              <p className="text-sm text-success-700 mt-1">{success}</p>
             </div>
           </div>
         )}
 
         {/* Error Alert */}
         {error && (
-          <div className="mb-6 p-4 bg-red-900/30 border border-red-500/50 rounded-lg flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+          <div className="mb-6 p-4 bg-danger-50 border border-danger-200 rounded-lg flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-danger-600 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h3 className="text-sm font-medium text-red-300">
-                {isChangePassword ? 'Password Change Failed' : 'Authentication Failed'}
+              <h3 className="text-sm font-medium text-danger-800">
+                {isChangePassword ? 'Password change failed' : 'Authentication failed'}
               </h3>
-              <p className="text-sm text-red-200 mt-1">{error}</p>
+              <p className="text-sm text-danger-700 mt-1">{error}</p>
             </div>
           </div>
         )}
 
         {/* Form */}
-        <form onSubmit={isChangePassword ? handleChangePassword : handleLogin} className="space-y-6">
+        <form onSubmit={isChangePassword ? handleChangePassword : handleLogin} className="space-y-5">
           {/* Username Field */}
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-200 mb-2">
+            <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
               Username
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Mail className="h-5 w-5 text-gray-400" />
+                <Mail className="h-4 w-4 text-slate-400" />
               </div>
               <input
                 id="email"
@@ -139,7 +140,7 @@ export default function LoginForm() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="block w-full pl-10 pr-3 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
+                className={fieldClass}
                 placeholder="admin"
                 disabled={loading}
               />
@@ -148,12 +149,12 @@ export default function LoginForm() {
 
           {/* Current Password Field */}
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-200 mb-2">
-              {isChangePassword ? 'Current Password' : 'Password'}
+            <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1.5">
+              {isChangePassword ? 'Current password' : 'Password'}
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                <Lock className="h-5 w-5 text-gray-400" />
+                <Lock className="h-4 w-4 text-slate-400" />
               </div>
               <input
                 id="password"
@@ -161,7 +162,7 @@ export default function LoginForm() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="block w-full pl-10 pr-10 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
+                className={`${fieldClass} pr-10`}
                 placeholder={isChangePassword ? 'Enter current password' : 'Enter your password'}
                 disabled={loading}
               />
@@ -171,7 +172,7 @@ export default function LoginForm() {
                 className={eyeButtonClass}
                 tabIndex={-1}
               >
-                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
           </div>
@@ -180,12 +181,12 @@ export default function LoginForm() {
           {isChangePassword && (
             <>
               <div>
-                <label htmlFor="newPassword" className="block text-sm font-medium text-gray-200 mb-2">
-                  New Password
+                <label htmlFor="newPassword" className="block text-sm font-medium text-slate-700 mb-1.5">
+                  New password
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <KeyRound className="h-5 w-5 text-gray-400" />
+                    <KeyRound className="h-4 w-4 text-slate-400" />
                   </div>
                   <input
                     id="newPassword"
@@ -193,7 +194,7 @@ export default function LoginForm() {
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     required
-                    className="block w-full pl-10 pr-10 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
+                    className={`${fieldClass} pr-10`}
                     placeholder="Enter new password"
                     disabled={loading}
                   />
@@ -203,18 +204,18 @@ export default function LoginForm() {
                     className={eyeButtonClass}
                     tabIndex={-1}
                   >
-                    {showNewPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
 
               <div>
-                <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-200 mb-2">
-                  Confirm New Password
+                <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Confirm new password
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <KeyRound className="h-5 w-5 text-gray-400" />
+                    <KeyRound className="h-4 w-4 text-slate-400" />
                   </div>
                   <input
                     id="confirmPassword"
@@ -222,7 +223,7 @@ export default function LoginForm() {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     required
-                    className="block w-full pl-10 pr-10 py-3 border-2 border-gray-600 rounded-xl focus:ring-4 focus:ring-purple-500/50 focus:border-purple-500 transition-all bg-gray-900/50 text-white placeholder-gray-400"
+                    className={`${fieldClass} pr-10`}
                     placeholder="Confirm new password"
                     disabled={loading}
                   />
@@ -232,12 +233,12 @@ export default function LoginForm() {
                     className={eyeButtonClass}
                     tabIndex={-1}
                   >
-                    {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
               </div>
 
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-slate-500">
                 Password must be at least 7 characters with uppercase, lowercase, digit, and special character.
               </p>
             </>
@@ -247,7 +248,7 @@ export default function LoginForm() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-bold py-3.5 px-4 rounded-xl hover:from-indigo-700 hover:via-purple-700 hover:to-pink-700 focus:outline-none focus:ring-4 focus:ring-purple-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:scale-[1.02]"
+            className="btn-primary w-full py-2.5 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {loading ? (
               <span className="flex items-center justify-center">
@@ -255,10 +256,10 @@ export default function LoginForm() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                {isChangePassword ? 'Changing Password...' : 'Signing in...'}
+                {isChangePassword ? 'Changing password…' : 'Signing in…'}
               </span>
             ) : (
-              isChangePassword ? 'Change Password' : 'Sign In'
+              isChangePassword ? 'Change password' : 'Sign in'
             )}
           </button>
         </form>
@@ -268,29 +269,29 @@ export default function LoginForm() {
           {isChangePassword ? (
             <button
               onClick={() => switchMode('login')}
-              className="text-sm text-purple-400 hover:text-purple-300 transition-colors"
+              className="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
             >
-              Back to Sign In
+              Back to sign in
             </button>
           ) : (
             <button
               onClick={() => switchMode('changePassword')}
-              className="text-sm text-purple-400 hover:text-purple-300 transition-colors"
+              className="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors"
             >
-              Change Password
+              Change password
             </button>
           )}
         </div>
 
         {/* Footer */}
-        <div className="mt-4 text-center text-sm text-gray-300">
+        <div className="mt-5 pt-5 border-t border-slate-100 text-center text-xs text-slate-500">
           <p>Secure access to your organization's DLP platform</p>
         </div>
       </div>
 
       {/* Version Info */}
-      <div className="mt-4 text-center text-sm text-gray-400">
-        <p>Version 1.0.0 | Enterprise Edition</p>
+      <div className="mt-4 text-center text-xs text-slate-400">
+        <p>Version <span className="num">1.0.0</span> · Enterprise Edition</p>
       </div>
     </div>
   )

@@ -4,7 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './index.css'
-import './styles/obsidian-vault.css'
+// NOTE: the legacy dark "Obsidian Vault" override (styles/obsidian-vault.css)
+// is intentionally no longer imported — the refined light theme in index.css
+// is now the single source of truth. Re-add it only to return to dark mode.
 
 // Create a client
 const queryClient = new QueryClient({

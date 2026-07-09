@@ -4,10 +4,18 @@
 
 @layer base {
   * {
-    @apply border-gray-200;
+    @apply border-slate-200;
+  }
+  html {
+    @apply font-sans;
   }
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply bg-canvas text-slate-900 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  /* Headings read a touch tighter for a more engineered feel. */
+  h1, h2, h3 {
+    @apply tracking-tight;
   }
 }
 
@@ -30,70 +38,65 @@
     @apply bg-gray-400;
   }
 
-  /* Card component (legacy — used by older pages). */
+  /* ── Surfaces ─────────────────────────────────────────────────────
+     Precision over softness: crisp white, a single hairline border, a
+     low-contrast shadow, consistent 12px radius. No gradient fills, no
+     blur blobs, no hover-lift bounce. */
   .card {
-    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+    @apply bg-white rounded-xl border border-slate-200 shadow-card p-6;
   }
 
-  /* ── Modern dashboard cards (PART 2) ──────────────────────────────
-     Soft shadow, rounded-2xl, subtle gradient surface, hover lift.
-     The transition is intentionally short so the UI feels responsive
-     instead of bouncy. */
+  /* Interactive card — same surface, gains elevation + a warmer border on
+     hover. Short transition so it feels responsive, not bouncy. */
   .card-modern {
-    @apply bg-gradient-to-br from-white to-gray-50/60
-           border border-gray-200/70 rounded-2xl
-           shadow-sm hover:shadow-xl
-           transition-all duration-200 ease-out
-           hover:-translate-y-0.5
-           p-6;
+    @apply bg-white border border-slate-200 rounded-xl shadow-card
+           hover:shadow-card-hover hover:border-slate-300
+           transition-shadow duration-200 ease-out p-6;
   }
 
-  /* Same surface, no hover lift (use on chart cards where the chart
-     itself is the interactive element). */
+  /* Static surface for chart/data cards (the content is the interaction). */
   .card-static {
-    @apply bg-gradient-to-br from-white to-gray-50/60
-           border border-gray-200/70 rounded-2xl
-           shadow-sm p-6;
+    @apply bg-white border border-slate-200 rounded-xl shadow-card p-6;
   }
 
-  /* Metric value: large, bold, inherits gradient color via parent's
-     .text-gradient-* utility. */
+  /* Metric value — large, tight, always monospace tabular so digits align
+     column-to-column like an instrument readout. */
   .metric-value {
-    @apply text-4xl font-bold tracking-tight tabular-nums;
+    @apply font-mono text-[2rem] leading-none font-semibold tracking-tight
+           tabular-nums text-slate-900;
   }
 
   .metric-label {
-    @apply text-xs font-semibold text-gray-500 uppercase tracking-wider;
+    @apply text-[11px] font-semibold text-slate-500 uppercase tracking-[0.08em];
+  }
+
+  /* Eyebrow / section label — reusable uppercase micro-label. */
+  .eyebrow {
+    @apply text-[11px] font-semibold text-slate-500 uppercase tracking-[0.1em];
   }
 
   .section-title {
-    @apply text-base font-semibold text-gray-900;
+    @apply text-[15px] font-semibold text-slate-900;
   }
 
-  /* Semantic gradient text utilities. Used on metric values to push
-     visual hierarchy without leaning on a giant accent color block. */
-  .text-gradient-indigo {
-    @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-indigo-600 to-blue-600;
+  /* Any quantitative data: numbers, ids, timestamps, counts, hashes. */
+  .num {
+    @apply font-mono tabular-nums;
   }
-  .text-gradient-red {
-    @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-red-600 to-rose-600;
-  }
-  .text-gradient-orange {
-    @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-orange-600 to-amber-600;
-  }
+
+  /* Gradient text kept for backward-compat, but flattened to solid ink so
+     older markup stops shouting. The accent now lives on icons/labels. */
+  .text-gradient-indigo,
+  .text-gradient-red,
+  .text-gradient-orange,
   .text-gradient-green {
-    @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-green-600 to-emerald-600;
+    @apply bg-none text-slate-900;
+    -webkit-text-fill-color: currentColor;
   }
 
-  /* Decorative blob in the top-right corner of metric cards — adds depth
-     without being noisy. Pair with relative + overflow-hidden parent. */
+  /* Decorative blur blob — neutralised (the refined look drops them). */
   .stats-blob {
-    @apply absolute -top-8 -right-8 h-32 w-32 rounded-full
-           opacity-30 blur-2xl pointer-events-none;
+    @apply hidden;
   }
 
   /* Live indicator (animated pulse) for "data refreshing" UI. */
@@ -105,64 +108,98 @@
     @apply absolute inset-0 rounded-full bg-emerald-500 animate-ping opacity-60;
   }
 
-  /* Button variants */
+  /* ── Buttons ──────────────────────────────────────────────────────
+     Primary = solid indigo. Secondary = quiet outline (not a gray fill).
+     Focus is a visible indigo ring for keyboard users. */
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200 inline-flex items-center justify-center gap-2;
+    @apply px-3.5 py-2 rounded-lg text-sm font-medium transition-colors duration-150
+           inline-flex items-center justify-center gap-2
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-1;
   }
 
   .btn-primary {
-    @apply btn bg-primary-600 text-white hover:bg-primary-700 active:bg-primary-800;
+    @apply btn bg-primary-600 text-white hover:bg-primary-700 active:bg-primary-800 shadow-sm;
   }
 
   .btn-secondary {
-    @apply btn bg-gray-200 text-gray-700 hover:bg-gray-300 active:bg-gray-400;
+    @apply btn bg-white text-slate-700 border border-slate-200
+           hover:bg-slate-50 hover:border-slate-300 active:bg-slate-100;
   }
 
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700 active:bg-red-800;
+    @apply btn bg-danger-600 text-white hover:bg-danger-700 active:bg-danger-800 shadow-sm;
   }
 
-  /* Badge component */
+  /* ── Badges — soft tinted chips with a hairline ring ──────────────── */
   .badge {
-    @apply px-2 py-1 text-xs font-medium rounded-full inline-flex items-center gap-1;
+    @apply px-2 py-0.5 text-xs font-medium rounded-full inline-flex items-center gap-1 ring-1 ring-inset;
   }
 
   .badge-success {
-    @apply badge bg-green-100 text-green-800;
+    @apply badge bg-success-50 text-success-700 ring-success-600/20;
   }
 
   .badge-danger {
-    @apply badge bg-red-100 text-red-800;
+    @apply badge bg-danger-50 text-danger-700 ring-danger-600/20;
   }
 
   .badge-warning {
-    @apply badge bg-yellow-100 text-yellow-800;
+    @apply badge bg-warning-50 text-warning-700 ring-warning-600/20;
   }
 
   .badge-info {
-    @apply badge bg-blue-100 text-blue-800;
+    @apply badge bg-primary-50 text-primary-700 ring-primary-600/20;
   }
 
-  /* Input styling */
+  /* ── Inputs ───────────────────────────────────────────────────────── */
   .input {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg
+           placeholder:text-slate-400
+           focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500;
   }
 
-  /* Table styling */
+  /* ── Tables ───────────────────────────────────────────────────────── */
   .table {
     @apply w-full border-collapse;
   }
 
   .table th {
-    @apply px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50 border-b border-gray-200;
+    @apply px-4 py-3 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-[0.06em]
+           bg-slate-50/80 border-b border-slate-200;
   }
 
   .table td {
-    @apply px-4 py-4 text-sm text-gray-900 border-b border-gray-200;
+    @apply px-4 py-3.5 text-sm text-slate-700 border-b border-slate-100;
   }
 
-  .table tr:hover {
-    @apply bg-gray-50;
+  .table tr:hover td {
+    @apply bg-slate-50/70;
+  }
+
+  /* Numeric / identifier cells in tables read as telemetry. */
+  .table td .num,
+  .table .num {
+    @apply text-slate-900;
+  }
+
+  /* ── Footer brand strip ───────────────────────────────────────────
+     Preserved from the retired dark-theme stylesheet so the branded
+     footer keeps its look. The footer is a deliberately dark strip
+     (like the sidebar) that anchors the light app. */
+  .brand-footer-bg {
+    background-image: linear-gradient(90deg, #15171a 0%, #1c1f23 50%, #15171a 100%);
+    background-color: #15171a;
+  }
+  .brand-gradient-text {
+    background-image: linear-gradient(90deg, #ffffff 0%, #c7d2fe 50%, #ffffff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  .brand-card-light {
+    background-color: #373754;
+    background-image: linear-gradient(135deg, #373754 0%, #8f8fb0 55%, #e6e6f2 100%);
   }
 }
 

@@ -107,8 +107,9 @@ export default function Rules() {
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Classification Rules</h1>
-          <p className="mt-1 text-sm text-gray-600">
+          <p className="eyebrow mb-1.5">Detection</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Classification Rules</h1>
+          <p className="mt-1 text-sm text-slate-600">
             Manage detection rules for data classification
           </p>
         </div>
@@ -132,52 +133,52 @@ export default function Rules() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="card">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Shield className="h-5 w-5 text-blue-600" />
+              <div className="p-2 bg-primary-50 rounded-lg">
+                <Shield className="h-5 w-5 text-primary-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-600">Total Rules</p>
-                <p className="text-2xl font-bold text-gray-900">{stats.total_rules}</p>
+                <p className="text-sm text-slate-600">Total Rules</p>
+                <p className="font-mono text-2xl font-semibold tabular-nums text-slate-900">{stats.total_rules}</p>
               </div>
             </div>
           </div>
           <div className="card">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-green-100 rounded-lg">
+              <div className="p-2 bg-green-50 rounded-lg">
                 <Power className="h-5 w-5 text-green-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-600">Enabled</p>
-                <p className="text-2xl font-bold text-green-600">{stats.enabled_rules}</p>
+                <p className="text-sm text-slate-600">Enabled</p>
+                <p className="font-mono text-2xl font-semibold tabular-nums text-green-600">{stats.enabled_rules}</p>
               </div>
             </div>
           </div>
           <div className="card">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-gray-100 rounded-lg">
-                <PowerOff className="h-5 w-5 text-gray-600" />
+              <div className="p-2 bg-slate-100 rounded-lg">
+                <PowerOff className="h-5 w-5 text-slate-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-600">Disabled</p>
-                <p className="text-2xl font-bold text-gray-600">{stats.disabled_rules}</p>
+                <p className="text-sm text-slate-600">Disabled</p>
+                <p className="font-mono text-2xl font-semibold tabular-nums text-slate-600">{stats.disabled_rules}</p>
               </div>
             </div>
           </div>
           <div className="card">
             <div>
-              <p className="text-xs text-gray-600 mb-2">By Type</p>
+              <p className="eyebrow mb-2">By Type</p>
               <div className="space-y-1 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Regex:</span>
-                  <span className="font-medium">{stats.by_type.regex}</span>
+                  <span className="text-slate-600">Regex:</span>
+                  <span className="font-mono tabular-nums font-medium text-slate-900">{stats.by_type.regex}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Keyword:</span>
-                  <span className="font-medium">{stats.by_type.keyword}</span>
+                  <span className="text-slate-600">Keyword:</span>
+                  <span className="font-mono tabular-nums font-medium text-slate-900">{stats.by_type.keyword}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Dictionary:</span>
-                  <span className="font-medium">{stats.by_type.dictionary}</span>
+                  <span className="text-slate-600">Dictionary:</span>
+                  <span className="font-mono tabular-nums font-medium text-slate-900">{stats.by_type.dictionary}</span>
                 </div>
               </div>
             </div>
@@ -189,13 +190,13 @@ export default function Rules() {
       <div className="card">
         <div className="flex gap-3 items-center">
           <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
             <input
               type="text"
               placeholder="Search rules by name, category, or type..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full pl-10 pr-4 py-2 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500"
             />
           </div>
           <div className="flex gap-2">
@@ -206,8 +207,8 @@ export default function Rules() {
                 className={cn(
                   'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
                   filter === type
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 )}
               >
                 {type === 'all' ? 'All' : type.charAt(0).toUpperCase() + type.slice(1)}
@@ -237,9 +238,9 @@ export default function Rules() {
               {filteredRules?.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-12">
-                    <Shield className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                    <p className="text-gray-600 font-medium">No rules found</p>
-                    <p className="text-sm text-gray-500 mt-1">
+                    <Shield className="h-12 w-12 text-slate-400 mx-auto mb-3" />
+                    <p className="text-slate-600 font-medium">No rules found</p>
+                    <p className="text-sm text-slate-500 mt-1">
                       {searchQuery
                         ? 'Try adjusting your search query'
                         : 'Create your first classification rule'}
@@ -248,15 +249,15 @@ export default function Rules() {
                 </tr>
               ) : (
                 filteredRules?.map((rule) => (
-                  <tr key={rule.id} className="hover:bg-gray-50">
+                  <tr key={rule.id} className="hover:bg-slate-50">
                     <td>
                       <button
                         onClick={() => handleToggle(rule.id, rule.enabled)}
                         className={cn(
-                          'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
+                          'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ring-1 ring-inset',
                           rule.enabled
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-gray-100 text-gray-800'
+                            ? 'bg-green-50 text-green-700 ring-green-600/20'
+                            : 'bg-slate-100 text-slate-700 ring-slate-500/20'
                         )}
                       >
                         {rule.enabled ? (
@@ -274,9 +275,9 @@ export default function Rules() {
                     </td>
                     <td>
                       <div>
-                        <div className="font-medium text-gray-900">{rule.name}</div>
+                        <div className="font-medium text-slate-900">{rule.name}</div>
                         {rule.description && (
-                          <div className="text-xs text-gray-500 mt-1">
+                          <div className="text-xs text-slate-500 mt-1">
                             {rule.description.length > 60
                               ? rule.description.substring(0, 60) + '...'
                               : rule.description}
@@ -285,29 +286,29 @@ export default function Rules() {
                       </div>
                     </td>
                     <td>
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-600/20">
                         {rule.type}
                       </span>
                     </td>
                     <td>
                       {rule.category ? (
-                        <span className="text-sm text-gray-700">{rule.category}</span>
+                        <span className="text-sm text-slate-700">{rule.category}</span>
                       ) : (
-                        <span className="text-sm text-gray-400">-</span>
+                        <span className="text-sm text-slate-400">-</span>
                       )}
                     </td>
                     <td>
                       {rule.severity && (
                         <span
                           className={cn(
-                            'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
+                            'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ring-1 ring-inset',
                             rule.severity === 'critical'
-                              ? 'bg-red-100 text-red-800'
+                              ? 'bg-red-50 text-red-700 ring-red-600/20'
                               : rule.severity === 'high'
-                              ? 'bg-orange-100 text-orange-800'
+                              ? 'bg-orange-50 text-orange-700 ring-orange-600/20'
                               : rule.severity === 'medium'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-green-100 text-green-800'
+                              ? 'bg-amber-50 text-amber-700 ring-amber-600/20'
+                              : 'bg-green-50 text-green-700 ring-green-600/20'
                           )}
                         >
                           {rule.severity}
@@ -315,17 +316,17 @@ export default function Rules() {
                       )}
                     </td>
                     <td>
-                      <span className="text-sm font-mono text-gray-700">
+                      <span className="text-sm font-mono tabular-nums text-slate-700">
                         {rule.weight.toFixed(2)}
                       </span>
                     </td>
                     <td>
                       <div>
-                        <div className="text-sm font-medium text-gray-900">
+                        <div className="text-sm font-mono tabular-nums font-medium text-slate-900">
                           {rule.match_count.toLocaleString()}
                         </div>
                         {rule.last_matched_at && (
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs font-mono tabular-nums text-slate-500">
                             {formatRelativeTime(rule.last_matched_at)}
                           </div>
                         )}
@@ -335,7 +336,7 @@ export default function Rules() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => handleEdit(rule)}
-                          className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                          className="p-1 text-primary-600 hover:bg-primary-50 rounded transition-colors"
                           title="Edit rule"
                         >
                           <Edit className="h-4 w-4" />

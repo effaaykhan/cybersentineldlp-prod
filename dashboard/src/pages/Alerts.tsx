@@ -89,8 +89,9 @@ export default function Alerts() {
     <div className="space-y-6">
       {/* Page Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Alerts</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <p className="eyebrow mb-1.5">Security</p>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Alerts</h1>
+        <p className="mt-1 text-sm text-slate-600">
           Manage security alerts from DLP policies
         </p>
       </div>
@@ -98,31 +99,31 @@ export default function Alerts() {
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div
-          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'all' ? 'ring-2 ring-blue-500' : ''}`}
+          className={`card-modern cursor-pointer ${filter === 'all' ? 'ring-2 ring-primary-500' : ''}`}
           onClick={() => setFilter('all')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <ShieldAlert className="h-5 w-5 text-blue-600" />
+            <div className="p-2 bg-primary-50 rounded-lg">
+              <ShieldAlert className="h-5 w-5 text-primary-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Total Alerts</p>
-              <p className="text-2xl font-bold text-blue-600">{totalAlertsCount}</p>
+              <p className="text-sm text-slate-600">Total Alerts</p>
+              <p className="font-mono text-2xl font-semibold tabular-nums text-primary-600">{totalAlertsCount}</p>
             </div>
           </div>
         </div>
 
         <div
-          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'high' ? 'ring-2 ring-orange-500' : ''}`}
+          className={`card-modern cursor-pointer ${filter === 'high' ? 'ring-2 ring-orange-500' : ''}`}
           onClick={() => setFilter('high')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-100 rounded-lg">
+            <div className="p-2 bg-orange-50 rounded-lg">
               <AlertTriangle className="h-5 w-5 text-orange-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">High Alerts</p>
-              <p className="text-2xl font-bold text-orange-600">
+              <p className="text-sm text-slate-600">High Alerts</p>
+              <p className="font-mono text-2xl font-semibold tabular-nums text-orange-600">
                 {highAlertsCount}
               </p>
             </div>
@@ -130,16 +131,16 @@ export default function Alerts() {
         </div>
 
         <div
-          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'critical' ? 'ring-2 ring-red-500' : ''}`}
+          className={`card-modern cursor-pointer ${filter === 'critical' ? 'ring-2 ring-red-500' : ''}`}
           onClick={() => setFilter('critical')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-red-100 rounded-lg">
+            <div className="p-2 bg-red-50 rounded-lg">
               <AlertCircle className="h-5 w-5 text-red-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Critical Alerts</p>
-              <p className="text-2xl font-bold text-red-600">
+              <p className="text-sm text-slate-600">Critical Alerts</p>
+              <p className="font-mono text-2xl font-semibold tabular-nums text-red-600">
                 {criticalAlertsCount}
               </p>
             </div>
@@ -150,34 +151,34 @@ export default function Alerts() {
       {/* Search Bar */}
       <div className="card">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
           <input
             type="text"
             placeholder="Search alerts by title, description, agent ID, severity..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="input pl-10"
           />
         </div>
       </div>
 
       {/* Alerts List */}
       <div className="card p-0">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="font-semibold text-gray-900">
+        <div className="px-6 py-4 border-b border-slate-200">
+          <h3 className="section-title">
             {filter === 'all' ? 'All Alerts' : filter === 'high' ? 'High Severity Alerts' : 'Critical Severity Alerts'}
             {searchQuery && ` - Search: "${searchQuery}"`}
           </h3>
         </div>
 
-        <div className="divide-y divide-gray-200">
+        <div className="divide-y divide-slate-200">
           {!filteredAlerts || filteredAlerts.length === 0 ? (
             <div className="p-12 text-center">
-              <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-              <p className="text-gray-600 font-medium">
+              <AlertCircle className="h-12 w-12 text-slate-400 mx-auto mb-3" />
+              <p className="text-slate-600 font-medium">
                 {searchQuery ? 'No alerts found' : filter === 'all' ? 'No alerts' : `No ${filter} severity alerts`}
               </p>
-              <p className="text-sm text-gray-500 mt-1">
+              <p className="text-sm text-slate-500 mt-1">
                 {searchQuery
                   ? 'Try adjusting your search query'
                   : filter === 'all'
@@ -190,7 +191,7 @@ export default function Alerts() {
             filteredAlerts.map((alert) => (
               <div
                 key={alert.id}
-                className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                className="p-4 hover:bg-slate-50 cursor-pointer transition-colors"
                 onClick={() => handleAlertClick(alert)}
               >
                 <div className="flex items-start gap-4">
@@ -212,17 +213,17 @@ export default function Alerts() {
                       )}
                     </div>
 
-                    <h4 className="font-medium text-gray-900">{alert.title}</h4>
-                    <p className="mt-1 text-sm text-gray-600">
+                    <h4 className="font-medium text-slate-900">{alert.title}</h4>
+                    <p className="mt-1 text-sm text-slate-600">
                       {alert.description}
                     </p>
 
-                    <div className="mt-2 flex items-center gap-3 text-xs text-gray-500">
-                      <span>Agent: {alert.agent_id}</span>
+                    <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
+                      <span>Agent: <span className="num">{alert.agent_id}</span></span>
                       <span>•</span>
-                      <span>{formatRelativeTime(alert.created_at)}</span>
+                      <span className="num">{formatRelativeTime(alert.created_at)}</span>
                       <span>•</span>
-                      <code className="bg-gray-100 px-1 py-0.5 rounded">
+                      <code className="num bg-slate-100 text-slate-700 px-1 py-0.5 rounded">
                         {alert.event_id}
                       </code>
                     </div>

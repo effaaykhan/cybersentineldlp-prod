@@ -15,16 +15,16 @@ const TIME_PRESETS = [
 ]
 
 const classificationColors: Record<string, string> = {
-  Restricted: 'bg-red-50 border-red-300 text-red-700',
-  Confidential: 'bg-orange-50 border-orange-300 text-orange-700',
-  Internal: 'bg-yellow-50 border-yellow-300 text-yellow-700',
-  Public: 'bg-gray-50 border-gray-300 text-gray-500',
+  Restricted: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20',
+  Confidential: 'bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-600/20',
+  Internal: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20',
+  Public: 'bg-slate-50 text-slate-600 ring-1 ring-inset ring-slate-500/20',
 }
 const severityColors: Record<string, string> = {
-  critical: 'bg-red-50 border-red-300 text-red-700',
-  high: 'bg-orange-50 border-orange-300 text-orange-700',
-  medium: 'bg-yellow-50 border-yellow-300 text-yellow-700',
-  low: 'bg-green-50 border-green-300 text-green-700',
+  critical: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20',
+  high: 'bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-600/20',
+  medium: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20',
+  low: 'bg-green-50 text-green-700 ring-1 ring-inset ring-green-600/20',
 }
 
 export default function LogExplorerPage() {
@@ -83,72 +83,73 @@ export default function LogExplorerPage() {
 
   return (
     <>
-      <div className="space-y-6 p-6 bg-white min-h-screen">
+      <div className="space-y-6 p-6 bg-slate-50 min-h-screen">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Log Explorer</h1>
-            <p className="text-gray-500 text-sm mt-1">Search, filter, and investigate DLP events</p>
+            <p className="eyebrow mb-1.5">Investigate</p>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Log Explorer</h1>
+            <p className="text-slate-500 text-sm mt-1">Search, filter, and investigate DLP events</p>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => refetch()} className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-600 rounded-lg border border-gray-200 hover:bg-gray-200 text-sm"><RefreshCcw className="w-4 h-4" /> Refresh</button>
-            <button onClick={exportCSV} className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-600 rounded-lg border border-gray-200 hover:bg-gray-200 text-sm"><Download className="w-4 h-4" /> CSV</button>
-            <button onClick={exportJSON} className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-600 rounded-lg border border-gray-200 hover:bg-gray-200 text-sm"><FileText className="w-4 h-4" /> JSON</button>
+            <button onClick={() => refetch()} className="btn-secondary flex items-center gap-2"><RefreshCcw className="w-4 h-4" /> Refresh</button>
+            <button onClick={exportCSV} className="btn-secondary flex items-center gap-2"><Download className="w-4 h-4" /> CSV</button>
+            <button onClick={exportJSON} className="btn-secondary flex items-center gap-2"><FileText className="w-4 h-4" /> JSON</button>
           </div>
         </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: 'Results', value: stats.total, color: 'text-gray-900', border: 'border-gray-200' },
-            { label: 'Clipboard', value: stats.clipboard, color: 'text-purple-700', border: 'border-purple-200' },
-            { label: 'USB', value: stats.usb, color: 'text-blue-700', border: 'border-blue-200' },
-            { label: 'Blocked', value: stats.blocked, color: 'text-red-700', border: 'border-red-200' },
+            { label: 'Results', value: stats.total, color: 'text-slate-900' },
+            { label: 'Clipboard', value: stats.clipboard, color: 'text-primary-600' },
+            { label: 'USB', value: stats.usb, color: 'text-slate-900' },
+            { label: 'Blocked', value: stats.blocked, color: 'text-red-700' },
           ].map((s) => (
-            <div key={s.label} className={`bg-white rounded-xl p-4 border ${s.border} shadow-sm`}>
-              <p className="text-gray-500 text-xs uppercase">{s.label}</p>
-              <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+            <div key={s.label} className="bg-white rounded-xl p-4 border border-slate-200 shadow-card">
+              <p className="eyebrow">{s.label}</p>
+              <p className={`font-mono text-2xl font-semibold tabular-nums mt-1 ${s.color}`}>{s.value}</p>
             </div>
           ))}
         </div>
 
         {/* Search + Filters */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-gray-100">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-card overflow-hidden">
+          <div className="p-4 border-b border-slate-100">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 z-10" />
               <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search by description, agent, user, file path, classification rules..."
-                className="w-full pl-10 pr-20 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500" />
+                className="input w-full pl-10 pr-20" />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
-                {hasFilters && <button onClick={clearFilters} className="px-2 py-1 text-xs text-gray-400 hover:text-gray-700">Clear</button>}
-                <button onClick={() => setShowFilters(!showFilters)} className={`p-1.5 rounded ${showFilters ? 'text-purple-600' : 'text-gray-400'}`}><Filter className="w-4 h-4" /></button>
+                {hasFilters && <button onClick={clearFilters} className="px-2 py-1 text-xs text-slate-400 hover:text-slate-700">Clear</button>}
+                <button onClick={() => setShowFilters(!showFilters)} className={`p-1.5 rounded-lg ${showFilters ? 'text-primary-600 bg-primary-50' : 'text-slate-400 hover:bg-slate-100'}`}><Filter className="w-4 h-4" /></button>
               </div>
             </div>
           </div>
 
           {showFilters && (
-            <div className="p-4 space-y-4 border-b border-gray-100 bg-gray-50/50">
+            <div className="p-4 space-y-4 border-b border-slate-100 bg-slate-50/50">
               <div>
-                <label className="text-xs text-gray-500 uppercase block mb-2">Time Range</label>
+                <label className="eyebrow block mb-2">Time Range</label>
                 <div className="flex gap-1.5 flex-wrap">
-                  <button onClick={() => setTimePreset(null)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${!timePreset ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>All Time</button>
+                  <button onClick={() => setTimePreset(null)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${!timePreset ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}>All Time</button>
                   {TIME_PRESETS.map((p) => (
                     <button key={p.value} onClick={() => { setTimePreset(p.value); setStartTime(''); setEndTime('') }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${timePreset === p.value ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'}`}>{p.label}</button>
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${timePreset === p.value ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}>{p.label}</button>
                   ))}
                 </div>
                 <div className="flex gap-3 mt-2">
-                  <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">Start</label><input type="datetime-local" value={startTime} onChange={(e) => { setStartTime(e.target.value); setTimePreset(null) }} className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:border-purple-500" /></div>
-                  <div className="flex-1"><label className="text-xs text-gray-500 block mb-1">End</label><input type="datetime-local" value={endTime} onChange={(e) => { setEndTime(e.target.value); setTimePreset(null) }} className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:border-purple-500" /></div>
+                  <div className="flex-1"><label className="text-xs text-slate-500 block mb-1">Start</label><input type="datetime-local" value={startTime} onChange={(e) => { setStartTime(e.target.value); setTimePreset(null) }} className="input w-full py-1.5" /></div>
+                  <div className="flex-1"><label className="text-xs text-slate-500 block mb-1">End</label><input type="datetime-local" value={endTime} onChange={(e) => { setEndTime(e.target.value); setTimePreset(null) }} className="input w-full py-1.5" /></div>
                 </div>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                <div><label className="text-xs text-gray-500 block mb-1">Event Type</label><select value={eventType} onChange={(e) => setEventType(e.target.value)} className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900"><option value="all">All</option><option value="clipboard">Clipboard</option><option value="usb">USB</option><option value="file">File</option></select></div>
-                <div><label className="text-xs text-gray-500 block mb-1">Severity</label><select value={severity} onChange={(e) => setSeverity(e.target.value)} className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900"><option value="all">All</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
-                <div><label className="text-xs text-gray-500 block mb-1">Classification</label><select value={classification} onChange={(e) => setClassification(e.target.value)} className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900"><option value="all">All</option><option value="Restricted">Restricted</option><option value="Confidential">Confidential</option><option value="Internal">Internal</option><option value="Public">Public</option></select></div>
-                <div><label className="text-xs text-gray-500 block mb-1">Agent</label><input value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} placeholder="Agent ID..." className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400" /></div>
-                <div><label className="text-xs text-gray-500 block mb-1">User</label><input value={userFilter} onChange={(e) => setUserFilter(e.target.value)} placeholder="Email..." className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400" /></div>
+                <div><label className="text-xs text-slate-500 block mb-1">Event Type</label><select value={eventType} onChange={(e) => setEventType(e.target.value)} className="input w-full"><option value="all">All</option><option value="clipboard">Clipboard</option><option value="usb">USB</option><option value="file">File</option></select></div>
+                <div><label className="text-xs text-slate-500 block mb-1">Severity</label><select value={severity} onChange={(e) => setSeverity(e.target.value)} className="input w-full"><option value="all">All</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
+                <div><label className="text-xs text-slate-500 block mb-1">Classification</label><select value={classification} onChange={(e) => setClassification(e.target.value)} className="input w-full"><option value="all">All</option><option value="Restricted">Restricted</option><option value="Confidential">Confidential</option><option value="Internal">Internal</option><option value="Public">Public</option></select></div>
+                <div><label className="text-xs text-slate-500 block mb-1">Agent</label><input value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} placeholder="Agent ID..." className="input w-full font-mono" /></div>
+                <div><label className="text-xs text-slate-500 block mb-1">User</label><input value={userFilter} onChange={(e) => setUserFilter(e.target.value)} placeholder="Email..." className="input w-full font-mono" /></div>
               </div>
             </div>
           )}
@@ -156,49 +157,49 @@ export default function LogExplorerPage() {
 
         {/* Results */}
         {isLoading ? (
-          <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-purple-600" /></div>
+          <div className="flex justify-center py-12"><Loader2 className="w-8 h-8 animate-spin text-primary-600" /></div>
         ) : error ? (
           <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center"><p className="text-red-700">Failed to load events</p></div>
         ) : events.length === 0 ? (
-          <div className="bg-gray-50 border border-gray-200 rounded-xl p-12 text-center"><Search className="w-12 h-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500">No events match your filters</p></div>
+          <div className="bg-white border border-slate-200 shadow-card rounded-xl p-12 text-center"><Search className="w-12 h-12 text-slate-300 mx-auto mb-3" /><p className="text-slate-500">No events match your filters</p></div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="grid grid-cols-12 gap-2 px-4 py-3 border-b border-gray-200 text-xs text-gray-500 uppercase font-medium bg-gray-50">
+          <div className="bg-white rounded-xl border border-slate-200 shadow-card overflow-hidden">
+            <div className="grid grid-cols-12 gap-2 px-4 py-3 border-b border-slate-200 text-[11px] text-slate-500 uppercase tracking-wider font-semibold bg-slate-50">
               <div className="col-span-1">Type</div><div className="col-span-3">Description</div><div className="col-span-2">Classification</div><div className="col-span-1">Severity</div><div className="col-span-1">Action</div><div className="col-span-2">User</div><div className="col-span-2">Time</div>
             </div>
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-slate-100">
               {events.map((event: any, idx: number) => {
                 const isExpanded = expandedEvent === (event.id || idx.toString())
                 const category = event.classification_category || event.classification_level || 'Public'
                 return (
                   <div key={event.id || idx}>
-                    <div onClick={() => setExpandedEvent(isExpanded ? null : (event.id || idx.toString()))} className="grid grid-cols-12 gap-2 px-4 py-3 hover:bg-gray-50 cursor-pointer transition-colors items-center text-sm">
-                      <div className="col-span-1"><span className="text-xs text-gray-600 capitalize">{event.event_type}</span></div>
-                      <div className="col-span-3 truncate text-gray-900 font-medium">{event.description || `${event.event_type} event`}</div>
-                      <div className="col-span-2"><span className={`px-2 py-0.5 rounded border text-xs font-medium ${classificationColors[category] || classificationColors.Public}`}>{category}</span></div>
-                      <div className="col-span-1"><span className={`px-2 py-0.5 rounded border text-xs font-medium ${severityColors[event.severity] || severityColors.low}`}>{event.severity}</span></div>
-                      <div className="col-span-1"><span className={`text-xs font-medium ${event.blocked ? 'text-red-700' : 'text-gray-500'}`}>{event.action_taken || 'logged'}</span></div>
-                      <div className="col-span-2 truncate text-gray-500 text-xs">{event.user_email || '-'}</div>
+                    <div onClick={() => setExpandedEvent(isExpanded ? null : (event.id || idx.toString()))} className="grid grid-cols-12 gap-2 px-4 py-3 hover:bg-slate-50 cursor-pointer transition-colors items-center text-sm">
+                      <div className="col-span-1"><span className="text-xs font-mono text-slate-600 capitalize">{event.event_type}</span></div>
+                      <div className="col-span-3 truncate text-slate-900 font-medium">{event.description || `${event.event_type} event`}</div>
+                      <div className="col-span-2"><span className={`px-2 py-0.5 rounded-lg text-xs font-medium ${classificationColors[category] || classificationColors.Public}`}>{category}</span></div>
+                      <div className="col-span-1"><span className={`px-2 py-0.5 rounded-lg text-xs font-medium ${severityColors[event.severity] || severityColors.low}`}>{event.severity}</span></div>
+                      <div className="col-span-1"><span className={`text-xs font-medium ${event.blocked ? 'text-red-700' : 'text-slate-500'}`}>{event.action_taken || 'logged'}</span></div>
+                      <div className="col-span-2 truncate text-slate-500 text-xs font-mono">{event.user_email || '-'}</div>
                       <div className="col-span-2 flex items-center justify-between">
-                        <span className="text-gray-500 text-xs">{formatDateTimeIST(event.timestamp)}</span>
-                        {isExpanded ? <ChevronUp className="w-3 h-3 text-gray-400" /> : <ChevronDown className="w-3 h-3 text-gray-400" />}
+                        <span className="text-slate-500 text-xs font-mono tabular-nums">{formatDateTimeIST(event.timestamp)}</span>
+                        {isExpanded ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
                       </div>
                     </div>
                     {isExpanded && (
-                      <div className="px-4 pb-4 bg-gray-50 space-y-3 border-t border-gray-100">
+                      <div className="px-4 pb-4 bg-slate-50 space-y-3 border-t border-slate-100">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-3">
-                          <div><label className="text-xs text-gray-500">Event Type</label><p className="text-gray-900 text-sm capitalize">{event.event_subtype || event.event_type}</p></div>
-                          <div><label className="text-xs text-gray-500">Action</label><p className="text-gray-900 text-sm">{event.action_taken || 'logged'}</p></div>
-                          <div><label className="text-xs text-gray-500">Confidence</label><p className="text-gray-900 text-sm font-bold">{((event.classification_score || 0) * 100).toFixed(0)}%</p></div>
-                          <div><label className="text-xs text-gray-500">Agent</label><p className="text-gray-900 text-xs font-mono">{event.agent_id}</p></div>
+                          <div><label className="eyebrow">Event Type</label><p className="text-slate-900 text-sm capitalize">{event.event_subtype || event.event_type}</p></div>
+                          <div><label className="eyebrow">Action</label><p className="text-slate-900 text-sm">{event.action_taken || 'logged'}</p></div>
+                          <div><label className="eyebrow">Confidence</label><p className="text-slate-900 text-sm font-mono font-semibold tabular-nums">{((event.classification_score || 0) * 100).toFixed(0)}%</p></div>
+                          <div><label className="eyebrow">Agent</label><p className="text-slate-900 text-xs font-mono">{event.agent_id}</p></div>
                         </div>
                         {event.classification_rules_matched && event.classification_rules_matched.length > 0 && (
-                          <div><label className="text-xs text-gray-500">Matched Rules</label><div className="flex gap-1.5 mt-1 flex-wrap">{event.classification_rules_matched.map((r: string, i: number) => (<span key={i} className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200">{r}</span>))}</div></div>
+                          <div><label className="eyebrow">Matched Rules</label><div className="flex gap-1.5 mt-1 flex-wrap">{event.classification_rules_matched.map((r: string, i: number) => (<span key={i} className="px-2 py-0.5 rounded-lg text-xs font-medium bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-600/20">{r}</span>))}</div></div>
                         )}
                         {event.detected_content && (
-                          <div><label className="text-xs text-gray-500">Detected Content</label><pre className="mt-1 text-xs text-gray-700 bg-white rounded-lg p-3 border border-gray-200 whitespace-pre-wrap">{event.detected_content}</pre></div>
+                          <div><label className="eyebrow">Detected Content</label><pre className="mt-1 text-xs font-mono text-slate-700 bg-white rounded-lg p-3 border border-slate-200 whitespace-pre-wrap">{event.detected_content}</pre></div>
                         )}
-                        <details><summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700">Raw JSON</summary><pre className="mt-2 text-xs text-gray-600 bg-white rounded-lg p-3 overflow-x-auto border border-gray-200 whitespace-pre-wrap">{JSON.stringify(event, null, 2)}</pre></details>
+                        <details><summary className="eyebrow cursor-pointer hover:text-slate-700">Raw JSON</summary><pre className="mt-2 text-xs font-mono text-slate-600 bg-white rounded-lg p-3 overflow-x-auto border border-slate-200 whitespace-pre-wrap">{JSON.stringify(event, null, 2)}</pre></details>
                       </div>
                     )}
                   </div>

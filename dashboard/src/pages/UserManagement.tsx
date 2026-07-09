@@ -122,11 +122,13 @@ export default function UserManagement() {
   if (!canManage) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <Shield className="w-16 h-16 text-gray-400 mb-4" />
-        <h2 className="text-2xl font-semibold text-gray-800 mb-2">
+        <div className="w-16 h-16 rounded-xl bg-primary-50 text-primary-600 flex items-center justify-center mb-4">
+          <Shield className="w-8 h-8" />
+        </div>
+        <h2 className="text-2xl font-bold tracking-tight text-slate-900 mb-2">
           You don't have access to User Management
         </h2>
-        <p className="text-gray-500 max-w-md">
+        <p className="text-slate-500 max-w-md">
           The <code>manage_users</code> permission is required. Contact your
           administrator if you believe this is an error.
         </p>
@@ -138,46 +140,49 @@ export default function UserManagement() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-            <UsersIcon className="w-8 h-8 text-indigo-600" />
+          <p className="eyebrow mb-1.5">Administration</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-lg bg-primary-50 text-primary-600 flex items-center justify-center">
+              <UsersIcon className="w-5 h-5" />
+            </span>
             User Management
           </h1>
-          <p className="text-gray-500 mt-1">
+          <p className="text-slate-500 mt-1">
             Create, edit, revoke, and permanently delete DLP accounts. All
             actions are audited.
           </p>
         </div>
         <button
           onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-sm transition-colors"
+          className="btn-primary"
         >
           <UserPlus className="w-5 h-5" />
           Create User
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-card overflow-hidden">
         {usersQ.isLoading ? (
           <div className="flex items-center justify-center p-12">
-            <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+            <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
           </div>
         ) : usersQ.isError ? (
           <div className="p-8 text-center">
             <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
-            <p className="text-gray-700 font-medium">Failed to load users.</p>
+            <p className="text-slate-700 font-medium">Failed to load users.</p>
             <button
               onClick={() => usersQ.refetch()}
-              className="mt-3 text-indigo-600 hover:underline"
+              className="mt-3 text-primary-600 hover:underline"
             >
               Retry
             </button>
           </div>
         ) : sortedUsers.length === 0 ? (
-          <div className="p-12 text-center text-gray-500">No users yet.</div>
+          <div className="p-12 text-center text-slate-500">No users yet.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="bg-slate-50 border-b border-slate-200">
                 <tr>
                   <Th>Email</Th>
                   <Th>Username</Th>
@@ -190,17 +195,17 @@ export default function UserManagement() {
                   <Th className="text-right pr-6">Actions</Th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-slate-100">
                 {sortedUsers.map((u) => (
-                  <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                    <Td className="font-medium text-gray-900">{u.email}</Td>
-                    <Td>{u.username || <span className="text-gray-400">—</span>}</Td>
+                  <tr key={u.id} className="hover:bg-slate-50 transition-colors">
+                    <Td className="font-medium text-slate-900">{u.email}</Td>
+                    <Td>{u.username || <span className="text-slate-400">—</span>}</Td>
                     <Td>{u.full_name}</Td>
-                    <Td>{u.department || <span className="text-gray-400">—</span>}</Td>
+                    <Td>{u.department || <span className="text-slate-400">—</span>}</Td>
                     <Td>
                       <RoleBadge role={u.role} />
                     </Td>
-                    <Td>{u.clearance_level}</Td>
+                    <Td className="font-mono tabular-nums">{u.clearance_level}</Td>
                     <Td>
                       <PermissionSummary
                         effective={u.permissions?.length ?? 0}
@@ -293,7 +298,7 @@ export default function UserManagement() {
 function Th({ children, className = '' }: any) {
   return (
     <th
-      className={`px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider ${className}`}
+      className={`px-6 py-3 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider ${className}`}
     >
       {children}
     </th>
@@ -302,7 +307,7 @@ function Th({ children, className = '' }: any) {
 
 function Td({ children, className = '' }: any) {
   return (
-    <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-700 ${className}`}>
+    <td className={`px-6 py-4 whitespace-nowrap text-sm text-slate-700 ${className}`}>
       {children}
     </td>
   )
@@ -310,15 +315,15 @@ function Td({ children, className = '' }: any) {
 
 function RoleBadge({ role }: { role: string }) {
   const colors: Record<string, string> = {
-    ADMIN:   'bg-red-100 text-red-800',
-    ANALYST: 'bg-blue-100 text-blue-800',
-    MANAGER: 'bg-purple-100 text-purple-800',
-    VIEWER:  'bg-gray-100 text-gray-800',
-    AGENT:   'bg-emerald-100 text-emerald-800',
+    ADMIN:   'bg-red-50 text-red-700 ring-red-600/20',
+    ANALYST: 'bg-primary-50 text-primary-700 ring-primary-600/20',
+    MANAGER: 'bg-purple-50 text-purple-700 ring-purple-600/20',
+    VIEWER:  'bg-slate-100 text-slate-700 ring-slate-500/20',
+    AGENT:   'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
   }
-  const cls = colors[role?.toUpperCase()] || 'bg-gray-100 text-gray-800'
+  const cls = colors[role?.toUpperCase()] || 'bg-slate-100 text-slate-700 ring-slate-500/20'
   return (
-    <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>
+    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset ${cls}`}>
       {role}
     </span>
   )
@@ -326,13 +331,13 @@ function RoleBadge({ role }: { role: string }) {
 
 function StatusBadge({ active }: { active: boolean }) {
   return active ? (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-800">
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-50 text-green-700 ring-1 ring-inset ring-green-600/20">
       <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
       Active
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-600">
-      <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 ring-1 ring-inset ring-slate-500/20">
+      <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
       Inactive
     </span>
   )
@@ -349,13 +354,13 @@ function PermissionSummary({
 }) {
   return (
     <span
-      className="text-xs text-gray-600"
+      className="text-xs text-slate-600 font-mono tabular-nums"
       title={`${effective} effective permissions (role defaults + ${direct} direct grant${direct === 1 ? '' : 's'})`}
     >
-      <span className="font-medium text-gray-800">{effective}</span>
-      <span className="text-gray-400"> / {total}</span>
+      <span className="font-semibold text-slate-800">{effective}</span>
+      <span className="text-slate-400"> / {total}</span>
       {direct > 0 && (
-        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 text-indigo-700">
+        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-600/20">
           +{direct} direct
         </span>
       )}
@@ -377,16 +382,16 @@ function IconButton({
   disabled?: boolean
 }) {
   const colorMap: Record<string, string> = {
-    indigo: 'hover:bg-indigo-100 text-indigo-600',
-    yellow: 'hover:bg-yellow-100 text-yellow-600',
-    red:    'hover:bg-red-100 text-red-600',
+    indigo: 'hover:bg-primary-50 text-primary-600',
+    yellow: 'hover:bg-amber-50 text-amber-600',
+    red:    'hover:bg-red-50 text-red-600',
   }
   return (
     <button
       title={title}
       onClick={onClick}
       disabled={disabled}
-      className={`p-1.5 rounded ${colorMap[color]} disabled:opacity-50`}
+      className={`p-1.5 rounded-lg ${colorMap[color]} disabled:opacity-50 transition-colors`}
     >
       {children}
     </button>
@@ -631,9 +636,9 @@ function EditUserDialog({
             type="checkbox"
             checked={!!form.is_active}
             onChange={(e) => update('is_active', e.target.checked)}
-            className="h-4 w-4"
+            className="h-4 w-4 accent-primary-600"
           />
-          <label htmlFor="active-toggle" className="text-sm text-gray-700">
+          <label htmlFor="active-toggle" className="text-sm text-slate-700">
             Account is active
           </label>
         </div>
@@ -679,12 +684,12 @@ function HardDeleteDialog({
             </p>
           </div>
         </div>
-        <p className="text-sm text-gray-700">
-          Type <code className="px-1 py-0.5 bg-gray-100 rounded text-gray-900">{user.email}</code> to confirm.
+        <p className="text-sm text-slate-700">
+          Type <code className="px-1 py-0.5 bg-slate-100 rounded font-mono text-slate-900">{user.email}</code> to confirm.
         </p>
         <input
           type="text"
-          className="input"
+          className="input font-mono"
           value={typed}
           onChange={(e) => setTyped(e.target.value)}
           placeholder={user.email}
@@ -694,7 +699,7 @@ function HardDeleteDialog({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-gray-700 hover:bg-gray-100"
+            className="btn-secondary"
           >
             Cancel
           </button>
@@ -702,7 +707,7 @@ function HardDeleteDialog({
             type="button"
             disabled={!confirmed || isSubmitting}
             onClick={onConfirm}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn-danger disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
             Delete permanently
@@ -748,49 +753,49 @@ function PermissionPicker({
 
   if (permsCatalog.length === 0) {
     return (
-      <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-500">
+      <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-500">
         Loading permission catalog…
       </div>
     )
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 p-3">
+    <div className="rounded-lg border border-slate-200 p-3">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-gray-800">
+        <span className="text-sm font-medium text-slate-800">
           Direct Permissions
-          <span className="ml-2 text-xs text-gray-500 font-normal">
+          <span className="ml-2 text-xs text-slate-500 font-normal font-mono tabular-nums">
             {selected.length} of {permsCatalog.length} selected
           </span>
         </span>
       </div>
       {helpText && (
-        <p className="text-xs text-gray-500 mb-3">{helpText}</p>
+        <p className="text-xs text-slate-500 mb-3">{helpText}</p>
       )}
       <div className="space-y-3">
         {Object.entries(groups).map(([group, perms]) => (
           <div key={group}>
-            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
+            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
               {group}
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
               {perms.map((p) => (
                 <label
                   key={p.id}
-                  className="flex items-start gap-2 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded"
+                  className="flex items-start gap-2 cursor-pointer hover:bg-slate-50 px-2 py-1 rounded-lg"
                 >
                   <input
                     type="checkbox"
-                    className="h-4 w-4 mt-0.5"
+                    className="h-4 w-4 mt-0.5 accent-primary-600"
                     checked={selectedSet.has(p.name)}
                     onChange={() => onToggle(p.name)}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-gray-800 font-mono truncate">
+                    <div className="text-sm text-slate-800 font-mono truncate">
                       {p.name}
                     </div>
                     {p.description && (
-                      <div className="text-xs text-gray-500 truncate">
+                      <div className="text-xs text-slate-500 truncate">
                         {p.description}
                       </div>
                     )}
@@ -844,17 +849,17 @@ function Modal({
       <div
         // max-h caps the card to leave breathing room top+bottom; min-h-0 on
         // the flex child lets the body's overflow-y-auto actually scroll.
-        className={`bg-white rounded-xl shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
+        className={`bg-white rounded-xl border border-slate-200 shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
           wide ? 'max-w-2xl' : 'max-w-md'
         }`}
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 shrink-0">
+          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-gray-100 text-gray-500"
+            className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors"
             aria-label="Close dialog"
           >
             <X className="w-5 h-5" />
@@ -877,7 +882,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="block text-sm font-medium text-gray-700 mb-1">
+      <span className="block text-sm font-medium text-slate-700 mb-1">
         {label}
         {required && <span className="text-red-500 ml-1">*</span>}
       </span>
@@ -900,7 +905,7 @@ function DialogActions({
       <button
         type="button"
         onClick={onClose}
-        className="px-4 py-2 rounded-lg text-gray-700 hover:bg-gray-100"
+        className="btn-secondary"
         disabled={isSubmitting}
       >
         Cancel
@@ -908,7 +913,7 @@ function DialogActions({
       <button
         type="submit"
         disabled={isSubmitting}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium disabled:opacity-60"
+        className="btn-primary disabled:opacity-60"
       >
         {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
         {submitLabel}

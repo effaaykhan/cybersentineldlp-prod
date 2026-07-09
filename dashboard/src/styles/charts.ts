@@ -3,19 +3,19 @@
 // keep both in sync if the palette is ever retuned.
 
 export const CHART_COLORS = {
-  primary: '#5B7EFF',
+  primary: '#4f46e5',
   secondary: '#2DD4BF',
   success: '#2DD4BF',
   warning: '#FB923C',
   critical: '#F87171',
-  info: '#5B7EFF',
+  info: '#4f46e5',
 
   palette: [
-    '#5B7EFF',
+    '#4f46e5',
     '#2DD4BF',
     '#FB923C',
     '#F87171',
-    '#7B9EFF',
+    '#6366f1',
     '#34D399',
     '#FBBF24',
     '#60A5FA',
@@ -23,7 +23,7 @@ export const CHART_COLORS = {
 
   backgrounds: {
     dark: '#0A0A0D',
-    surface: '#111118',
+    surface: '#ffffff',   // slice/dot separators read white on light cards
     tertiary: '#1E1E2E',
   },
 
@@ -34,37 +34,39 @@ export const CHART_COLORS = {
   },
 
   line: {
-    stroke: '#5B7EFF',
+    stroke: '#4f46e5',
     fill: 'rgba(91, 126, 255, 0.1)',
-    dot: '#5B7EFF',
+    dot: '#4f46e5',
   },
 
   bar: {
-    primary: '#5B7EFF',
-    hover: '#7B9EFF',
+    primary: '#4f46e5',
+    hover: '#6366f1',
   },
 
   pie: {
-    colors: ['#5B7EFF', '#2DD4BF', '#FB923C', '#F87171', '#7B9EFF'],
+    colors: ['#4f46e5', '#2DD4BF', '#FB923C', '#F87171', '#6366f1'],
   },
 } as const
 
 export const RECHARTS_CONFIG = {
-  gridStroke: '#1E1E2E',
-  gridOpacity: 0.5,
+  // Light-card values: a slate hairline grid + readable slate ticks. The
+  // tooltip stays a crisp dark chip (matches the app's toasts) for contrast.
+  gridStroke: '#e2e8f0',
+  gridOpacity: 0.7,
 
-  axisStroke: '#1E1E2E',
-  axisTickFill: '#A0A0B8',
-  axisLabelFill: '#A0A0B8',
+  axisStroke: '#e2e8f0',
+  axisTickFill: '#64748b',
+  axisLabelFill: '#64748b',
   axisTickFontSize: 12,
 
-  tooltipBackground: '#111118',
-  tooltipBorder: '#1E1E2E',
-  tooltipTextColor: '#E8E8F0',
+  tooltipBackground: '#0f172a',
+  tooltipBorder: '#334155',
+  tooltipTextColor: '#e2e8f0',
   tooltipPadding: 12,
   tooltipBorderRadius: 6,
 
-  cursorStroke: '#5B7EFF',
+  cursorStroke: '#4f46e5',
   cursorOpacity: 0.5,
 
   legendTextColor: '#A0A0B8',

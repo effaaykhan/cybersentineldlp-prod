@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import logo from '@/elements/logo.png'
 import {
@@ -64,6 +64,17 @@ const groups: NavGroup[] = [
 
 export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false)
+  // Auto-collapse to icons on narrow viewports (< 1120px); the manual
+  // toggle still works on wider screens.
+  const [isNarrow, setIsNarrow] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1120px)')
+    const update = () => setIsNarrow(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+  const collapsed = isCollapsed || isNarrow
   const { hasAny } = usePermission()
 
   const visibleGroups = groups
@@ -77,13 +88,13 @@ export default function Sidebar() {
     <aside
       className={cn(
         'bg-cs-panel text-cs-ink-2 flex flex-col border-r border-cs-hair transition-all duration-200',
-        isCollapsed ? 'w-16' : 'w-[226px]',
+        collapsed ? 'w-16' : 'w-[226px]',
       )}
     >
       {/* Brand — height matches the 56px top bar */}
       <div className="h-14 flex items-center gap-2.5 px-4 border-b border-cs-hair shrink-0">
         <img src={logo} alt="CyberSentinel DLP" className="h-8 w-8 object-contain shrink-0" />
-        {!isCollapsed && (
+        {!collapsed && (
           <div className="min-w-0 leading-tight">
             <div className="text-[14px] font-semibold text-cs-ink truncate">CyberSentinel</div>
             <div className="text-[9.5px] font-semibold uppercase tracking-[0.18em] text-cs-muted-2">
@@ -97,7 +108,7 @@ export default function Sidebar() {
       <nav className="flex-1 px-2.5 py-4 space-y-5 overflow-y-auto scrollbar-thin">
         {visibleGroups.map((group) => (
           <div key={group.label}>
-            {!isCollapsed && (
+            {!collapsed && (
               <p className="px-2.5 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-cs-muted-2">
                 {group.label}
               </p>
@@ -117,7 +128,7 @@ export default function Sidebar() {
                       isCollapsed && 'justify-center',
                     )
                   }
-                  title={isCollapsed ? item.name : undefined}
+                  title={collapsed ? item.name : undefined}
                 >
                   {({ isActive }) => (
                     <>
@@ -130,11 +141,11 @@ export default function Sidebar() {
                       <item.icon
                         className={cn(
                           'h-[18px] w-[18px] shrink-0 transition-colors',
-                          !isCollapsed && 'mr-3',
+                          !collapsed && 'mr-3',
                           isActive ? 'text-cs-indigo' : 'text-cs-muted group-hover:text-cs-ink-2',
                         )}
                       />
-                      {!isCollapsed && item.name}
+                      {!collapsed && item.name}
                     </>
                   )}
                 </NavLink>
@@ -147,11 +158,11 @@ export default function Sidebar() {
       {/* Collapse toggle */}
       <div className="border-t border-cs-hair p-2.5 shrink-0">
         <button
-          onClick={() => setIsCollapsed(!isCollapsed)}
+          onClick={() => setIsCollapsed(!collapsed)}
           className="w-full p-2 text-cs-muted hover:bg-cs-hair-2 hover:text-cs-ink-2 rounded-cs-sm transition-colors flex items-center justify-center gap-2 text-xs font-medium focus-visible:outline-none focus-visible:shadow-focus"
-          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          {isCollapsed ? (
+          {collapsed ? (
             <ChevronRight className="h-4 w-4" />
           ) : (
             <>

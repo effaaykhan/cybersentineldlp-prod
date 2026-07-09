@@ -160,8 +160,9 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Stat cards — every one is a drill-down anchor (PART 1) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+      {/* Stat cards — every one is a drill-down anchor. 2-up on small
+          screens, 4-up from lg (responsive floor). */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
         <StatsCard
           title="Total Events"
           value={(stats?.total_events ?? 0).toLocaleString()}

@@ -38,61 +38,70 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-track {
-    @apply bg-gray-100;
+    background: var(--cs-hair-2);
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply bg-gray-300 rounded-full;
+    background: var(--cs-hair);
+    border-radius: 9999px;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    @apply bg-gray-400;
+    background: var(--cs-muted-2);
   }
 
   /* ── Surfaces ─────────────────────────────────────────────────────
-     Precision over softness: crisp white, a single hairline border, a
-     low-contrast shadow, consistent 12px radius. No gradient fills, no
-     blur blobs, no hover-lift bounce. */
-  .card {
-    @apply bg-white rounded-xl border border-slate-200 shadow-card p-6;
-  }
-
-  /* Interactive card — same surface, gains elevation + a warmer border on
-     hover. Short transition so it feels responsive, not bouncy. */
-  .card-modern {
-    @apply bg-white border border-slate-200 rounded-xl shadow-card
-           hover:shadow-card-hover hover:border-slate-300
-           transition-shadow duration-200 ease-out p-6;
-  }
-
-  /* Static surface for chart/data cards (the content is the interaction). */
+     Hairline panels: white surface, one 1px token border, token radius,
+     NO drop shadow. Interactive cards respond on the border, not by lifting. */
+  .card,
   .card-static {
-    @apply bg-white border border-slate-200 rounded-xl shadow-card p-6;
+    background: var(--cs-panel);
+    border: 1px solid var(--cs-hair);
+    border-radius: var(--cs-r-card);
+    padding: var(--cs-pad);
   }
 
-  /* Metric value — large, tight, always monospace tabular so digits align
-     column-to-column like an instrument readout. */
+  .card-modern {
+    background: var(--cs-panel);
+    border: 1px solid var(--cs-hair);
+    border-radius: var(--cs-r-card);
+    padding: var(--cs-pad);
+    transition: border-color 0.15s ease;
+  }
+  .card-modern:hover {
+    border-color: var(--cs-muted-2);
+  }
+
+  /* Metric value — large, tight monospace tabular so digits column-align. */
   .metric-value {
-    @apply font-mono text-[2rem] leading-none font-semibold tracking-tight
-           tabular-nums text-slate-900;
+    font-family: var(--cs-mono);
+    font-size: 2rem;
+    line-height: 1;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    color: var(--cs-ink);
   }
 
-  .metric-label {
-    @apply text-[11px] font-semibold text-slate-500 uppercase tracking-[0.08em];
-  }
-
-  /* Eyebrow / section label — reusable uppercase micro-label. */
+  .metric-label,
   .eyebrow {
-    @apply text-[11px] font-semibold text-slate-500 uppercase tracking-[0.1em];
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--cs-ink-2);
   }
 
   .section-title {
-    @apply text-[15px] font-semibold text-slate-900;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--cs-ink);
   }
 
   /* Any quantitative data: numbers, ids, timestamps, counts, hashes. */
   .num {
-    @apply font-mono tabular-nums;
+    font-family: var(--cs-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   /* Gradient text kept for backward-compat, but flattened to solid ink so
@@ -145,74 +154,96 @@
      Primary = solid indigo. Secondary = quiet outline (not a gray fill).
      Focus is a visible indigo ring for keyboard users. */
   .btn {
-    @apply px-3.5 py-2 rounded-lg text-sm font-medium transition-colors duration-150
-           inline-flex items-center justify-center gap-2
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-1;
+    @apply px-3.5 py-2 text-sm font-medium transition-colors duration-150
+           inline-flex items-center justify-center gap-2;
+    border-radius: var(--cs-r-sm);
+  }
+  .btn:focus-visible {
+    outline: none;
+    box-shadow: var(--cs-focus);
   }
 
   .btn-primary {
-    @apply btn bg-primary-600 text-white hover:bg-primary-700 active:bg-primary-800 shadow-sm;
+    background: var(--cs-indigo);
+    color: #fff;
   }
+  .btn-primary:hover { background: var(--cs-indigo-d); }
 
   .btn-secondary {
-    @apply btn bg-white text-slate-700 border border-slate-200
-           hover:bg-slate-50 hover:border-slate-300 active:bg-slate-100;
+    background: var(--cs-panel);
+    color: var(--cs-ink-2);
+    border: 1px solid var(--cs-hair);
   }
+  .btn-secondary:hover { background: var(--cs-hair-2); border-color: var(--cs-muted-2); }
 
   .btn-danger {
-    @apply btn bg-danger-600 text-white hover:bg-danger-700 active:bg-danger-800 shadow-sm;
+    background: var(--cs-crit);
+    color: #fff;
   }
+  .btn-danger:hover { filter: brightness(0.94); }
 
-  /* ── Badges — soft tinted chips with a hairline ring ──────────────── */
+  /* ── Badges — soft tinted chips (token color-mix tints) ───────────── */
   .badge {
-    @apply px-2 py-0.5 text-xs font-medium rounded-full inline-flex items-center gap-1 ring-1 ring-inset;
+    @apply px-2 py-0.5 text-xs font-medium inline-flex items-center gap-1;
+    border-radius: var(--cs-r-pill);
   }
-
   .badge-success {
-    @apply badge bg-success-50 text-success-700 ring-success-600/20;
+    background: color-mix(in srgb, var(--cs-ok) 12%, var(--cs-panel));
+    color: var(--cs-ok);
   }
-
   .badge-danger {
-    @apply badge bg-danger-50 text-danger-700 ring-danger-600/20;
+    background: color-mix(in srgb, var(--cs-crit) 12%, var(--cs-panel));
+    color: var(--cs-crit);
   }
-
   .badge-warning {
-    @apply badge bg-warning-50 text-warning-700 ring-warning-600/20;
+    background: color-mix(in srgb, var(--cs-med) 16%, var(--cs-panel));
+    color: #8a6d0f;
   }
-
   .badge-info {
-    @apply badge bg-primary-50 text-primary-700 ring-primary-600/20;
+    background: var(--cs-indigo-faint);
+    color: var(--cs-indigo);
   }
 
   /* ── Inputs ───────────────────────────────────────────────────────── */
   .input {
-    @apply w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg
-           placeholder:text-slate-400
-           focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-primary-500;
+    @apply w-full px-3 py-2 text-sm;
+    background: var(--cs-panel);
+    border: 1px solid var(--cs-hair);
+    border-radius: var(--cs-r-sm);
+    color: var(--cs-ink);
+  }
+  .input::placeholder { color: var(--cs-muted-2); }
+  .input:focus {
+    outline: none;
+    border-color: var(--cs-indigo);
+    box-shadow: var(--cs-focus);
   }
 
   /* ── Tables ───────────────────────────────────────────────────────── */
   .table {
     @apply w-full border-collapse;
   }
-
   .table th {
-    @apply px-4 py-3 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-[0.06em]
-           bg-slate-50/80 border-b border-slate-200;
+    @apply px-4 py-3 text-left uppercase;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--cs-muted);
+    background: var(--cs-hair-2);
+    border-bottom: 1px solid var(--cs-hair);
   }
-
   .table td {
-    @apply px-4 py-3.5 text-sm text-slate-700 border-b border-slate-100;
+    @apply px-4 py-3 text-sm;
+    color: var(--cs-ink-2);
+    border-bottom: 1px solid var(--cs-hair-2);
   }
-
   .table tr:hover td {
-    @apply bg-slate-50/70;
+    background: var(--cs-hair-2);
   }
-
   /* Numeric / identifier cells in tables read as telemetry. */
   .table td .num,
   .table .num {
-    @apply text-slate-900;
+    color: var(--cs-ink);
   }
 
   /* ── Footer brand strip ───────────────────────────────────────────

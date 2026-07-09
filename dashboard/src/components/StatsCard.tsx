@@ -1,7 +1,6 @@
 import { LucideIcon } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { DRILL_TOOLTIP } from '@/lib/drilldown'
 
 export type StatsColor = 'indigo' | 'red' | 'orange' | 'green' | 'gray'
@@ -12,31 +11,22 @@ interface StatsCardProps {
   title: string
   value: string | number
   icon: LucideIcon
-  /** Trend chip rendered under the metric. Negative numbers come in
-   *  red, positive in green; the +/- sign is added automatically. */
   trend?: { value: number; isPositive: boolean }
-  /** Optional sub-label rendered below the metric (e.g. "of 5 total"). */
   subtext?: string
-  /** Semantic colour. Accepts both the new palette
-   *  ('indigo'|'red'|'orange'|'green'|'gray') and the legacy palette
-   *  ('blue'|'green'|'red'|'yellow') for back-compat with older pages. */
   color?: StatsCardColor
-  /** Drill-down destination. When set, the card becomes a Link with
-   *  cursor-pointer + tooltip + a small arrow affordance in the corner. */
+  /** Drill-down destination — makes the card a Link with a hover affordance. */
   to?: string
-  /** Tooltip override for the drill-down. */
   drillTooltip?: string
 }
 
-// One quiet tint per semantic colour: a soft chip behind the icon, a
-// coloured icon, and a hairline rule. The metric itself stays solid ink
-// (mono) so the number is the loudest thing, not the decoration.
-const PALETTES: Record<StatsColor, { chip: string; icon: string; rule: string }> = {
-  indigo: { chip: 'bg-primary-50', icon: 'text-primary-600', rule: 'bg-primary-500' },
-  red:    { chip: 'bg-danger-50',  icon: 'text-danger-600',  rule: 'bg-danger-500' },
-  orange: { chip: 'bg-warning-50', icon: 'text-warning-600', rule: 'bg-warning-500' },
-  green:  { chip: 'bg-success-50', icon: 'text-success-600', rule: 'bg-success-500' },
-  gray:   { chip: 'bg-slate-100',  icon: 'text-slate-500',   rule: 'bg-slate-400' },
+// Each semantic color resolves to a single design token. Severity/status is
+// the only place non-indigo hue is used.
+const TOKEN: Record<StatsColor, string> = {
+  indigo: 'var(--cs-indigo)',
+  red: 'var(--cs-crit)',
+  orange: 'var(--cs-high)',
+  green: 'var(--cs-ok)',
+  gray: 'var(--cs-muted)',
 }
 
 const LEGACY_COLOR: Record<LegacyColor, StatsColor> = {
@@ -45,47 +35,58 @@ const LEGACY_COLOR: Record<LegacyColor, StatsColor> = {
 
 function normalize(c: StatsCardColor | undefined): StatsColor {
   if (!c) return 'indigo'
-  if (c in PALETTES) return c as StatsColor
+  if (c in TOKEN) return c as StatsColor
   return LEGACY_COLOR[c as LegacyColor] ?? 'indigo'
 }
 
 export default function StatsCard({
   title, value, icon: Icon, trend, subtext, color, to, drillTooltip,
 }: StatsCardProps) {
-  const p = PALETTES[normalize(color)]
+  const semantic = normalize(color)
+  const c = TOKEN[semantic]
+  const chipBg = semantic === 'indigo' ? 'var(--cs-indigo-faint)' : `color-mix(in srgb, ${c} 13%, var(--cs-panel))`
   const interactive = !!to
 
   const body = (
     <>
       {/* Thin semantic rule pinned to the left edge. */}
-      <div className={cn('absolute inset-y-3 left-0 w-[3px] rounded-full', p.rule)} />
+      <div className="absolute inset-y-3 left-0 w-[3px] rounded-full" style={{ background: c }} />
 
       {interactive && (
         <span
           aria-hidden
-          className="absolute top-4 right-4 text-slate-300 transition-colors group-hover:text-primary-600"
+          className="absolute top-3.5 right-4 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-cs-muted-2 opacity-0 translate-x-1 transition-all duration-150 group-hover:opacity-100 group-hover:translate-x-0"
+          style={{ color: 'var(--cs-indigo)' }}
         >
-          <ArrowUpRight className="h-4 w-4" />
+          Drill down <ArrowUpRight className="h-3.5 w-3.5" />
         </span>
       )}
 
       <div className="flex items-center justify-between gap-3">
         <p className="metric-label">{title}</p>
-        <div className={cn('h-9 w-9 shrink-0 rounded-lg flex items-center justify-center', p.chip)}>
-          <Icon className={cn('h-[18px] w-[18px]', p.icon)} />
+        <div
+          className="h-9 w-9 shrink-0 rounded-cs-sm flex items-center justify-center"
+          style={{ background: chipBg, color: c }}
+        >
+          <Icon className="h-[18px] w-[18px]" />
         </div>
       </div>
 
       <p className="metric-value mt-3">{value}</p>
 
       <div className="mt-1.5 flex items-center gap-2 min-h-[1.25rem]">
-        {subtext && <p className="text-xs text-slate-500 truncate">{subtext}</p>}
+        {subtext && (
+          <p className="text-xs truncate" style={{ color: semantic === 'gray' ? 'var(--cs-muted)' : c }}>
+            {subtext}
+          </p>
+        )}
         {trend && (
           <span
-            className={cn(
-              'inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[11px] font-semibold num',
-              trend.isPositive ? 'bg-success-50 text-success-700' : 'bg-danger-50 text-danger-700',
-            )}
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-cs-sm text-[11px] font-semibold num"
+            style={{
+              background: `color-mix(in srgb, ${trend.isPositive ? 'var(--cs-ok)' : 'var(--cs-crit)'} 12%, var(--cs-panel))`,
+              color: trend.isPositive ? 'var(--cs-ok)' : 'var(--cs-crit)',
+            }}
           >
             <span aria-hidden>{trend.isPositive ? '↑' : '↓'}</span>
             {Math.abs(trend.value)}%
@@ -101,10 +102,7 @@ export default function StatsCard({
         to={to!}
         title={drillTooltip ?? DRILL_TOOLTIP}
         aria-label={`${title}: ${drillTooltip ?? DRILL_TOOLTIP}`}
-        className={cn(
-          'card-modern relative overflow-hidden block group cursor-pointer pl-5',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-2',
-        )}
+        className="card-modern relative overflow-hidden block group cursor-pointer pl-5 focus-visible:outline-none focus-visible:shadow-focus"
       >
         {body}
       </Link>

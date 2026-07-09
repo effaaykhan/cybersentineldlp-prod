@@ -8,7 +8,8 @@ export default function LoadingSpinner({ size = 'md' }: { size?: 'sm' | 'md' | '
   return (
     <div className="flex items-center justify-center p-8">
       <div
-        className={`${sizeClasses[size]} border-gray-200 border-t-primary-600 rounded-full animate-spin`}
+        className={`${sizeClasses[size]} rounded-full animate-spin`}
+        style={{ borderColor: 'var(--cs-hair)', borderTopColor: 'var(--cs-indigo)' }}
       ></div>
     </div>
   )

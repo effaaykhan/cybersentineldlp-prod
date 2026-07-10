@@ -66,6 +66,11 @@ def _is_exempt(method: str, path: str) -> bool:
     # Agent enforcement / policy download API.
     if path.startswith("/api/v1/decision"):
         return True
+    # TAXII 2.1 sharing server — partner vendors poll this from external IPs and
+    # it has its own HTTP Basic auth, so it must not be gated by the portal
+    # allowlist.
+    if path.startswith("/api/v1/taxii2"):
+        return True
     # Agent event ingestion (POST only; GET is human reporting).
     if method == "POST" and path.rstrip("/") == "/api/v1/events":
         return True

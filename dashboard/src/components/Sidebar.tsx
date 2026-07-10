@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Search,
   UserCog,
+  Radar,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -44,6 +45,7 @@ const groups: NavGroup[] = [
       { name: 'Alerts',       to: '/alerts',       icon: AlertCircle,   requires: ['view_alerts'] },
       { name: 'Incidents',    to: '/incidents',    icon: AlertTriangle, requires: ['view_alerts'] },
       { name: 'Log Explorer', to: '/log-explorer', icon: Search,        requires: ['view_events'] },
+      { name: 'Threat Intel',  to: '/threat-intel', icon: Radar,         requires: ['manage_users', 'manage_roles'] },
     ],
   },
   {

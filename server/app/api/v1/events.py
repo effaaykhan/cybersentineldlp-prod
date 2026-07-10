@@ -18,9 +18,45 @@ from app.core.domains import domain_for_event_type
 from app.services.domain_service import build_domain_mongo_filter
 from app.services.event_processor import get_event_processor
 from app.integrations.siem.integration_service import siem_service
+from app.services.ioc_service import ioc_matcher
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+async def _match_iocs_and_tag(doc: Dict[str, Any]) -> None:
+    """Match an event's destinations/hashes against active IOCs. On a hit, tag
+    the event and record the match (alert + tag only — no enforcement change).
+    Best-effort; never raises into the request path."""
+    try:
+        hits = await ioc_matcher.match_event(doc)
+        if not hits:
+            return
+        db = get_mongodb()
+        summary = [
+            {"ioc_id": h["ioc_id"], "ioc_type": h["ioc_type"], "value": h["value"],
+             "source": h.get("source"), "tlp": h.get("tlp")}
+            for h in hits
+        ]
+        # Tag the event so the detail view shows the IOC hit.
+        await db["dlp_events"].update_one(
+            {"id": doc.get("id")},
+            {"$set": {"ioc_matches": summary, "ioc_matched": True}},
+        )
+        # Record the match for the Threat Intelligence "recent matches" feed.
+        await db.get_collection("ioc_matches").insert_one({
+            "event_id": doc.get("id"),
+            "timestamp": datetime.now(timezone.utc),
+            "agent_id": doc.get("agent_id"),
+            "event_type": doc.get("event_type"),
+            "severity": doc.get("severity"),
+            "destination": doc.get("destination") or doc.get("destination_host"),
+            "file_path": doc.get("file_path"),
+            "matches": summary,
+        })
+        logger.info("ioc_match", event_id=doc.get("id"), hits=len(summary))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ioc_match_failed", error=str(e))
 
 
 def _siem_event_from_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
@@ -557,6 +593,9 @@ async def create_event(
 
     # ── Real-time SIEM forwarding (best-effort, severity-thresholded) ──
     background_tasks.add_task(_forward_to_siem, dict(event_doc))
+
+    # ── Threat-intel IOC matching (alert + tag only) ──────────────────
+    background_tasks.add_task(_match_iocs_and_tag, dict(event_doc))
 
     # ── Step 3: Queue background processing ────────────────────────────
     payload = _build_processor_payload(event)

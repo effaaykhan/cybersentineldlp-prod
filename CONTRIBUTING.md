@@ -323,7 +323,9 @@ def test_create_user(client: TestClient, auth_headers):
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+This project is proprietary — all rights reserved (see [LICENSE](LICENSE)). By
+contributing, you agree that your contributions become part of the Software and
+that all rights in them are assigned to the copyright holder under that license.
 
 ---
 

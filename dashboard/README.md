@@ -371,7 +371,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts'
 
 ## License
 
-Apache 2.0 - See LICENSE file
+Proprietary — All rights reserved. See the [LICENSE](../LICENSE) file.
 
 ## Support
 

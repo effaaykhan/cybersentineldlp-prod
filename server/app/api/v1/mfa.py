@@ -157,8 +157,11 @@ async def mfa_confirm(
 
 @router.get("/status")
 async def mfa_status(current_user: User = Depends(get_current_user)):
+    enrolled = current_user.mfa_enrolled_at
     return {
         "enabled": bool(current_user.mfa_enabled),
+        "mfa_enabled": bool(current_user.mfa_enabled),  # alias for the dashboard client
+        "enrolled_at": enrolled.isoformat() if enrolled else None,
         "recovery_codes_remaining": len(current_user.mfa_recovery_codes or []),
     }
 

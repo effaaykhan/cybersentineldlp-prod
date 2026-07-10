@@ -4,11 +4,14 @@ import toast from 'react-hot-toast'
 import { initiateGoogleDriveConnection, initiateOneDriveConnection, changePassword } from '@/lib/api'
 import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
+import MfaSection from '@/components/settings/MfaSection'
+import IpAllowlistSection from '@/components/settings/IpAllowlistSection'
 
 const defaultOpenSearchUrl = import.meta.env.VITE_OPENSEARCH_URL ?? 'https://localhost:9200'
 
 export default function Settings() {
   const { user } = useAuthStore()
+  const isSuperAdmin = String(user?.role || '').toUpperCase() === 'ADMIN'
   const [isConnectingDrive, setIsConnectingDrive] = useState(false)
   const [isConnectingOneDrive, setIsConnectingOneDrive] = useState(false)
   const [currentPassword, setCurrentPassword] = useState('')
@@ -156,6 +159,12 @@ export default function Settings() {
             </button>
           </form>
         </div>
+
+        {/* Two-Factor Authentication (self-service, all admin accounts) */}
+        <MfaSection />
+
+        {/* Authorized IP Addresses (Super Admin only) */}
+        {isSuperAdmin && <IpAllowlistSection />}
 
         {/* System Settings */}
         <div className="card">

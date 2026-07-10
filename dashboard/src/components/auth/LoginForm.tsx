@@ -3,7 +3,7 @@ import { extractErrorDetail } from '@/utils/errorUtils'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/lib/store/auth'
 import { changePassword } from '@/lib/api'
-import { Shield, Mail, Lock, AlertCircle, CheckCircle, KeyRound, Eye, EyeOff } from 'lucide-react'
+import { Shield, Mail, Lock, AlertCircle, CheckCircle, KeyRound, Eye, EyeOff, Smartphone } from 'lucide-react'
 
 export default function LoginForm() {
   const navigate = useNavigate()
@@ -15,10 +15,12 @@ export default function LoginForm() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [mode, setMode] = useState<'login' | 'changePassword'>('login')
+  const [mode, setMode] = useState<'login' | 'changePassword' | 'mfa'>('login')
   const [showPassword, setShowPassword] = useState(false)
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [mfaToken, setMfaToken] = useState('')
+  const [mfaCode, setMfaCode] = useState('')
 
   const resetForm = () => {
     setPassword('')
@@ -29,12 +31,16 @@ export default function LoginForm() {
     setShowPassword(false)
     setShowNewPassword(false)
     setShowConfirmPassword(false)
+    setMfaToken('')
+    setMfaCode('')
   }
 
-  const switchMode = (newMode: 'login' | 'changePassword') => {
+  const switchMode = (newMode: 'login' | 'changePassword' | 'mfa') => {
     resetForm()
     setMode(newMode)
   }
+
+  const { verifyMfa } = useAuthStore()
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -42,10 +48,35 @@ export default function LoginForm() {
     setLoading(true)
 
     try {
-      await login(email, password)
+      const result = await login(email, password)
+      if (result.mfaRequired && result.mfaToken) {
+        // Two-step login: switch to the code-entry step. Keep email so the
+        // header can stay contextual; password is cleared for safety.
+        setMfaToken(result.mfaToken)
+        setPassword('')
+        setError('')
+        setMode('mfa')
+        return
+      }
       navigate('/dashboard')
     } catch (err: any) {
       const errorMessage = extractErrorDetail(err, 'Invalid credentials')
+      setError(errorMessage)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleVerifyMfa = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+
+    try {
+      await verifyMfa(mfaToken, mfaCode.trim())
+      navigate('/dashboard')
+    } catch (err: any) {
+      const errorMessage = extractErrorDetail(err, 'Invalid verification code')
       setError(errorMessage)
     } finally {
       setLoading(false)
@@ -77,6 +108,7 @@ export default function LoginForm() {
   }
 
   const isChangePassword = mode === 'changePassword'
+  const isMfa = mode === 'mfa'
 
   const eyeButtonClass = "absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer text-cs-muted-2 hover:text-cs-ink-2 transition-colors"
   const fieldClass = "input pl-10 py-2.5 disabled:bg-cs-hair-2"
@@ -89,13 +121,19 @@ export default function LoginForm() {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-cs-indigo rounded-cs-card mb-4 shadow-sm">
             {isChangePassword ? (
               <KeyRound className="w-7 h-7 text-white" />
+            ) : isMfa ? (
+              <Smartphone className="w-7 h-7 text-white" />
             ) : (
               <Shield className="w-7 h-7 text-white" />
             )}
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-cs-ink">CyberSentinel DLP</h1>
           <p className="text-cs-muted mt-1.5 text-sm">
-            {isChangePassword ? 'Change your password' : 'Enterprise Data Loss Prevention'}
+            {isChangePassword
+              ? 'Change your password'
+              : isMfa
+              ? 'Two-factor authentication'
+              : 'Enterprise Data Loss Prevention'}
           </p>
         </div>
 
@@ -116,7 +154,11 @@ export default function LoginForm() {
             <AlertCircle className="w-5 h-5 text-cs-crit flex-shrink-0 mt-0.5" />
             <div className="flex-1">
               <h3 className="text-sm font-medium text-cs-crit">
-                {isChangePassword ? 'Password change failed' : 'Authentication failed'}
+                {isChangePassword
+                  ? 'Password change failed'
+                  : isMfa
+                  ? 'Verification failed'
+                  : 'Authentication failed'}
               </h3>
               <p className="text-sm text-cs-ink-2 mt-1">{error}</p>
             </div>
@@ -124,7 +166,12 @@ export default function LoginForm() {
         )}
 
         {/* Form */}
-        <form onSubmit={isChangePassword ? handleChangePassword : handleLogin} className="space-y-5">
+        <form
+          onSubmit={isChangePassword ? handleChangePassword : isMfa ? handleVerifyMfa : handleLogin}
+          className="space-y-5"
+        >
+          {!isMfa && (
+          <>
           {/* Username Field */}
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-cs-ink-2 mb-1.5">
@@ -243,6 +290,38 @@ export default function LoginForm() {
               </p>
             </>
           )}
+          </>
+          )}
+
+          {/* MFA Code Field (only in the two-factor challenge step) */}
+          {isMfa && (
+            <div>
+              <label htmlFor="mfaCode" className="block text-sm font-medium text-cs-ink-2 mb-1.5">
+                Authentication code
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Smartphone className="h-4 w-4 text-cs-muted-2" />
+                </div>
+                <input
+                  id="mfaCode"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoFocus
+                  value={mfaCode}
+                  onChange={(e) => setMfaCode(e.target.value)}
+                  required
+                  className={`${fieldClass} tracking-[0.4em] text-center num`}
+                  placeholder="000000"
+                  disabled={loading}
+                />
+              </div>
+              <p className="text-xs text-cs-muted mt-2">
+                Enter the 6-digit code from your authenticator app, or one of your backup codes.
+              </p>
+            </div>
+          )}
 
           {/* Submit Button */}
           <button
@@ -256,17 +335,17 @@ export default function LoginForm() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                {isChangePassword ? 'Changing password…' : 'Signing in…'}
+                {isChangePassword ? 'Changing password…' : isMfa ? 'Verifying…' : 'Signing in…'}
               </span>
             ) : (
-              isChangePassword ? 'Change password' : 'Sign in'
+              isChangePassword ? 'Change password' : isMfa ? 'Verify' : 'Sign in'
             )}
           </button>
         </form>
 
         {/* Toggle Link */}
         <div className="mt-6 text-center">
-          {isChangePassword ? (
+          {isChangePassword || isMfa ? (
             <button
               onClick={() => switchMode('login')}
               className="text-sm font-medium text-cs-indigo hover:text-cs-indigo-d transition-colors"

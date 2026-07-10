@@ -702,5 +702,59 @@ export async function getScanResults(jobId: string, params?: { skip?: number; li
   return data
 }
 
+// ── Multi-factor authentication (self-service TOTP) ──────────────────────────
+export type MfaStatus = { mfa_enabled: boolean; enrolled_at?: string | null }
+export type MfaSetup = { secret: string; otpauth_uri: string; qr_svg: string }
+export type MfaConfirm = { enabled: boolean; recovery_codes: string[] }
+
+export const getMfaStatus = async (): Promise<MfaStatus> => {
+  const { data } = await apiClient.get('/auth/mfa/status')
+  return data
+}
+
+export const setupMfa = async (): Promise<MfaSetup> => {
+  const { data } = await apiClient.post('/auth/mfa/setup')
+  return data
+}
+
+export const confirmMfa = async (code: string): Promise<MfaConfirm> => {
+  const { data } = await apiClient.post('/auth/mfa/confirm', { code })
+  return data
+}
+
+export const disableMfa = async (code: string): Promise<{ enabled: boolean }> => {
+  const { data } = await apiClient.post('/auth/mfa/disable', { code })
+  return data
+}
+
+// ── Authorized-IP allowlist (Super Admin only) ──────────────────────────────
+export type IPAllowlistEntry = {
+  id: string
+  cidr: string
+  label?: string | null
+  is_enabled: boolean
+  created_at?: string | null
+}
+export type IPAllowlistResponse = {
+  entries: IPAllowlistEntry[]
+  your_ip: string
+  enforced: boolean
+}
+
+export const getIpAllowlist = async (): Promise<IPAllowlistResponse> => {
+  const { data } = await apiClient.get('/security/ip-allowlist')
+  return data
+}
+
+export const addIpAllowlist = async (cidr: string, label?: string) => {
+  const { data } = await apiClient.post('/security/ip-allowlist', { cidr, label })
+  return data
+}
+
+export const deleteIpAllowlist = async (entryId: string) => {
+  const { data } = await apiClient.delete(`/security/ip-allowlist/${entryId}`)
+  return data
+}
+
 
 export default apiClient

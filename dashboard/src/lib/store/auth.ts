@@ -21,7 +21,8 @@ interface AuthState {
   user: AuthUser | null
   accessToken: string | null
   refreshToken: string | null
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<{ mfaRequired: boolean; mfaToken?: string }>
+  verifyMfa: (mfaToken: string, code: string) => Promise<void>
   logout: () => void
   setTokens: (accessToken: string, refreshToken: string) => void
   refreshMe: () => Promise<void>
@@ -44,6 +45,22 @@ async function fetchMe(accessToken: string): Promise<AuthUser> {
     organization: d.organization ?? null,
     is_active: d.is_active !== false,
     permissions: Array.isArray(d.permissions) ? d.permissions.map(String) : [],
+  }
+}
+
+// Resolve identity from /auth/me, falling back to the JWT claims (with empty
+// permissions) if /me is briefly unavailable. Shared by login + verifyMfa.
+async function resolveUser(accessToken: string, fallbackEmail: string): Promise<AuthUser> {
+  try {
+    return await fetchMe(accessToken)
+  } catch {
+    const claims = decodeJwt(accessToken)
+    return {
+      id: String(claims?.sub ?? ''),
+      email: String(claims?.email ?? fallbackEmail),
+      role: String(claims?.role ?? 'VIEWER'),
+      permissions: [],
+    }
   }
 }
 
@@ -74,26 +91,17 @@ export const useAuthStore = create<AuthState>()(
             }
           )
 
+          // MFA-enabled account: no tokens yet — the caller must collect a
+          // code and call verifyMfa() with the returned mfa_token.
+          if (response.data?.mfa_required) {
+            return { mfaRequired: true, mfaToken: response.data.mfa_token as string }
+          }
+
           const { access_token, refresh_token } = response.data
 
           // Resolve real identity from /auth/me. The JWT's `role` claim is
           // only used as an instant-UI hint while the /me request is in flight.
-          let user: AuthUser
-          try {
-            user = await fetchMe(access_token)
-          } catch {
-            // If /me is temporarily unavailable, fall back to a minimal
-            // user record built from the JWT so the session still works.
-            // Permissions default to [] — UI will hide privileged actions
-            // until /me succeeds (enforced server-side regardless).
-            const claims = decodeJwt(access_token)
-            user = {
-              id: String(claims?.sub ?? ''),
-              email: String(claims?.email ?? cleanEmail),
-              role: String(claims?.role ?? 'VIEWER'),
-              permissions: [],
-            }
-          }
+          const user = await resolveUser(access_token, cleanEmail)
 
           set({
             isAuthenticated: true,
@@ -101,10 +109,30 @@ export const useAuthStore = create<AuthState>()(
             refreshToken: refresh_token,
             user,
           })
+          return { mfaRequired: false }
         } catch (error: any) {
           const errorMessage =
             error.response?.data?.detail || 'Invalid email or password'
           throw new Error(errorMessage)
+        }
+      },
+
+      verifyMfa: async (mfaToken: string, code: string) => {
+        try {
+          const response = await axios.post(`${API_URL}/auth/mfa/verify`, {
+            mfa_token: mfaToken,
+            code,
+          })
+          const { access_token, refresh_token } = response.data
+          const user = await resolveUser(access_token, '')
+          set({
+            isAuthenticated: true,
+            accessToken: access_token,
+            refreshToken: refresh_token,
+            user,
+          })
+        } catch (error: any) {
+          throw new Error(error.response?.data?.detail || 'Invalid verification code')
         }
       },
 

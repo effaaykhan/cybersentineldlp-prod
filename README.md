@@ -12,6 +12,7 @@ Data Loss Prevention (DLP) is the practice of detecting and preventing unauthori
 - **Real-Time Decisions** — Sub-10ms local policy evaluation on agents; server-side decision API for content-aware blocking
 - **SIEM Integration** — Splunk and OpenSearch/Elasticsearch connectors
 - **Dashboard** — React-based UI for event viewer, policy builder, rule management, agent fleet monitoring, and classification analytics
+- **Granular RBAC** — A global super-admin plus domain-scoped admins (Threat, Data Protection, Access Control) who see and control only their own policies and reporting, layered on ABAC department/clearance visibility
 - **Sequential Agent IDs** — Agents are assigned WIN-001, WIN-002, LIN-001 format IDs automatically
 
 ---
@@ -28,15 +29,22 @@ bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-
 
 This clones the repo, generates secure passwords, starts all services, and prints the admin credentials.
 
-#### Install the updates
-```
+#### Install updates
+
+Pull the latest images, **apply any new database migrations**, then restart. The
+migration step is required for upgrades — the app auto-creates the schema on a
+fresh install, but new columns/roles on existing tables only land via Alembic
+(for example the domain-scoped RBAC release adds `policies.domain` and three
+admin roles):
+
+```bash
 docker compose -f docker-compose.prod.yml pull
-```
-```
 docker compose -f docker-compose.prod.yml up -d
+docker exec cybersentinel-manager alembic upgrade head
 ```
+
 #### Verify
-```
+```bash
 docker ps
 ```
 
@@ -48,11 +56,20 @@ cd cybersentineldlp-prod
 cp .env.example .env
 # Edit .env — set passwords, or run: python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 docker compose -f docker-compose.prod.yml up -d
+docker exec cybersentinel-manager alembic upgrade head    # apply DB migrations
 docker logs cybersentinel-manager 2>&1 | grep "generated_password"
 ```
 
-- Dashboard: `http://<server-ip>:4000`
+- Dashboard: `http://<server-ip>:3023`  (override with `DASHBOARD_HOST_PORT` in `.env`)
 - API docs: `http://<server-ip>:55000/api/v1/docs`
+
+#### First login & roles
+
+Sign in with the admin credentials printed above (a global **super admin**). Then,
+under **User Management → Create User**, assign accounts one of the domain-scoped
+admin roles — **Threat Admin**, **Data Protection Admin**, or **Access Control
+Admin** — so each only sees and manages the policies and reporting in their
+domain. The super admin retains visibility across all domains.
 
 ### Windows Agent (one-liner)
 
@@ -98,15 +115,28 @@ sudo systemctl start cybersentinel-agent
 
 ### Windows Agent Compilation (from source)
 
-Requires MSYS2 with MinGW-w64:
+Requires MSYS2 with MinGW-w64 (run from an **MSYS2 MinGW 64-bit** shell). The
+simplest path is the bundled script, which backs up the existing binary and
+prints the deploy steps:
 
 ```bash
 cd agents/endpoint/windows
-g++ -std=c++17 -O2 agent.cpp screen_capture_monitor.cpp print_monitor.cpp \
-    -o cybersentinel_agent.exe \
-    -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
-    -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool -static
+./build.sh
 ```
+
+Or compile directly (equivalent to what `build.sh` runs):
+
+```bash
+cd agents/endpoint/windows
+g++ -std=c++17 -O2 \
+    agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
+    -o cybersentinel_agent.exe \
+    -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
+    -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \
+    -luiautomationcore -lpsapi -static
+```
+
+If `g++` is missing: `pacman -S mingw-w64-x86_64-gcc`.
 
 ---
 

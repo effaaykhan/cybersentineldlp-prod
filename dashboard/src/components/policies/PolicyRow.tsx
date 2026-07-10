@@ -75,6 +75,14 @@ export default function PolicyRow({
             <span className="badge badge-info">
               {getPolicyTypeLabel(policy.type)}
             </span>
+            {policy.domain && policy.domain !== 'general' && (
+              <span
+                className="badge bg-cs-hair-2 text-cs-ink-2 capitalize"
+                title="RBAC domain — which admin governs this policy"
+              >
+                {policy.domain.replace(/_/g, ' ')}
+              </span>
+            )}
             <span className="badge bg-cs-hair-2 text-cs-ink-2">
               {policy.agentIds && policy.agentIds.length > 0
                 ? `Scoped (${policy.agentIds.length})`

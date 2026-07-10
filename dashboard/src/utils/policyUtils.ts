@@ -439,6 +439,7 @@ export const transformApiPolicyToFrontend = (apiPolicy: any): Policy => {
     name: apiPolicy.name || '',
     description: apiPolicy.description || '',
     type: apiPolicy.type as PolicyType,
+    domain: apiPolicy.domain || 'general',
     enabled: apiPolicy.enabled ?? true,
     severity: (apiPolicy.severity || 'medium') as PolicySeverity,
     priority: apiPolicy.priority || 100,

@@ -158,6 +158,7 @@ export interface Policy {
   name: string
   description: string
   type?: PolicyType  // Optional for classification-aware policies
+  domain?: string    // RBAC policy domain (threat|data_protection|access_control|general)
   severity?: PolicySeverity  // Optional for classification-aware policies
   priority: number
   enabled: boolean

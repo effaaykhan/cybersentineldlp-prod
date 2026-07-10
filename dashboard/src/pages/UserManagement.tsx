@@ -21,7 +21,22 @@ import {
 import { usePermission } from '@/hooks/usePermission'
 
 // Roles exposed by the dropdowns — mirrors the backend whitelist.
-const ROLE_OPTIONS = ['ADMIN', 'ANALYST', 'MANAGER', 'VIEWER'] as const
+const ROLE_OPTIONS = [
+  'ADMIN', 'ANALYST', 'MANAGER', 'VIEWER',
+  'THREAT_ADMIN', 'DATA_PROTECTION_ADMIN', 'ACCESS_CONTROL_ADMIN',
+] as const
+
+// Readable labels for the domain-scoped admin roles.
+const ROLE_LABELS: Record<string, string> = {
+  ADMIN: 'Super Admin',
+  ANALYST: 'Analyst',
+  MANAGER: 'Manager',
+  VIEWER: 'Viewer',
+  THREAT_ADMIN: 'Threat Admin',
+  DATA_PROTECTION_ADMIN: 'Data Protection Admin',
+  ACCESS_CONTROL_ADMIN: 'Access Control Admin',
+}
+const roleLabel = (r: string) => ROLE_LABELS[r] ?? r
 
 const EMPTY_CREATE: AdminUserCreateInput = {
   email: '',
@@ -320,11 +335,15 @@ function RoleBadge({ role }: { role: string }) {
     MANAGER: 'bg-[color-mix(in_srgb,var(--cs-high)_14%,var(--cs-panel))] text-cs-high',
     VIEWER:  'bg-cs-hair-2 text-cs-ink-2',
     AGENT:   'bg-[color-mix(in_srgb,var(--cs-ok)_14%,var(--cs-panel))] text-cs-ok',
+    // Domain-scoped admins — indigo-tinted like other admins.
+    THREAT_ADMIN:          'bg-[color-mix(in_srgb,var(--cs-high)_14%,var(--cs-panel))] text-cs-high',
+    DATA_PROTECTION_ADMIN: 'bg-cs-indigo-faint text-cs-indigo',
+    ACCESS_CONTROL_ADMIN:  'bg-[color-mix(in_srgb,var(--cs-ok)_14%,var(--cs-panel))] text-cs-ok',
   }
   const cls = colors[role?.toUpperCase()] || 'bg-cs-hair-2 text-cs-ink-2'
   return (
     <span className={`inline-flex px-2 py-0.5 rounded-cs-pill text-xs font-semibold ${cls}`}>
-      {role}
+      {roleLabel(role)}
     </span>
   )
 }
@@ -497,7 +516,7 @@ function CreateUserDialog({
               onChange={(e) => update('role', e.target.value)}
             >
               {ROLE_OPTIONS.map((r) => (
-                <option key={r} value={r}>{r}</option>
+                <option key={r} value={r}>{roleLabel(r)}</option>
               ))}
             </select>
           </Field>
@@ -604,7 +623,7 @@ function EditUserDialog({
               onChange={(e) => update('role', e.target.value)}
             >
               {ROLE_OPTIONS.map((r) => (
-                <option key={r} value={r}>{r}</option>
+                <option key={r} value={r}>{roleLabel(r)}</option>
               ))}
             </select>
           </Field>

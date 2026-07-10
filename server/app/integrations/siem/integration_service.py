@@ -14,6 +14,13 @@ from app.core.observability import StructuredLogger
 
 logger = StructuredLogger(__name__)
 
+# Severity ordering for threshold comparisons (higher = more severe).
+_SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _sev_rank(value: Any) -> int:
+    return _SEVERITY_RANK.get(str(value or "medium").lower(), 2)
+
 
 class SIEMIntegrationService:
     """
@@ -152,6 +159,40 @@ class SIEMIntegrationService:
 
         return status_map
 
+    async def forward_event(self, event: Dict[str, Any]) -> Dict[str, bool]:
+        """
+        Forward one event to every active connector whose ``min_severity``
+        threshold the event meets. Connectors without a threshold (the HTTP
+        push connectors) default to forwarding everything.
+
+        Best-effort and non-blocking: failures are logged, never raised, so a
+        dead SIEM never disrupts event ingestion.
+        """
+        event_rank = _sev_rank(event.get("severity"))
+        tasks, names = [], []
+        for name in list(self.active_connectors):
+            connector = self.connectors.get(name)
+            if connector is None:
+                continue
+            threshold = getattr(connector, "min_severity", "info")
+            if event_rank < _sev_rank(threshold):
+                continue  # below this connector's floor — skip
+            tasks.append(connector.send_event(event))
+            names.append(name)
+
+        if not tasks:
+            return {}
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        status_map = {}
+        for name, result in zip(names, results):
+            if isinstance(result, Exception):
+                logger.log_error(result, {"operation": "forward_event", "connector": name})
+                status_map[name] = False
+            else:
+                status_map[name] = bool(result)
+        return status_map
+
     async def send_batch_to_all(
         self,
         events: List[Dict[str, Any]],
@@ -237,7 +278,12 @@ class SIEMIntegrationService:
                 "name": name,
                 "siem_type": connector.siem_type.value,
                 "connected": connector.connected,
-                "active": name in self.active_connectors
+                "active": name in self.active_connectors,
+                "host": getattr(connector, "host", None),
+                "port": getattr(connector, "port", None),
+                "protocol": getattr(connector, "protocol", None),
+                "format": getattr(connector, "log_format", None),
+                "min_severity": getattr(connector, "min_severity", None),
             }
             for name, connector in self.connectors.items()
         ]

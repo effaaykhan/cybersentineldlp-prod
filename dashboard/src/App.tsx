@@ -14,6 +14,7 @@ import Settings from './pages/Settings'
 import Incidents from './app/dashboard/incidents/page'
 import LogExplorer from './app/dashboard/log-explorer/page'
 import UserManagement from './pages/UserManagement'
+import ThreatIntelligence from './pages/ThreatIntelligence'
 
 function App() {
   const { isAuthenticated } = useAuthStore()
@@ -33,6 +34,7 @@ function App() {
           <Route path="policies" element={<Policies />} />
           <Route path="incidents" element={<Incidents />} />
           <Route path="log-explorer" element={<LogExplorer />} />
+          <Route path="threat-intel" element={<ThreatIntelligence />} />
           <Route path="admin/users" element={<UserManagement />} />
           <Route path="settings" element={<Settings />} />
         </Route>

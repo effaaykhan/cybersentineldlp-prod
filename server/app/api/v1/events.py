@@ -17,9 +17,93 @@ from app.core.database import get_mongodb, get_db
 from app.core.domains import domain_for_event_type
 from app.services.domain_service import build_domain_mongo_filter
 from app.services.event_processor import get_event_processor
+from app.integrations.siem.integration_service import siem_service
+from app.services.ioc_service import ioc_matcher
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+async def _match_iocs_and_tag(doc: Dict[str, Any]) -> None:
+    """Match an event's destinations/hashes against active IOCs. On a hit, tag
+    the event and record the match (alert + tag only — no enforcement change).
+    Best-effort; never raises into the request path."""
+    try:
+        hits = await ioc_matcher.match_event(doc)
+        if not hits:
+            return
+        db = get_mongodb()
+        summary = [
+            {"ioc_id": h["ioc_id"], "ioc_type": h["ioc_type"], "value": h["value"],
+             "source": h.get("source"), "tlp": h.get("tlp")}
+            for h in hits
+        ]
+        # Tag the event so the detail view shows the IOC hit.
+        await db["dlp_events"].update_one(
+            {"id": doc.get("id")},
+            {"$set": {"ioc_matches": summary, "ioc_matched": True}},
+        )
+        # Record the match for the Threat Intelligence "recent matches" feed.
+        await db.get_collection("ioc_matches").insert_one({
+            "event_id": doc.get("id"),
+            "timestamp": datetime.now(timezone.utc),
+            "agent_id": doc.get("agent_id"),
+            "event_type": doc.get("event_type"),
+            "severity": doc.get("severity"),
+            "destination": doc.get("destination") or doc.get("destination_host"),
+            "file_path": doc.get("file_path"),
+            "matches": summary,
+        })
+        logger.info("ioc_match", event_id=doc.get("id"), hits=len(summary))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ioc_match_failed", error=str(e))
+
+
+def _siem_event_from_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten a stored event_doc into the shape SIEM connectors format
+    (see SIEMConnector.format_dlp_event)."""
+    ts = doc.get("timestamp")
+    labels = doc.get("classification_labels") or []
+    matched = doc.get("matched_policies") or []
+    fpath = doc.get("file_path") or ""
+    return {
+        "event_id": doc.get("id"),
+        "event_type": doc.get("event_type"),
+        "severity": doc.get("severity", "medium"),
+        "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+        "agent_id": doc.get("agent_id"),
+        "agent_name": doc.get("agent_name") or doc.get("hostname"),
+        "hostname": doc.get("hostname"),
+        "agent_ip": doc.get("agent_ip") or doc.get("ip_address"),
+        "classification_type": (labels[0] if labels else None) or doc.get("classification_category"),
+        "confidence": doc.get("classification_score"),
+        "blocked": bool(doc.get("blocked", False)),
+        "policy_id": doc.get("policy_id"),
+        "policy_name": (matched[0].get("policy_name") if matched else None),
+        "username": doc.get("username"),
+        "user_email": doc.get("user_email"),
+        "source_ip": doc.get("source_ip") or doc.get("agent_ip"),
+        "destination_host": doc.get("destination"),
+        "file_name": (fpath.replace("\\", "/").rstrip("/").split("/")[-1] or None),
+        "file_path": doc.get("file_path"),
+        "file_hash": doc.get("file_hash") or (doc.get("metadata") or {}).get("file_hash"),
+        "actions": [doc["action_taken"]] if doc.get("action_taken") else [],
+        "metadata": {
+            "classification_level": doc.get("classification_level"),
+            "labels": labels,
+        },
+    }
+
+
+async def _forward_to_siem(doc: Dict[str, Any]) -> None:
+    """Best-effort real-time forward of one event to all SIEM connectors whose
+    severity threshold it meets. Never raises into the request path."""
+    try:
+        if not siem_service.active_connectors:
+            return
+        await siem_service.forward_event(_siem_event_from_doc(doc))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("siem_forward_failed", error=str(e))
 
 
 class EventCreate(BaseModel):
@@ -506,6 +590,12 @@ async def create_event(
     )
     if result.matched_count > 0:
         return {"status": "duplicate", "event_id": event.event_id}
+
+    # ── Real-time SIEM forwarding (best-effort, severity-thresholded) ──
+    background_tasks.add_task(_forward_to_siem, dict(event_doc))
+
+    # ── Threat-intel IOC matching (alert + tag only) ──────────────────
+    background_tasks.add_task(_match_iocs_and_tag, dict(event_doc))
 
     # ── Step 3: Queue background processing ────────────────────────────
     payload = _build_processor_payload(event)

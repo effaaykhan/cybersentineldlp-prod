@@ -756,5 +756,125 @@ export const deleteIpAllowlist = async (entryId: string) => {
   return data
 }
 
+// ── SIEM log forwarding (connectors) ────────────────────────────────────────
+export type SiemConnector = {
+  name: string
+  siem_type: string
+  connected: boolean
+  active: boolean
+  host?: string | null
+  port?: number | null
+  protocol?: string | null
+  format?: string | null
+  min_severity?: string | null
+}
+
+export const getSiemConnectors = async (): Promise<SiemConnector[]> => {
+  const { data } = await apiClient.get('/siem/connectors')
+  return data?.connectors || []
+}
+
+export const registerSyslogConnector = async (cfg: {
+  name: string
+  host: string
+  port: number
+  protocol: string
+  log_format: string
+  facility: string
+  min_severity: string
+}) => {
+  const { data } = await apiClient.post('/siem/connectors', {
+    ...cfg,
+    siem_type: 'syslog',
+  })
+  return data
+}
+
+export const testSiemConnector = async (name: string) => {
+  const { data } = await apiClient.post(`/siem/connectors/${encodeURIComponent(name)}/test`)
+  return data
+}
+
+export const deleteSiemConnector = async (name: string) => {
+  const { data } = await apiClient.delete(`/siem/connectors/${encodeURIComponent(name)}`)
+  return data
+}
+
+// ── Threat Intelligence (IOC / STIX / TAXII) ────────────────────────────────
+export type IOC = {
+  id: string
+  ioc_type: string
+  value: string
+  name?: string | null
+  tlp?: string | null
+  confidence?: number | null
+  source?: string | null
+  direction?: string | null
+  is_shared: boolean
+  is_active: boolean
+  created_at?: string | null
+}
+export type TaxiiFeed = {
+  id: string
+  name: string
+  server_url: string
+  collection_id?: string | null
+  last_polled_at?: string | null
+  last_status?: string | null
+  total_imported: number
+}
+export type IocStats = {
+  total: number
+  active: number
+  shared: number
+  feeds: number
+  by_type: Record<string, number>
+}
+
+export const getIocs = async (params?: { ioc_type?: string; shared?: boolean; q?: string }): Promise<IOC[]> => {
+  const { data } = await apiClient.get('/threat-intel/iocs', { params })
+  return data?.iocs || []
+}
+export const getIocStats = async (): Promise<IocStats> => {
+  const { data } = await apiClient.get('/threat-intel/stats')
+  return data
+}
+export const addIoc = async (body: { ioc_type: string; value: string; tlp?: string; confidence?: number; name?: string }) => {
+  const { data } = await apiClient.post('/threat-intel/iocs', body)
+  return data
+}
+export const deleteIoc = async (id: string) => {
+  const { data } = await apiClient.delete(`/threat-intel/iocs/${id}`)
+  return data
+}
+export const shareIoc = async (id: string, shared: boolean) => {
+  const { data } = await apiClient.post(`/threat-intel/iocs/${id}/share`, { shared })
+  return data
+}
+export const importIocs = async (format: 'csv' | 'stix', content: string) => {
+  const { data } = await apiClient.post('/threat-intel/iocs/import', { format, content })
+  return data
+}
+export const getTaxiiFeeds = async (): Promise<TaxiiFeed[]> => {
+  const { data } = await apiClient.get('/threat-intel/feeds')
+  return data?.feeds || []
+}
+export const addTaxiiFeed = async (body: { name: string; server_url: string; collection_id?: string; username?: string; password?: string }) => {
+  const { data } = await apiClient.post('/threat-intel/feeds', body)
+  return data
+}
+export const deleteTaxiiFeed = async (id: string) => {
+  const { data } = await apiClient.delete(`/threat-intel/feeds/${id}`)
+  return data
+}
+export const pollTaxiiFeed = async (id: string) => {
+  const { data } = await apiClient.post(`/threat-intel/feeds/${id}/poll`)
+  return data
+}
+export const getIocMatches = async (): Promise<any[]> => {
+  const { data } = await apiClient.get('/threat-intel/matches')
+  return data?.matches || []
+}
+
 
 export default apiClient

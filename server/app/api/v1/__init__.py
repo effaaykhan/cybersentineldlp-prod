@@ -9,6 +9,8 @@ from app.api.v1 import (
     auth,
     mfa,
     ip_allowlist,
+    threat_intel,
+    taxii,
     events,
     policies,
     users,
@@ -44,6 +46,8 @@ async def health_check():
 api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(mfa.router, prefix="/auth/mfa", tags=["MFA"])
 api_router.include_router(ip_allowlist.router, prefix="/security", tags=["Security"])
+api_router.include_router(threat_intel.router, prefix="/threat-intel", tags=["Threat Intelligence"])
+api_router.include_router(taxii.router, tags=["TAXII"])
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(permissions.router, prefix="/permissions", tags=["Permissions"])
 api_router.include_router(agents.router, prefix="/agents", tags=["Agents"])

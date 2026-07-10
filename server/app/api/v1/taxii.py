@@ -90,8 +90,11 @@ def _collection_obj(base: str) -> Dict[str, Any]:
 
 @router.get("/taxii2/")
 async def discovery(request: Request, _: None = Depends(taxii_auth)):
+    # Derive the api-root URL from the live request path so it stays correct
+    # regardless of the mount prefix (the router sits under /api/v1).
     base = str(request.base_url).rstrip("/")
-    api_root = f"{base}/taxii2/api/"
+    disco_path = request.url.path.rstrip("/")   # e.g. /api/v1/taxii2
+    api_root = f"{base}{disco_path}/api/"
     return _taxii({
         "title": "CyberSentinel DLP TAXII Server",
         "description": "TAXII 2.1 server publishing shared DLP threat indicators.",

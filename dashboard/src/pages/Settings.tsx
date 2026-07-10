@@ -359,7 +359,7 @@ export default function Settings() {
             </div>
             <div className="flex justify-between">
               <span className="text-cs-ink-2">License</span>
-              <span className="num font-medium text-cs-ink">Apache 2.0</span>
+              <span className="font-medium text-cs-ink">Proprietary</span>
             </div>
           </div>
         </div>

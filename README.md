@@ -171,4 +171,7 @@ If `g++` is missing: `pacman -S mingw-w64-x86_64-gcc`.
 
 ## License
 
-MIT
+**Proprietary — All rights reserved.** This repository is *source-available*: it
+is public for demonstration and review only. Use, copying, modification,
+distribution, and deployment require prior written permission. See
+[LICENSE](LICENSE) for the full terms.

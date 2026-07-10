@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
 from app.core.database import get_mongodb, get_db
+from app.services.domain_service import build_domain_mongo_filter
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -39,6 +40,9 @@ async def get_dashboard_overview(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
 
     # Query agents from MongoDB
     agents_collection = db["agents"]
@@ -109,6 +113,9 @@ async def get_event_timeline(
     start_time = now - timedelta(hours=hours)
 
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
     match_stage = merge_mongo_filter({"timestamp": {"$gte": start_time}}, abac)
 
     # Aggregate events by hour

@@ -14,6 +14,7 @@ import structlog
 
 from app.core.security import get_current_user, require_role
 from app.core.database import get_db
+from app.services.domain_service import build_domain_mongo_filter
 from app.services.incident_service import IncidentService
 
 logger = structlog.get_logger()
@@ -336,6 +337,9 @@ async def list_auto_incidents(
     db = get_mongodb()
     col = db["incidents"]
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
 
     query: dict = {}
     if status:
@@ -394,6 +398,9 @@ async def update_auto_incident(
     db = get_mongodb()
     col = db["incidents"]
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
 
     update_fields: dict = {"updated_at": datetime.now(timezone.utc)}
     if update.status:
@@ -434,6 +441,9 @@ async def get_auto_incident(
     col = db["incidents"]
     events_col = db["dlp_events"]
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
 
     doc = await col.find_one(
         merge_mongo_filter(

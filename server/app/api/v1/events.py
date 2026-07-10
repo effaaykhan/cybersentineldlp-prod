@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user, require_role
 from app.core.database import get_mongodb, get_db
+from app.core.domains import domain_for_event_type
+from app.services.domain_service import build_domain_mongo_filter
 from app.services.event_processor import get_event_processor
 
 logger = structlog.get_logger()
@@ -395,6 +397,9 @@ async def create_event(
         "classification_category": event.classification_category or event.classification_level or "Public",
         "classification_rules_matched": event.classification_rules_matched or [],
         "detected_content": event.detected_content,
+        # Domain-scoped RBAC: stamp the policy domain so reporting can be
+        # filtered per domain-admin. Derived from the event type.
+        "policy_domain": domain_for_event_type(event.event_type),
         "processing_status": "pending",
     }
 
@@ -1066,8 +1071,11 @@ async def get_events(
         build_abac_mongo_filter,
         merge_mongo_filter,
     )
+    from app.services.domain_service import build_domain_mongo_filter
     abac_filter = await build_abac_mongo_filter(pg_db, current_user)
     query_filter = merge_mongo_filter(query_filter, abac_filter)
+    # ── Domain-scoped RBAC: restrict a domain-admin to their domain ───
+    query_filter = merge_mongo_filter(query_filter, build_domain_mongo_filter(current_user))
 
     # Query MongoDB
     cursor = (
@@ -1189,6 +1197,9 @@ async def get_event(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
     lookup = merge_mongo_filter({"id": event_id}, abac)
 
     event = await db.dlp_events.find_one(lookup)
@@ -1235,6 +1246,9 @@ async def get_event_stats(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
     base = merge_mongo_filter({}, abac)
     blocked = merge_mongo_filter({"blocked": True}, abac)
 
@@ -1276,6 +1290,9 @@ async def get_events_by_type(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
     base = merge_mongo_filter({}, abac)
     pre_match: list = [{"$match": base}] if base else []
 
@@ -1303,6 +1320,9 @@ async def get_events_by_severity(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
     base = merge_mongo_filter({}, abac)
     pre_match: list = [{"$match": base}] if base else []
 

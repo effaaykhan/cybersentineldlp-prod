@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user, require_role
 from app.core.database import get_mongodb, get_db
+from app.services.domain_service import build_domain_mongo_filter
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -64,6 +65,9 @@ async def get_alerts(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
 
     # Check if alerts collection exists and has alerts
     alerts_collection = db.get_collection("alerts")
@@ -305,6 +309,9 @@ async def get_alert(
     db = get_mongodb()
     alerts_collection = db.get_collection("alerts")
     abac = await build_abac_mongo_filter(pg_db, current_user)
+    _dom = build_domain_mongo_filter(current_user)
+    if _dom is not None:
+        abac = merge_mongo_filter(abac or {}, _dom)
 
     # Try to find alert in database (ABAC-filtered).
     alert_doc = await alerts_collection.find_one(

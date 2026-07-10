@@ -4,7 +4,7 @@ User login, registration, token refresh, SSO exchange
 """
 
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from fastapi.security import OAuth2PasswordRequestForm
@@ -16,6 +16,7 @@ import structlog
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    create_mfa_token,
     get_password_hash,
     verify_password,
     validate_password_strength,
@@ -43,9 +44,14 @@ class UserRegister(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
+    # access/refresh are absent when MFA is required (second step needed).
+    access_token: Optional[str] = None
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
+    # Set when the account has MFA enabled — client must POST the code +
+    # this mfa_token to /auth/mfa/verify to obtain the real tokens.
+    mfa_required: Optional[bool] = None
+    mfa_token: Optional[str] = None
 
 
 class RefreshTokenRequest(BaseModel):
@@ -212,6 +218,14 @@ async def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Password change required. Use /api/v1/auth/change-password to set a new password before logging in.",
         )
+
+    # MFA second factor — when enabled, return an interim mfa_token instead of
+    # a full session. The client completes login via POST /auth/mfa/verify.
+    if getattr(user, "mfa_enabled", False):
+        mfa_token = create_mfa_token(str(user.id))
+        await audit_log(user.id, "auth.login.mfa_challenge", {})
+        logger.info("MFA challenge issued", user_id=str(user.id))
+        return {"mfa_required": True, "mfa_token": mfa_token, "token_type": "mfa"}
 
     # Create tokens
     access_token = create_access_token(

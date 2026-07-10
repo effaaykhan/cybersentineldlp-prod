@@ -100,6 +100,21 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
     return encoded_jwt
 
 
+def create_mfa_token(user_id: str) -> str:
+    """Short-lived interim token issued after password auth when the account
+    has MFA enabled. It carries ``type="mfa_pending"`` and is ONLY accepted by
+    the MFA verify endpoint — ``get_current_user`` rejects it, so it can't be
+    used to reach protected resources without completing the second factor."""
+    to_encode = {
+        "sub": str(user_id),
+        "type": "mfa_pending",
+        "exp": datetime.utcnow() + timedelta(minutes=5),
+        "iat": datetime.utcnow(),
+        "jti": str(uuid.uuid4()),
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
 def decode_token(token: str) -> Dict[str, Any]:
     """
     Decode and validate JWT token
@@ -148,6 +163,16 @@ async def get_current_user(
         logger.warning("Redis not initialized, skipping token blacklist check (dev mode)")
 
     payload = decode_token(token)
+
+    # An interim mfa_pending token (or a refresh token) must never authenticate
+    # a protected endpoint — only a completed "access" token may.
+    tok_type = payload.get("type")
+    if tok_type in ("mfa_pending", "refresh"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="This token cannot be used to access resources",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     user_id: str = payload.get("sub")
     if user_id is None:

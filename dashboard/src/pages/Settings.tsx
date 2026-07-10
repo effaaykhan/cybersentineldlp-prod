@@ -6,6 +6,7 @@ import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
 import MfaSection from '@/components/settings/MfaSection'
 import IpAllowlistSection from '@/components/settings/IpAllowlistSection'
+import SiemForwardingSection from '@/components/settings/SiemForwardingSection'
 
 const defaultOpenSearchUrl = import.meta.env.VITE_OPENSEARCH_URL ?? 'https://localhost:9200'
 
@@ -165,6 +166,9 @@ export default function Settings() {
 
         {/* Authorized IP Addresses (Super Admin only) */}
         {isSuperAdmin && <IpAllowlistSection />}
+
+        {/* SIEM Log Forwarding (Super Admin only) */}
+        {isSuperAdmin && <SiemForwardingSection />}
 
         {/* System Settings */}
         <div className="card">

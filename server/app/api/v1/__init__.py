@@ -7,6 +7,8 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     auth,
+    mfa,
+    ip_allowlist,
     events,
     policies,
     users,
@@ -40,6 +42,8 @@ async def health_check():
 
 # Include sub-routers
 api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+api_router.include_router(mfa.router, prefix="/auth/mfa", tags=["MFA"])
+api_router.include_router(ip_allowlist.router, prefix="/security", tags=["Security"])
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(permissions.router, prefix="/permissions", tags=["Permissions"])
 api_router.include_router(agents.router, prefix="/agents", tags=["Agents"])

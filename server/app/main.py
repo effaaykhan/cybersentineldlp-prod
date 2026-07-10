@@ -26,6 +26,7 @@ from app.core.opensearch import init_opensearch, close_opensearch
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
+from app.middleware.ip_allowlist import IPAllowlistMiddleware
 from app.api.v1 import api_router
 
 # Setup structured logging
@@ -424,6 +425,11 @@ app.add_middleware(
     max_requests=settings.RATE_LIMIT_REQUESTS,
     window_seconds=settings.RATE_LIMIT_WINDOW,
 )
+
+# IP allowlist — restrict the portal to authorized networks (added before CORS
+# so a 403 still carries CORS headers and the dashboard can render the error).
+# Fail-open when the ip_allowlist table is empty; agent-ingest endpoints exempt.
+app.add_middleware(IPAllowlistMiddleware)
 
 # CORS — reject wildcard origins in production.
 _wildcard_cors = settings.CORS_ORIGINS == ["*"]

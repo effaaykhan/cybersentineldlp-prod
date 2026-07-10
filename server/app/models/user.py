@@ -3,7 +3,7 @@ User Database Models (PostgreSQL)
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Boolean, DateTime, Enum, ForeignKey, Integer
+from sqlalchemy import Column, String, Boolean, DateTime, Enum, ForeignKey, Integer, Text, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -48,6 +48,15 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
     must_change_password = Column(Boolean, default=False, nullable=False, server_default="false")
+
+    # ── Native TOTP MFA (opt-in, self-service) ───────────────────────────
+    # mfa_secret holds the Fernet-encrypted base32 TOTP secret (see
+    # app.core.crypto); mfa_recovery_codes is a list of hashed one-time
+    # backup codes. MFA is only challenged at login when mfa_enabled=True.
+    mfa_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
+    mfa_secret = Column(Text, nullable=True)
+    mfa_recovery_codes = Column(JSON, nullable=True)
+    mfa_enrolled_at = Column(DateTime(timezone=True), nullable=True)
 
     # Soft delete
     deleted_at = Column(DateTime(timezone=True), nullable=True)

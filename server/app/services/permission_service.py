@@ -42,6 +42,15 @@ _ALL_PERMISSIONS: frozenset[str] = frozenset({
     "view_all_departments",
 })
 
+# Operational perms shared by every domain admin (scoped to their domain by
+# the policy-domain filter, not by these permission names). Mirrors the
+# role_permissions seeded in migration 019.
+_DOMAIN_OPS: frozenset[str] = frozenset({
+    "view_events", "view_alerts", "view_dashboard", "export_events",
+    "create_policy", "update_policy", "delete_policy", "assign_policy",
+    "view_all_departments",
+})
+
 # Fallback defaults for users with a UserRole enum value but no role_id FK.
 _ROLE_DEFAULTS: dict[str, frozenset[str]] = {
     "ADMIN":   _ALL_PERMISSIONS,
@@ -49,6 +58,11 @@ _ROLE_DEFAULTS: dict[str, frozenset[str]] = {
     "MANAGER": frozenset({"view_events", "export_events", "view_dashboard", "view_users"}),
     "VIEWER":  frozenset({"view_events", "view_dashboard"}),
     "AGENT":   frozenset(),
+    # Domain-scoped admins (granular RBAC).
+    "THREAT_ADMIN": _DOMAIN_OPS,
+    "DATA_PROTECTION_ADMIN": _DOMAIN_OPS,
+    # Access Control also governs identity administration.
+    "ACCESS_CONTROL_ADMIN": _DOMAIN_OPS | frozenset({"manage_users", "view_users", "manage_roles"}),
 }
 
 

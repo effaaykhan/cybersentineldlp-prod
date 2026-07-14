@@ -207,6 +207,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    # Override the image's HTTP healthcheck (celery workers serve no HTTP).
+    # Ping the worker via the Celery control bus instead.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.reporting_tasks inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   # Celery Beat
@@ -249,7 +257,21 @@ services:
       - ./server:/app
       - ./config:/etc/cybersentinel
       - manager_logs:/var/log/cybersentinel
-    command: celery -A app.tasks.reporting_tasks beat --loglevel=info
+    # --schedule and --pidfile point at /tmp (always writable). Without this,
+    # beat tries to write celerybeat-schedule to its CWD (/app) as the
+    # unprivileged dlpuser and crash-loops on [Errno 13] Permission denied.
+    command: >-
+      celery -A app.tasks.reporting_tasks beat --loglevel=info
+      --pidfile=/tmp/celerybeat.pid
+      --schedule=/tmp/celerybeat-schedule
+    # Override the image's HTTP healthcheck (beat serves no HTTP): the pidfile
+    # existing means the scheduler process is alive.
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       redis:
         condition: service_healthy

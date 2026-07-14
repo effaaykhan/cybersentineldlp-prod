@@ -107,6 +107,18 @@ The host authenticates to the server exactly like the endpoint agent (the
 
 ---
 
+## 5b. Verify the bridge (self-test) — do this BEFORE testing uploads
+On browser start the extension pings the native host, so you can confirm the
+whole chain without any upload.
+1. `chrome://extensions` → the extension → click **"service worker"** → **Console**.
+2. Look for:
+   - ✅ `native host reachable (pong)` → the extension ↔ host bridge works. A
+     fresh `C:\ProgramData\CyberSentinel\dlp-host.log` will contain
+     `host started` and `ping received`.
+   - ❌ `COULD NOT CONNECT to native host …` → the host registration is wrong
+     (manifest path, registry key, or `allowed_origins` extension-id). Re-run
+     `install.ps1` with the current Extension ID, then reload the extension.
+
 ## 6. Test
 1. **Fully close** Chrome/Edge (all windows) and reopen.
 2. Sign in to Google Drive or Gmail.
@@ -129,6 +141,13 @@ The host authenticates to the server exactly like the endpoint agent (the
   and that the two `cloud_upload_prevention` policies are **active** in the
   dashboard. The host fails **open** on any error (see the log for the reason).
 - **403 in the log** → wrong/expired `agent_key`.
+- **Google Drive specifically may not block.** Drive performs uploads inside a
+  Web/Service Worker that a page-level extension cannot see. To confirm: open the
+  Drive tab's page console (F12) during an upload — if you see **no**
+  `[CS-DLP] cloud request →` lines, the upload ran in a worker (unreachable).
+  Test the extension on a simpler target (a plain file-upload page, Dropbox/Box
+  web) to validate the chain; reliable Drive blocking needs the Phase B WFP
+  driver.
 - **Uploads via a native desktop client** (Google Drive/Dropbox app) are **not**
   covered by the extension — that's the Phase B WFP driver.
 

@@ -188,6 +188,12 @@ def main():
             break
         if msg is None:
             break
+        if msg.get("type") == "ping":
+            # Self-test from the extension: confirm the host is reachable.
+            log("ping received -> pong")
+            send_message({"type": "pong", "ok": True, "keyed": bool(CFG["agent_key"]),
+                          "server": CFG["server_url"]})
+            continue
         if msg.get("type") != "classify":
             continue
         req_id = msg.get("requestId")

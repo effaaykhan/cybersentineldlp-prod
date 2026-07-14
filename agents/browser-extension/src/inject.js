@@ -62,12 +62,26 @@
     if (r) { pending.delete(d.requestId); r({ action: d.action, level: d.level, reason: d.reason }); }
   });
 
+  function asFile(bytes, name, type) {
+    return new File([bytes], name || "upload.bin", { type: type || "application/octet-stream" });
+  }
+
   function collectFiles(body) {
     var files = [];
     if (body instanceof File) files.push(body);
-    else if (body instanceof Blob) files.push(new File([body], "upload.bin", { type: body.type || "application/octet-stream" }));
+    else if (body instanceof Blob) files.push(asFile(body, "upload.bin", body.type));
+    // Resumable uploads (Google Drive, etc.) send raw bytes, not File/Blob.
+    else if (body instanceof ArrayBuffer) files.push(asFile(body, "upload.bin"));
+    else if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body)) {
+      files.push(asFile(body.buffer ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) : body, "upload.bin"));
+    }
     else if (typeof FormData !== "undefined" && body instanceof FormData) {
-      try { body.forEach(function (v) { if (v instanceof File) files.push(v); }); } catch (e) {}
+      try {
+        body.forEach(function (v) {
+          if (v instanceof File) files.push(v);
+          else if (v instanceof Blob) files.push(asFile(v, "upload.bin", v.type)); // bare Blob part (no filename)
+        });
+      } catch (e) {}
     }
     return files;
   }
@@ -87,6 +101,13 @@
   function decideForBody(url, body) {
     if (!isCloudUrl(url) || body == null) return Promise.resolve({ action: "allow" });
     var files = collectFiles(body);
+    // Diagnostic (page console): shows every cloud-host request this page realm
+    // sees. If a Drive upload produces NO such line, the upload ran in a worker
+    // the page hook can't reach — the known limitation.
+    try {
+      console.debug("[CS-DLP] cloud request →", new URL(url, location.href).hostname,
+        "| bodyType:", body && body.constructor && body.constructor.name, "| files:", files.length);
+    } catch (e) {}
     if (!files.length) return Promise.resolve({ action: "allow" });
 
     var worst = { action: "allow" };

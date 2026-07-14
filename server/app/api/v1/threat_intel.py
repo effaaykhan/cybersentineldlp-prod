@@ -16,9 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from app.core.security import require_role
+from app.core.config import settings
 from app.core.database import get_db, get_mongodb
 from app.core.crypto import encrypt_str
-from app.models.ioc import IOC, TAXIIFeed, IOC_TYPES
+from app.models.ioc import IOC, TAXIIFeed, TAXIIShareConfig, IOC_TYPES
 from app.services.ioc_service import upsert_ioc, ioc_matcher, normalize_value
 from app.services.taxii_ingest import ingest_feed
 from app.services.audit_service import audit_log
@@ -49,6 +50,14 @@ class IOCImport(BaseModel):
 
 class ShareToggle(BaseModel):
     shared: bool
+
+
+class SharingConfigUpdate(BaseModel):
+    enabled: bool
+    username: Optional[str] = None
+    # None / omitted → leave the stored password unchanged; a non-empty string
+    # sets/rotates it. Never returned by the API.
+    password: Optional[str] = None
 
 
 class FeedCreate(BaseModel):
@@ -147,6 +156,76 @@ async def toggle_share(
     await audit_log(_uid(current_user), "threat_intel.ioc.share",
                     {"id": ioc_id, "shared": body.shared})
     return {"id": ioc_id, "is_shared": body.shared}
+
+
+# ── partner sharing config (TAXII server credential) ─────────────────────────
+_TAXII_PATH = "/api/v1/taxii2/"
+_SHARE_COLLECTION = "dlp-shared-iocs"
+
+
+def _sharing_out(row: Optional[TAXIIShareConfig]) -> Dict[str, Any]:
+    """Public view of the sharing config. Never exposes the password itself —
+    only whether one is set. The dashboard prepends its own origin to
+    ``taxii_path`` to show the partner-facing URL."""
+    if row is None:  # env fallback
+        return {
+            "enabled": bool(settings.TAXII_SHARE_PASSWORD),
+            "username": settings.TAXII_SHARE_USER,
+            "has_password": bool(settings.TAXII_SHARE_PASSWORD),
+            "source": "environment",
+            "taxii_path": _TAXII_PATH, "collection_id": _SHARE_COLLECTION,
+            "updated_at": None,
+        }
+    return {
+        "enabled": bool(row.enabled and row.secret_enc),
+        "username": row.username,
+        "has_password": bool(row.secret_enc),
+        "source": "database",
+        "taxii_path": _TAXII_PATH, "collection_id": _SHARE_COLLECTION,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.get("/sharing")
+async def get_sharing_config(
+    current_user=Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    row = (await db.execute(select(TAXIIShareConfig).where(TAXIIShareConfig.id == 1))).scalar_one_or_none()
+    return _sharing_out(row)
+
+
+@router.put("/sharing")
+async def update_sharing_config(
+    body: SharingConfigUpdate,
+    current_user=Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    row = (await db.execute(select(TAXIIShareConfig).where(TAXIIShareConfig.id == 1))).scalar_one_or_none()
+    if row is None:
+        # First write: seed from the existing env credential so turning sharing
+        # on via the UI doesn't silently drop a password set in .env.
+        row = TAXIIShareConfig(id=1, username=(settings.TAXII_SHARE_USER or "partner"))
+        if settings.TAXII_SHARE_PASSWORD:
+            row.secret_enc = encrypt_str(settings.TAXII_SHARE_PASSWORD)
+        db.add(row)
+
+    if body.username:
+        row.username = body.username.strip()
+    if body.password:  # non-empty → set / rotate
+        row.secret_enc = encrypt_str(body.password)
+    row.enabled = body.enabled
+    row.updated_by = _uid(current_user)
+
+    if body.enabled and not row.secret_enc:
+        raise HTTPException(400, "Set a partner password before enabling sharing.")
+
+    await db.commit()
+    await db.refresh(row)
+    await audit_log(_uid(current_user), "threat_intel.sharing.update",
+                    {"enabled": row.enabled, "username": row.username,
+                     "rotated": bool(body.password)})
+    return _sharing_out(row)
 
 
 @router.post("/iocs/import")

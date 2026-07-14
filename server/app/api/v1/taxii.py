@@ -24,8 +24,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.crypto import decrypt_str
 from app.core.database import get_db
-from app.models.ioc import IOC
+from app.models.ioc import IOC, TAXIIShareConfig
 from app.services.ioc_service import build_stix_pattern
 
 router = APIRouter()
@@ -44,14 +45,31 @@ _TLP_MARKINGS = {
 _NS = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")  # NAMESPACE_URL
 
 
-def _require_sharing_enabled() -> None:
-    if not settings.TAXII_SHARE_PASSWORD:
-        raise HTTPException(status_code=503, detail="IOC sharing is disabled (no TAXII credential configured).")
+async def get_effective_share_config(db: AsyncSession) -> tuple[bool, str, str]:
+    """Resolve the active sharing config. A dashboard-managed DB row wins;
+    otherwise fall back to the TAXII_SHARE_* env vars (backward compatible).
+    Returns (enabled, username, password)."""
+    row = (await db.execute(
+        select(TAXIIShareConfig).where(TAXIIShareConfig.id == 1)
+    )).scalar_one_or_none()
+    if row is not None:
+        password = ""
+        if row.secret_enc:
+            try:
+                password = decrypt_str(row.secret_enc)
+            except Exception:  # noqa: BLE001 — treat undecryptable secret as unset
+                password = ""
+        return (bool(row.enabled and password),
+                row.username or settings.TAXII_SHARE_USER, password)
+    return (bool(settings.TAXII_SHARE_PASSWORD),
+            settings.TAXII_SHARE_USER, settings.TAXII_SHARE_PASSWORD)
 
 
-def taxii_auth(request: Request) -> None:
+async def taxii_auth(request: Request, db: AsyncSession = Depends(get_db)) -> None:
     """HTTP Basic auth for partner vendors. 503 if sharing is off, 401 otherwise."""
-    _require_sharing_enabled()
+    enabled, share_user, share_pw = await get_effective_share_config(db)
+    if not enabled:
+        raise HTTPException(status_code=503, detail="IOC sharing is disabled (no TAXII credential configured).")
     header = request.headers.get("authorization", "")
     if not header.lower().startswith("basic "):
         raise HTTPException(status_code=401, detail="Authentication required.",
@@ -60,8 +78,7 @@ def taxii_auth(request: Request) -> None:
         user, _, pw = base64.b64decode(header.split(" ", 1)[1]).decode("utf-8").partition(":")
     except (binascii.Error, ValueError, UnicodeDecodeError):
         raise HTTPException(status_code=401, detail="Malformed credentials.")
-    ok = hmac.compare_digest(user, settings.TAXII_SHARE_USER) and \
-        hmac.compare_digest(pw, settings.TAXII_SHARE_PASSWORD)
+    ok = hmac.compare_digest(user, share_user) and hmac.compare_digest(pw, share_pw)
     if not ok:
         raise HTTPException(status_code=401, detail="Invalid credentials.",
                             headers={"WWW-Authenticate": 'Basic realm="taxii"'})

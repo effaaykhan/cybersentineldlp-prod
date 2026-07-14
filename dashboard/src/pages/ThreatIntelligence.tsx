@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { ShieldAlert, Plus, Trash2, Share2, Upload, Rss, RefreshCw, Radar } from 'lucide-react'
+import { ShieldAlert, Plus, Trash2, Share2, Upload, Rss, RefreshCw, Radar, Server, Copy, Check } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
   getIocs, getIocStats, addIoc, deleteIoc, shareIoc, importIocs,
   getTaxiiFeeds, addTaxiiFeed, deleteTaxiiFeed, pollTaxiiFeed, getIocMatches,
-  type IOC, type TaxiiFeed, type IocStats,
+  getSharingConfig, updateSharingConfig,
+  type IOC, type TaxiiFeed, type IocStats, type SharingConfig,
 } from '@/lib/api'
 
 const IOC_TYPES = ['ipv4', 'ipv6', 'domain', 'url', 'email', 'file_sha256', 'file_sha1', 'file_md5']
@@ -29,12 +30,18 @@ export default function ThreatIntelligence() {
   const [importForm, setImportForm] = useState({ format: 'csv' as 'csv' | 'stix', content: '' })
   const [feedForm, setFeedForm] = useState({ name: '', server_url: '', collection_id: '', username: '', password: '' })
 
+  const [sharing, setSharing] = useState<SharingConfig | null>(null)
+  const [shareForm, setShareForm] = useState({ enabled: false, username: '', password: '' })
+  const [savingShare, setSavingShare] = useState(false)
+  const [copied, setCopied] = useState(false)
+
   const load = async () => {
     try {
-      const [s, i, f, m] = await Promise.all([
-        getIocStats(), getIocs(), getTaxiiFeeds(), getIocMatches(),
+      const [s, i, f, m, sh] = await Promise.all([
+        getIocStats(), getIocs(), getTaxiiFeeds(), getIocMatches(), getSharingConfig(),
       ])
       setStats(s); setIocs(i); setFeeds(f); setMatches(m)
+      setSharing(sh); setShareForm({ enabled: sh.enabled, username: sh.username, password: '' })
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to load threat intel')
     } finally {
@@ -42,6 +49,31 @@ export default function ThreatIntelligence() {
     }
   }
   useEffect(() => { load() }, [])
+
+  const shareUrl = sharing ? `${window.location.origin}${sharing.taxii_path}` : ''
+
+  const handleSaveSharing = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSavingShare(true)
+    try {
+      const body: { enabled: boolean; username?: string; password?: string } = {
+        enabled: shareForm.enabled,
+        username: shareForm.username || undefined,
+      }
+      if (shareForm.password) body.password = shareForm.password
+      const sh = await updateSharingConfig(body)
+      setSharing(sh); setShareForm({ enabled: sh.enabled, username: sh.username, password: '' })
+      toast.success(sh.enabled ? 'Partner sharing enabled' : 'Partner sharing disabled')
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to save sharing config')
+    } finally {
+      setSavingShare(false)
+    }
+  }
+
+  const copyUrl = async () => {
+    try { await navigator.clipboard.writeText(shareUrl); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* noop */ }
+  }
 
   const handleAddIoc = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -149,6 +181,72 @@ export default function ThreatIntelligence() {
             <p className="text-2xl font-bold text-cs-ink num mt-1">{s.value}</p>
           </div>
         ))}
+      </div>
+
+      {/* Partner sharing — TAXII server config */}
+      <div className="card">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="p-2 bg-cs-indigo-faint rounded-cs-sm"><Server className="h-5 w-5 text-cs-indigo" /></div>
+          <div className="flex-1">
+            <h3 className="section-title">Partner Sharing — TAXII 2.1 Server</h3>
+            <p className="text-sm text-cs-muted">
+              Enable the outbound TAXII server and set the credential partner vendors use to poll your
+              shared indicators. Only IOCs you mark <strong>Share</strong> below are published.
+            </p>
+          </div>
+          <span className={`badge ${sharing?.enabled ? 'badge-success' : 'bg-cs-hair-2 text-cs-ink-2'}`}>
+            {sharing?.enabled ? 'Enabled' : 'Disabled'}
+          </span>
+        </div>
+
+        <form onSubmit={handleSaveSharing} className="space-y-4">
+          <label className="flex items-center gap-2.5 cursor-pointer select-none">
+            <input type="checkbox" className="h-4 w-4 accent-cs-indigo" checked={shareForm.enabled}
+              onChange={(e) => setShareForm({ ...shareForm, enabled: e.target.checked })} />
+            <span className="text-sm font-medium text-cs-ink">Enable partner sharing</span>
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-cs-muted mb-1">Partner username</label>
+              <input className="input" value={shareForm.username} placeholder="partner"
+                onChange={(e) => setShareForm({ ...shareForm, username: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-cs-muted mb-1">Partner password</label>
+              <input className="input" type="password" value={shareForm.password}
+                placeholder={sharing?.has_password ? '•••••••• (unchanged — blank keeps it)' : 'set a partner password'}
+                onChange={(e) => setShareForm({ ...shareForm, password: e.target.value })} />
+            </div>
+          </div>
+
+          {sharing?.source === 'environment' && (
+            <p className="text-xs text-cs-muted">
+              Currently set via environment variable. Saving here stores the credential in the database
+              (Fernet-encrypted) and takes over.
+            </p>
+          )}
+
+          <button type="submit" disabled={savingShare}
+            className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">
+            <Server className="h-4 w-4" />{savingShare ? 'Saving…' : 'Save sharing settings'}
+          </button>
+        </form>
+
+        {/* Partner-facing endpoint to hand out */}
+        <div className="mt-5 pt-4 border-t border-cs-hair-2">
+          <p className="text-xs font-medium text-cs-muted mb-2">Give partners this TAXII 2.1 discovery URL</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 num text-xs bg-cs-hair-2 text-cs-ink-2 rounded-cs-sm px-3 py-2 break-all">{shareUrl || '—'}</code>
+            <button type="button" onClick={copyUrl} title="Copy URL"
+              className="p-2 rounded-cs-sm text-cs-muted-2 hover:text-cs-indigo hover:bg-cs-indigo-faint transition-colors">
+              {copied ? <Check className="h-4 w-4 text-cs-indigo" /> : <Copy className="h-4 w-4" />}
+            </button>
+          </div>
+          <p className="text-xs text-cs-muted mt-2">
+            Collection <span className="num">{sharing?.collection_id || 'dlp-shared-iocs'}</span> · partners authenticate with HTTP Basic using the credential above.
+          </p>
+        </div>
       </div>
 
       {/* Recent matches */}

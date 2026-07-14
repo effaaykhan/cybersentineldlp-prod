@@ -80,6 +80,25 @@ async def _auto_init_schema_and_admin():
                 text("CREATE SEQUENCE IF NOT EXISTS agent_code_seq START 1")
             )
 
+        # taxii_share_config (dashboard-managed TAXII sharing credential) is a
+        # newer table. Existing installs skip create_all above (users table
+        # already exists) and never run migrations, so create it idempotently
+        # here — safe on every boot, including fresh installs and upgrades.
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS taxii_share_config (
+                    id          INTEGER PRIMARY KEY DEFAULT 1,
+                    enabled     BOOLEAN NOT NULL DEFAULT false,
+                    username    VARCHAR(255) NOT NULL DEFAULT 'partner',
+                    secret_enc  TEXT,
+                    updated_by  UUID,
+                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT ck_taxii_share_singleton CHECK (id = 1)
+                )
+                """
+            ))
+
         # Seed default admin if no users exist yet.
         # Uses ON CONFLICT to handle race conditions with multiple workers.
         async with _db.postgres_session_factory() as session:

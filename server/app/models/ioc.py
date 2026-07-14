@@ -10,7 +10,8 @@ TAXIIFeed  — a configured remote TAXII 2.1 collection we poll for IOCs.
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint, Index,
+    Boolean, CheckConstraint, Column, DateTime, Integer, String, Text,
+    UniqueConstraint, Index,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
@@ -79,3 +80,21 @@ class TAXIIFeed(Base):
 
     created_by = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class TAXIIShareConfig(Base):
+    """Single-row config for the outbound TAXII 2.1 sharing server: whether
+    sharing is on and the Basic-auth credential partner vendors use to poll.
+    The password is Fernet-encrypted in ``secret_enc`` (never stored plaintext).
+    When no row exists, the server falls back to the TAXII_SHARE_* env vars."""
+    __tablename__ = "taxii_share_config"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_taxii_share_singleton"),)
+
+    id = Column(Integer, primary_key=True, default=1)
+    enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    username = Column(String(255), nullable=False, default="partner", server_default="partner")
+    secret_enc = Column(Text, nullable=True)                     # Fernet(password)
+
+    updated_by = Column(UUID(as_uuid=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                        onupdate=datetime.utcnow, nullable=False)

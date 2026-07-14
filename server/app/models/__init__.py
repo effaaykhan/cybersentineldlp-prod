@@ -29,7 +29,7 @@ from app.models.audit_log import AuditLog
 from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedFolder
 from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
 from app.models.siem_connector import SIEMConnectorConfigModel
-from app.models.ioc import IOC, TAXIIFeed
+from app.models.ioc import IOC, TAXIIFeed, TAXIIShareConfig
 
 __all__ = [
     "Role",
@@ -64,4 +64,5 @@ __all__ = [
     "SIEMConnectorConfigModel",
     "IOC",
     "TAXIIFeed",
+    "TAXIIShareConfig",
 ]

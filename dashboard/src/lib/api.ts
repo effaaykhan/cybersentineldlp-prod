@@ -831,6 +831,16 @@ export type IocStats = {
   by_type: Record<string, number>
 }
 
+export type SharingConfig = {
+  enabled: boolean
+  username: string
+  has_password: boolean
+  source: 'database' | 'environment'
+  taxii_path: string
+  collection_id: string
+  updated_at: string | null
+}
+
 export const getIocs = async (params?: { ioc_type?: string; shared?: boolean; q?: string }): Promise<IOC[]> => {
   const { data } = await apiClient.get('/threat-intel/iocs', { params })
   return data?.iocs || []
@@ -874,6 +884,17 @@ export const pollTaxiiFeed = async (id: string) => {
 export const getIocMatches = async (): Promise<any[]> => {
   const { data } = await apiClient.get('/threat-intel/matches')
   return data?.matches || []
+}
+
+export const getSharingConfig = async (): Promise<SharingConfig> => {
+  const { data } = await apiClient.get('/threat-intel/sharing')
+  return data
+}
+export const updateSharingConfig = async (
+  body: { enabled: boolean; username?: string; password?: string },
+): Promise<SharingConfig> => {
+  const { data } = await apiClient.put('/threat-intel/sharing', body)
+  return data
 }
 
 

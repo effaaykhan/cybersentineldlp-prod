@@ -99,6 +99,24 @@ async def _auto_init_schema_and_admin():
                 """
             ))
 
+        # retention_config (admin-portal log-retention policy, 90-day floor).
+        # Same idempotent-create rationale as taxii_share_config above.
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS retention_config (
+                    id                        INTEGER PRIMARY KEY DEFAULT 1,
+                    event_retention_days      INTEGER NOT NULL DEFAULT 180,
+                    opensearch_retention_days INTEGER NOT NULL DEFAULT 90,
+                    updated_by                UUID,
+                    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT ck_retention_singleton CHECK (id = 1),
+                    CONSTRAINT ck_retention_floor
+                        CHECK (event_retention_days >= 90 AND opensearch_retention_days >= 90)
+                )
+                """
+            ))
+
         # Seed default admin if no users exist yet.
         # Uses ON CONFLICT to handle race conditions with multiple workers.
         async with _db.postgres_session_factory() as session:

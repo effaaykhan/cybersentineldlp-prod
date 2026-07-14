@@ -1,7 +1,10 @@
-import { useState } from 'react'
-import { Settings as SettingsIcon, Server, Database, Bell, Globe, Lock } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Settings as SettingsIcon, Server, Database, Bell, Globe, Lock, Archive } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { initiateGoogleDriveConnection, initiateOneDriveConnection, changePassword } from '@/lib/api'
+import {
+  initiateGoogleDriveConnection, initiateOneDriveConnection, changePassword,
+  getRetentionConfig, updateRetentionConfig, type RetentionConfig,
+} from '@/lib/api'
 import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
 import MfaSection from '@/components/settings/MfaSection'
@@ -19,6 +22,40 @@ export default function Settings() {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [changingPassword, setChangingPassword] = useState(false)
+
+  const [retention, setRetention] = useState<RetentionConfig | null>(null)
+  const [retForm, setRetForm] = useState({ event_retention_days: 180, opensearch_retention_days: 90 })
+  const [savingRetention, setSavingRetention] = useState(false)
+
+  useEffect(() => {
+    if (!isSuperAdmin) return
+    getRetentionConfig()
+      .then((r) => {
+        setRetention(r)
+        setRetForm({ event_retention_days: r.event_retention_days, opensearch_retention_days: r.opensearch_retention_days })
+      })
+      .catch(() => { /* non-fatal; card shows defaults */ })
+  }, [isSuperAdmin])
+
+  const handleSaveRetention = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const min = retention?.minimum_days ?? 90
+    if (retForm.event_retention_days < min || retForm.opensearch_retention_days < min) {
+      toast.error(`Retention must be at least ${min} days`)
+      return
+    }
+    setSavingRetention(true)
+    try {
+      const r = await updateRetentionConfig(retForm)
+      setRetention(r)
+      setRetForm({ event_retention_days: r.event_retention_days, opensearch_retention_days: r.opensearch_retention_days })
+      toast.success('Log retention updated')
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || 'Failed to update retention')
+    } finally {
+      setSavingRetention(false)
+    }
+  }
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -255,20 +292,41 @@ export default function Settings() {
               </p>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-cs-ink-2 mb-2">
-                Retention Days
-              </label>
-              <input
-                type="number"
-                className="input num"
-                defaultValue="90"
-                readOnly
-              />
-              <p className="mt-1 text-xs text-cs-muted">
-                Number of days to retain event data
+            {/* Log retention — DB-backed, admin-editable, 90-day compliance floor */}
+            <form onSubmit={handleSaveRetention} className="space-y-4 pt-4 border-t border-cs-hair-2">
+              <div className="flex items-center gap-2">
+                <Archive className="h-4 w-4 text-cs-indigo" />
+                <span className="text-sm font-medium text-cs-ink">Log Retention</span>
+                {retention && (
+                  <span className="badge bg-cs-hair-2 text-cs-ink-2 text-xs">source: {retention.source}</span>
+                )}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-cs-ink-2 mb-2">Event log retention (days)</label>
+                  <input type="number" min={retention?.minimum_days ?? 90} className="input num"
+                    value={retForm.event_retention_days} disabled={!isSuperAdmin}
+                    onChange={(e) => setRetForm({ ...retForm, event_retention_days: Number(e.target.value) })} />
+                  <p className="mt-1 text-xs text-cs-muted">End-user DLP events (MongoDB).</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-cs-ink-2 mb-2">Index log retention (days)</label>
+                  <input type="number" min={retention?.minimum_days ?? 90} className="input num"
+                    value={retForm.opensearch_retention_days} disabled={!isSuperAdmin}
+                    onChange={(e) => setRetForm({ ...retForm, opensearch_retention_days: Number(e.target.value) })} />
+                  <p className="mt-1 text-xs text-cs-muted">Searchable log index (OpenSearch).</p>
+                </div>
+              </div>
+              <p className="text-xs text-cs-muted">
+                Minimum {retention?.minimum_days ?? 90} days — enforced server-side. Applied daily by the cleanup task; logs newer than the window are always retained.
               </p>
-            </div>
+              {isSuperAdmin && (
+                <button type="submit" disabled={savingRetention}
+                  className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">
+                  <Archive className="h-4 w-4" />{savingRetention ? 'Saving…' : 'Save retention'}
+                </button>
+              )}
+            </form>
           </div>
         </div>
 

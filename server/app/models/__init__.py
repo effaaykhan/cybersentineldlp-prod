@@ -30,6 +30,7 @@ from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedF
 from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
 from app.models.siem_connector import SIEMConnectorConfigModel
 from app.models.ioc import IOC, TAXIIFeed, TAXIIShareConfig
+from app.models.retention_config import RetentionConfig
 
 __all__ = [
     "Role",
@@ -65,4 +66,5 @@ __all__ = [
     "IOC",
     "TAXIIFeed",
     "TAXIIShareConfig",
+    "RetentionConfig",
 ]

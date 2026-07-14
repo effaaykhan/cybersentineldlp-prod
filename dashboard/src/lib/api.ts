@@ -897,5 +897,23 @@ export const updateSharingConfig = async (
   return data
 }
 
+export type RetentionConfig = {
+  event_retention_days: number
+  opensearch_retention_days: number
+  minimum_days: number
+  source: 'database' | 'environment'
+  updated_at: string | null
+}
+export const getRetentionConfig = async (): Promise<RetentionConfig> => {
+  const { data } = await apiClient.get('/system/retention')
+  return data
+}
+export const updateRetentionConfig = async (
+  body: { event_retention_days: number; opensearch_retention_days: number },
+): Promise<RetentionConfig> => {
+  const { data } = await apiClient.put('/system/retention', body)
+  return data
+}
+
 
 export default apiClient

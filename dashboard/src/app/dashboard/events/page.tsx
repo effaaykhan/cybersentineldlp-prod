@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import { AlertTriangle, Usb, Clipboard, Cloud, Ban, Bell, Eye, Filter, Download, Search, Loader2, X, Shield, ArrowRight, File, HardDrive, ChevronDown, ChevronUp, Trash2, RefreshCcw, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen } from 'lucide-react'
-import { getEvents as fetchEvents, getEventStats, clearAllEvents, triggerGoogleDrivePoll, triggerOneDrivePoll, getPolicies } from '@/lib/api'
+import { getEvents as fetchEvents, getEventStats, clearAllEvents } from '@/lib/api'
 import { formatDateTimeIST } from '@/lib/utils'
 import toast from 'react-hot-toast'
 
@@ -882,119 +882,9 @@ export default function EventsPage() {
   const handleManualRefresh = async () => {
     setIsRefreshing(true)
     try {
-      // Always refresh events from database first
+      // Refresh events from database
       await Promise.all([refetch(), refetchStats()])
-      
-      // Check for cloud monitoring policies
-      let policies: any[] = []
-      try {
-        const policiesResponse = await getPolicies({ enabled_only: true })
-        // Ensure policies is an array - handle both direct array and wrapped responses
-        if (Array.isArray(policiesResponse)) {
-          policies = policiesResponse
-        } else if (policiesResponse && typeof policiesResponse === 'object' && 'data' in policiesResponse) {
-          policies = Array.isArray(policiesResponse.data) ? policiesResponse.data : []
-        } else {
-          policies = []
-        }
-        console.log('Policies fetched:', policies.length, policies)
-        console.log('Policies details:', policies.map(p => ({ type: p?.type, enabled: p?.enabled, name: p?.name })))
-      } catch (error: any) {
-        console.error('Failed to fetch policies:', error)
-        console.error('Error details:', error.response?.data, error.message, error.stack)
-        toast.error(`Failed to fetch policies: ${error?.message || 'Unknown error'}`)
-        setIsRefreshing(false)
-        return
-      }
-      
-      if (policies.length === 0) {
-        console.warn('No policies returned from API')
-        toast.success('Events refreshed. No cloud monitoring policies found.')
-        setIsRefreshing(false)
-        return
-      }
-      
-      const hasGoogleDrivePolicies = policies.some(
-        (p: any) => p && p.type === 'google_drive_cloud_monitoring' && p.enabled === true
-      )
-      const hasOneDrivePolicies = policies.some(
-        (p: any) => p && p.type === 'onedrive_cloud_monitoring' && p.enabled === true
-      )
-      
-      console.log('Has Google Drive policies:', hasGoogleDrivePolicies, 'Has OneDrive policies:', hasOneDrivePolicies)
-      console.log('Policy types found:', policies.map(p => p?.type))
-      console.log('Policy enabled states:', policies.map(p => ({ type: p?.type, enabled: p?.enabled })))
-      
-      const pollingResults: string[] = []
-      
-      // Trigger Google Drive polling if policies exist
-      if (hasGoogleDrivePolicies) {
-        try {
-          console.log('Triggering Google Drive poll...')
-          const response = await triggerGoogleDrivePoll()
-          console.log('Google Drive poll response:', response)
-          if (response?.status === 'queued') {
-            pollingResults.push('Google Drive polling queued')
-          } else if (response?.status === 'skipped') {
-            pollingResults.push('Google Drive: no folders configured')
-          }
-        } catch (error: any) {
-          console.error('Google Drive poll error:', error)
-          pollingResults.push(`Google Drive polling failed: ${error?.message || 'Unknown error'}`)
-        }
-      }
-      
-      // Trigger OneDrive polling if policies exist
-      console.log('DEBUG: Checking OneDrive policies...', { hasOneDrivePolicies, policiesCount: policies.length })
-      if (hasOneDrivePolicies) {
-        console.log('DEBUG: OneDrive policies detected, triggering poll...')
-        try {
-          console.log('Triggering OneDrive poll...')
-          // Use direct fetch as fallback if axios fails
-          let response
-          try {
-            response = await triggerOneDrivePoll()
-          } catch (axiosError: any) {
-            console.warn('Axios call failed, trying direct fetch:', axiosError)
-            // Fallback to direct fetch
-            const authData = localStorage.getItem('dlp-auth-v2')
-            const token = authData ? JSON.parse(authData).state?.accessToken : null
-            const fetchResponse = await fetch('/api/v1/onedrive/poll', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-              }
-            })
-            response = await fetchResponse.json()
-          }
-          console.log('OneDrive poll response:', response)
-          if (response?.status === 'queued') {
-            pollingResults.push('OneDrive polling queued')
-          } else if (response?.status === 'skipped') {
-            pollingResults.push('OneDrive: no folders configured')
-          } else {
-            pollingResults.push(`OneDrive: ${response?.status || 'unknown status'}`)
-          }
-        } catch (error: any) {
-          console.error('OneDrive poll error:', error)
-          console.error('OneDrive poll error details:', {
-            message: error?.message,
-            response: error?.response?.data,
-            stack: error?.stack
-          })
-          pollingResults.push(`OneDrive polling failed: ${extractErrorDetail(error, 'Unknown error')}`)
-        }
-      } else {
-        console.log('DEBUG: No OneDrive policies found. Policies:', policies.map(p => ({ type: p?.type, enabled: p?.enabled })))
-      }
-      
-      // Show appropriate success message
-      if (pollingResults.length > 0) {
-        toast.success(`Events refreshed. ${pollingResults.join('. ')}.`)
-      } else {
-        toast.success('Events refreshed.')
-      }
+      toast.success('Events refreshed.')
     } catch (error: any) {
       console.error('Manual refresh error:', error)
       toast.error(extractErrorDetail(error, 'Failed to refresh events'))

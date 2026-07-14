@@ -13,6 +13,7 @@ export type PolicyType =
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
   | 'classification_aware_policy'
+  | 'cloud_upload_prevention'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log' | 'block'

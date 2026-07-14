@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -45,28 +45,16 @@ const policyTypes: Array<{
     icon: HardDrive
   },
   {
-    type: 'google_drive_local_monitoring',
-    label: 'Google Drive (Local)',
-    description: 'Monitor Windows G:\\My Drive (Google Drive desktop app)',
-    icon: Cloud
-  },
-  {
-    type: 'google_drive_cloud_monitoring',
-    label: 'Google Drive (Cloud)',
-    description: 'Monitor Google Drive via Cloud API (OAuth required)',
-    icon: Cloud
-  },
-  {
-    type: 'onedrive_cloud_monitoring',
-    label: 'OneDrive (Cloud)',
-    description: 'Monitor OneDrive via Cloud API (OAuth required)',
-    icon: Cloud
-  },
-  {
     type: 'classification_aware_policy',
     label: 'Classification-Aware Policy',
     description: 'Advanced policy based on content classification and confidence scores',
     icon: Shield
+  },
+  {
+    type: 'cloud_upload_prevention',
+    label: 'Cloud Upload Prevention',
+    description: 'Block Confidential/Restricted files from being uploaded to any cloud app; alert on Internal',
+    icon: UploadCloud
   }
 ]
 

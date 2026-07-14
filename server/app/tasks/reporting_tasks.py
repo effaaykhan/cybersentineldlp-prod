@@ -49,14 +49,6 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.reporting_tasks.generate_monthly_reports",
         "schedule": crontab(hour=10, minute=0, day_of_month=1),  # 1st of month, 10:00 AM UTC
     },
-    "google-drive-polling": {
-        "task": "app.tasks.google_drive_polling_tasks.poll_google_drive_activity",
-        "schedule": crontab(minute="*/5"),  # Run every 5 minutes
-    },
-    "onedrive-polling": {
-        "task": "app.tasks.onedrive_polling_tasks.poll_onedrive_activity",
-        "schedule": crontab(minute="*/5"),  # Run every 5 minutes
-    },
     "event-cleanup": {
         "task": "app.tasks.event_cleanup_tasks.cleanup_old_events",
         "schedule": crontab(hour=2, minute=0),  # 2:00 AM UTC daily

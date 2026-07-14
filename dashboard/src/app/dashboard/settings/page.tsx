@@ -1,42 +1,9 @@
 'use client'
-import { extractErrorDetail } from '@/utils/errorUtils'
 
-import { useState } from 'react'
 import DashboardLayout from '@/components/layout/DashboardLayout'
-import { Settings as SettingsIcon, Bell, Shield, Database, Globe } from 'lucide-react'
-import toast from 'react-hot-toast'
-import { initiateGoogleDriveConnection, initiateOneDriveConnection } from '@/lib/api'
+import { Settings as SettingsIcon, Bell, Shield, Database } from 'lucide-react'
 
 export default function SettingsPage() {
-  const [isConnectingDrive, setIsConnectingDrive] = useState(false)
-  const [isConnectingOneDrive, setIsConnectingOneDrive] = useState(false)
-
-  const handleDriveConnect = async () => {
-    try {
-      setIsConnectingDrive(true)
-      const { auth_url } = await initiateGoogleDriveConnection()
-      window.open(auth_url, '_blank', 'noopener,noreferrer')
-      toast.success('Opened Google consent screen in a new tab')
-    } catch (error: any) {
-      toast.error(extractErrorDetail(error, 'Failed to start Google Drive auth'))
-    } finally {
-      setIsConnectingDrive(false)
-    }
-  }
-
-  const handleOneDriveConnect = async () => {
-    try {
-      setIsConnectingOneDrive(true)
-      const { auth_url } = await initiateOneDriveConnection()
-      window.open(auth_url, '_blank', 'noopener,noreferrer')
-      toast.success('Opened OneDrive consent screen in a new tab')
-    } catch (error: any) {
-      toast.error(extractErrorDetail(error, 'Failed to start OneDrive auth'))
-    } finally {
-      setIsConnectingOneDrive(false)
-    }
-  }
-
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -178,34 +145,6 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* Cloud Connectors */}
-          <div className="bg-gray-800/50 backdrop-blur-xl rounded-xl border border-gray-700/50 p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="p-2 bg-emerald-900/30 border border-emerald-500/50 rounded-lg">
-                <Globe className="w-6 h-6 text-emerald-400" />
-              </div>
-              <h2 className="text-xl font-semibold text-white">Cloud Connectors</h2>
-            </div>
-            <p className="text-gray-300 mb-4">
-              Link cloud storage accounts to ingest activity events. Temporary actions until the full UI ships.
-            </p>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                onClick={handleDriveConnect}
-                disabled={isConnectingDrive}
-                className="px-4 py-2 rounded-lg font-semibold transition-colors bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {isConnectingDrive ? 'Opening...' : 'Connect Google Drive'}
-              </button>
-              <button
-                onClick={handleOneDriveConnect}
-                disabled={isConnectingOneDrive}
-                className="px-4 py-2 rounded-lg font-semibold transition-colors bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {isConnectingOneDrive ? 'Opening...' : 'Connect OneDrive'}
-              </button>
-            </div>
-          </div>
         </div>
 
         <div className="flex gap-3">

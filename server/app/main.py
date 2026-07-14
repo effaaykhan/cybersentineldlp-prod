@@ -49,8 +49,6 @@ async def _auto_init_schema_and_admin():
     import app.models.policy  # noqa: F401
     import app.models.event  # noqa: F401
     import app.models.alert  # noqa: F401
-    import app.models.google_drive  # noqa: F401
-    import app.models.onedrive  # noqa: F401
     import app.models.classified_file  # noqa: F401
 
     try:

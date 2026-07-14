@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Settings as SettingsIcon, Server, Database, Bell, Globe, Lock, Archive } from 'lucide-react'
+import { Settings as SettingsIcon, Server, Database, Bell, Lock, Archive } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
-  initiateGoogleDriveConnection, initiateOneDriveConnection, changePassword,
+  changePassword,
   getRetentionConfig, updateRetentionConfig, type RetentionConfig,
 } from '@/lib/api'
 import { useAuthStore } from '@/lib/store/auth'
@@ -16,8 +16,6 @@ const defaultOpenSearchUrl = import.meta.env.VITE_OPENSEARCH_URL ?? 'https://loc
 export default function Settings() {
   const { user } = useAuthStore()
   const isSuperAdmin = String(user?.role || '').toUpperCase() === 'ADMIN'
-  const [isConnectingDrive, setIsConnectingDrive] = useState(false)
-  const [isConnectingOneDrive, setIsConnectingOneDrive] = useState(false)
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -76,32 +74,6 @@ export default function Settings() {
       toast.error(err.response?.data?.detail || err.message || 'Failed to change password')
     } finally {
       setChangingPassword(false)
-    }
-  }
-
-  const handleDriveConnect = async () => {
-    try {
-      setIsConnectingDrive(true)
-      const { auth_url } = await initiateGoogleDriveConnection()
-      window.open(auth_url, '_blank', 'noopener,noreferrer')
-      toast.success('Opened Google consent screen')
-    } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Failed to start Google Drive auth')
-    } finally {
-      setIsConnectingDrive(false)
-    }
-  }
-
-  const handleOneDriveConnect = async () => {
-    try {
-      setIsConnectingOneDrive(true)
-      const { auth_url } = await initiateOneDriveConnection()
-      window.open(auth_url, '_blank', 'noopener,noreferrer')
-      toast.success('Opened OneDrive consent screen')
-    } catch (error: any) {
-      toast.error(error?.response?.data?.detail || 'Failed to start OneDrive auth')
-    } finally {
-      setIsConnectingOneDrive(false)
     }
   }
 
@@ -368,38 +340,6 @@ export default function Settings() {
                 <div className="w-11 h-6 bg-cs-hair-2 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cs-indigo-faint rounded-cs-pill peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-cs-hair after:border after:rounded-cs-pill after:h-5 after:w-5 after:transition-all peer-checked:bg-cs-indigo"></div>
               </label>
             </div>
-          </div>
-        </div>
-
-        {/* Cloud Connectors */}
-        <div className="card">
-          <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
-              <Globe className="h-5 w-5 text-cs-indigo" />
-            </div>
-            <div>
-              <h3 className="section-title">Cloud Connectors</h3>
-              <p className="text-sm text-cs-muted">Link cloud storage providers for monitoring.</p>
-            </div>
-          </div>
-          <p className="text-sm text-cs-ink-2 mb-4">
-            Use these temporary actions to open OAuth flows for testing. We&apos;ll relocate them once the full UI ships.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button
-              onClick={handleDriveConnect}
-              disabled={isConnectingDrive}
-              className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {isConnectingDrive ? 'Opening...' : 'Connect Google Drive'}
-            </button>
-            <button
-              onClick={handleOneDriveConnect}
-              disabled={isConnectingOneDrive}
-              className="btn-secondary disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {isConnectingOneDrive ? 'Opening...' : 'Connect OneDrive'}
-            </button>
           </div>
         </div>
 

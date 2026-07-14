@@ -8,10 +8,7 @@ import {
   FileSystemConfig, 
   USBDeviceConfig, 
   USBTransferConfig,
-  FileTransferConfig,
-  GoogleDriveLocalConfig,
-  GoogleDriveCloudConfig,
-  OneDriveCloudConfig
+  FileTransferConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -20,9 +17,6 @@ import FileSystemPolicyForm from './FileSystemPolicyForm'
 import FileTransferPolicyForm from './FileTransferPolicyForm'
 import USBDevicePolicyForm from './USBDevicePolicyForm'
 import USBTransferPolicyForm from './USBTransferPolicyForm'
-import GoogleDriveLocalPolicyForm from './GoogleDriveLocalPolicyForm'
-import GoogleDriveCloudPolicyForm from './GoogleDriveCloudPolicyForm'
-import OneDriveCloudPolicyForm from './OneDriveCloudPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -35,10 +29,29 @@ interface PolicyCreatorModalProps {
   editingPolicy?: Policy | null
 }
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig | OneDriveCloudConfig | {} => {
+// Both the generic classification-aware policy and cloud-upload prevention use
+// the conditions/actions builder rather than a typed `config` object.
+const usesClassificationBuilder = (t: PolicyType | null): boolean =>
+  t === 'classification_aware_policy' || t === 'cloud_upload_prevention'
+
+// Seed rules for a cloud-upload-prevention policy: block Confidential/Restricted
+// uploads to any cloud app, alert on Internal. The admin can tune from here.
+const CLOUD_UPLOAD_TEMPLATE = {
+  conditions: {
+    match: 'all' as const,
+    rules: [
+      { field: 'event_type', operator: 'equals', value: 'cloud_upload' },
+      { field: 'classification_level', operator: 'in', value: ['Confidential', 'Restricted'] },
+    ],
+  },
+  actions: { block: {}, alert: { severity: 'critical', message: 'Sensitive data upload to cloud blocked' } },
+}
+
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
-      // Classification-aware policies don't use config, they use conditions/actions
+    case 'cloud_upload_prevention':
+      // These use conditions/actions, not a typed config object.
       return {}
 
     case 'clipboard_monitoring':
@@ -99,35 +112,9 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
         monitoredPaths: [],
         action: 'block'
       } as USBTransferConfig
-    
-    case 'google_drive_local_monitoring':
-      return {
-        basePath: 'G:\\My Drive\\',
-        monitoredFolders: [],
-        events: {
-          create: true,
-          modify: false,
-          delete: false,
-          move: false
-        },
-        action: 'alert'
-      } as GoogleDriveLocalConfig
-      
-    case 'google_drive_cloud_monitoring':
-      return {
-        connectionId: '',
-        protectedFolders: [],
-        pollingInterval: 10,
-        action: 'log'
-      } as GoogleDriveCloudConfig
-      
-    case 'onedrive_cloud_monitoring':
-      return {
-        connectionId: '',
-        protectedFolders: [],
-        pollingInterval: 10,
-        action: 'log'
-      } as OneDriveCloudConfig
+
+    default:
+      return {}
   }
 }
 
@@ -154,7 +141,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig>(
     editingPolicy?.config || (policyType ? getDefaultConfig(policyType) : getDefaultConfig('clipboard_monitoring'))
   )
   const [classificationPolicy, setClassificationPolicy] = useState<ClassificationPolicy>(() => {
@@ -288,7 +275,7 @@ export default function PolicyCreatorModal({
 
     let policy: Partial<Policy>
 
-    if (policyType === 'classification_aware_policy') {
+    if (usesClassificationBuilder(policyType)) {
       // Classification-aware policy uses conditions/actions format
       if (classificationPolicy.conditions.rules.length === 0) {
         toast.error('At least one condition is required for classification-aware policies')
@@ -322,7 +309,11 @@ export default function PolicyCreatorModal({
         conditions: conditionsArray,
         actions: actionsArray,
         agentIds: agentId ? [agentId] : [],
-      } as Partial<Policy> & { match: 'all' | 'any' }
+        // Stamp the type for cloud-upload prevention so the server-side
+        // evaluator scopes it to cloud_upload events; the generic
+        // classification policy stays type-less.
+        type: policyType === 'cloud_upload_prevention' ? 'cloud_upload_prevention' : undefined,
+      } as unknown as Partial<Policy> & { match: 'all' | 'any' }
     } else {
       // Traditional policy uses type/severity/config format
       policy = {
@@ -349,7 +340,7 @@ export default function PolicyCreatorModal({
 
   const canProceedFromStep1 = policyType !== null
   const canProceedFromStep2 = policyType !== null && (
-    policyType === 'classification_aware_policy'
+    usesClassificationBuilder(policyType)
       ? classificationPolicy.conditions.rules.length > 0 && Object.keys(classificationPolicy.actions).length > 0
       : config !== null
   )
@@ -417,6 +408,12 @@ export default function PolicyCreatorModal({
               onSelectType={(type) => {
                 setPolicyType(type)
                 setConfig(getDefaultConfig(type))
+                // Pre-fill the conditions/actions builder with the cloud-upload
+                // matrix (block Confidential/Restricted) so the admin starts
+                // from a working policy and can tune it.
+                if (type === 'cloud_upload_prevention') {
+                  setClassificationPolicy(JSON.parse(JSON.stringify(CLOUD_UPLOAD_TEMPLATE)))
+                }
               }}
             />
           )}
@@ -447,8 +444,8 @@ export default function PolicyCreatorModal({
                       placeholder="Describe what this policy does..."
                     />
                   </div>
-                  <div className={`grid ${policyType === 'classification_aware_policy' ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
-                    {policyType !== 'classification_aware_policy' && (
+                  <div className={`grid ${usesClassificationBuilder(policyType) ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
+                    {!usesClassificationBuilder(policyType) && (
                       <div>
                         <label className="block text-sm font-medium text-gray-200 mb-2">Severity Level</label>
                         <select
@@ -549,28 +546,7 @@ export default function PolicyCreatorModal({
                   />
                 )}
                 
-                {policyType === 'google_drive_local_monitoring' && (
-                  <GoogleDriveLocalPolicyForm
-                    config={config as GoogleDriveLocalConfig}
-                    onChange={(newConfig) => setConfig(newConfig)}
-                  />
-                )}
-
-                {policyType === 'google_drive_cloud_monitoring' && (
-                  <GoogleDriveCloudPolicyForm
-                    config={config as GoogleDriveCloudConfig}
-                    onChange={(newConfig) => setConfig(newConfig)}
-                  />
-                )}
-
-                {policyType === 'onedrive_cloud_monitoring' && (
-                  <OneDriveCloudPolicyForm
-                    config={config as OneDriveCloudConfig}
-                    onChange={(newConfig) => setConfig(newConfig)}
-                  />
-                )}
-
-                {policyType === 'classification_aware_policy' && (
+                {usesClassificationBuilder(policyType) && (
                   <ClassificationPolicyForm
                     policy={classificationPolicy}
                     onChange={(newPolicy) => setClassificationPolicy(newPolicy)}
@@ -599,7 +575,7 @@ export default function PolicyCreatorModal({
                     <span className="text-gray-400">Type:</span>
                     <span className="text-white font-medium">{policyType ? policyType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Not set'}</span>
                   </div>
-                  {policyType !== 'classification_aware_policy' && (
+                  {!usesClassificationBuilder(policyType) && (
                     <div className="flex justify-between">
                       <span className="text-gray-400">Severity:</span>
                       <span className="text-white font-medium uppercase">{severity}</span>
@@ -617,7 +593,7 @@ export default function PolicyCreatorModal({
               </div>
 
               {/* Configuration Preview */}
-              {policyType === 'classification_aware_policy' ? (
+              {usesClassificationBuilder(policyType) ? (
                 <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
                   <h4 className="text-lg font-semibold text-white mb-4">Policy Rules</h4>
                   <div className="space-y-4">

@@ -135,59 +135,6 @@ export const clearAllEvents = async () => {
   return data
 }
 
-export const initiateGoogleDriveConnection = async () => {
-  const { data } = await apiClient.post('/google-drive/connect')
-  return data as { auth_url: string; state: string }
-}
-
-export const getGoogleDriveConnections = async () => {
-  const { data } = await apiClient.get('/google-drive/connections')
-  return data
-}
-
-export const listGoogleDriveFolders = async (
-  connectionId: string,
-  parentId: string = 'root',
-  pageToken?: string
-) => {
-  const { data } = await apiClient.get(`/google-drive/connections/${connectionId}/folders`, {
-    params: {
-      parent_id: parentId,
-      page_token: pageToken,
-    },
-  })
-  return data
-}
-
-export const getGoogleDriveProtectedFolders = async (connectionId: string) => {
-  const { data } = await apiClient.get(`/google-drive/connections/${connectionId}/protected-folders`)
-  return data
-}
-
-export const updateGoogleDriveBaseline = async (
-  connectionId: string,
-  payload?: { folderIds?: string[]; startTime?: string }
-) => {
-  const body: Record<string, any> = {}
-  if (payload?.folderIds && payload.folderIds.length > 0) {
-    body.folder_ids = payload.folderIds
-  }
-  if (payload?.startTime) {
-    body.start_time = payload.startTime
-  }
-  const { data } = await apiClient.post(`/google-drive/connections/${connectionId}/baseline`, body)
-  return data
-}
-
-export const triggerGoogleDrivePoll = async () => {
-  const { data } = await apiClient.post('/google-drive/poll')
-  return data as {
-    status: string
-    task_id?: string | null
-    message?: string
-  }
-}
-
 // Type exports
 export type Agent = {
   id?: string
@@ -263,73 +210,6 @@ export type Event = {
   matched_policies?: any[]
   metadata?: Record<string, any>
   details?: Record<string, any>
-}
-
-export type GoogleDriveProtectedFolderStatus = {
-  folder_id: string
-  folder_name?: string
-  folder_path?: string
-  last_seen_timestamp?: string
-}
-
-export type GoogleDrivePollResponse = {
-  status: string
-  task_id?: string | null
-  message?: string
-}
-
-// OneDrive API functions
-export const initiateOneDriveConnection = async () => {
-  const { data } = await apiClient.post('/onedrive/connect')
-  return data
-}
-
-export const getOneDriveConnections = async () => {
-  const { data } = await apiClient.get('/onedrive/connections')
-  return data
-}
-
-export const listOneDriveFolders = async (
-  connectionId: string,
-  parentId: string = 'root',
-  pageToken?: string
-) => {
-  const { data } = await apiClient.get(`/onedrive/connections/${connectionId}/folders`, {
-    params: { parent_id: parentId, page_token: pageToken },
-  })
-  return data
-}
-
-export const getOneDriveProtectedFolders = async (connectionId: string) => {
-  const { data } = await apiClient.get(`/onedrive/connections/${connectionId}/protected-folders`)
-  return data
-}
-
-export const updateOneDriveBaseline = async (
-  connectionId: string,
-  payload?: { folderIds?: string[]; startTime?: string }
-) => {
-  const body = payload || {}
-  const { data } = await apiClient.post(`/onedrive/connections/${connectionId}/baseline`, body)
-  return data
-}
-
-export const triggerOneDrivePoll = async () => {
-  const { data } = await apiClient.post('/onedrive/poll')
-  return data
-}
-
-export type OneDriveProtectedFolderStatus = {
-  folder_id: string
-  folder_name?: string
-  folder_path?: string
-  last_seen_timestamp?: string
-}
-
-export type OneDrivePollResponse = {
-  status: string
-  task_id?: string | null
-  message?: string
 }
 
 export const api = {

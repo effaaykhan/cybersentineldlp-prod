@@ -26,8 +26,6 @@ from app.models.rule import Rule
 from app.models.scan_job import ScanJob
 from app.models.scan_result import ScanResult
 from app.models.audit_log import AuditLog
-from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedFolder
-from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
 from app.models.siem_connector import SIEMConnectorConfigModel
 from app.models.ioc import IOC, TAXIIFeed, TAXIIShareConfig
 from app.models.retention_config import RetentionConfig
@@ -58,10 +56,6 @@ __all__ = [
     "ScanJob",
     "ScanResult",
     "AuditLog",
-    "GoogleDriveConnection",
-    "GoogleDriveProtectedFolder",
-    "OneDriveConnection",
-    "OneDriveProtectedFolder",
     "SIEMConnectorConfigModel",
     "IOC",
     "TAXIIFeed",

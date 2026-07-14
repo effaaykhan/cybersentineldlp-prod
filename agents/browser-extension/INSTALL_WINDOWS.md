@@ -1,0 +1,138 @@
+# Cloud Upload Guard — Windows install (complete steps)
+
+This sets up the browser extension + native-messaging host on a Windows
+endpoint so that Confidential/Restricted files are blocked from uploading to
+cloud apps, Internal files raise an alert, and Public files are allowed.
+
+There are two pieces:
+1. **The browser extension** (loaded into Chrome/Edge) — intercepts uploads.
+2. **The native-messaging host** (`csdlp_host`) — asks the DLP server for the
+   allow/alert/block decision and records the events.
+
+---
+
+## 0. Prerequisites
+- Windows 10/11 with **Chrome** or **Microsoft Edge**.
+- **Python 3.8+** on the machine, with the `requests` package
+  (`pip install requests`) — *or* build the host as an `.exe` (Step 3, Option A).
+- Network access from this PC to the DLP server (`https://<server>/api/v1`).
+- A **registered CyberSentinel agent** on this PC — you need its **agent id**
+  and **API key** (see Step 5).
+
+---
+
+## 1. Get the extension onto the PC
+The extension lives on the DLP server at:
+```
+/home/soc/Data-Loss-Prevention/agents/browser-extension/
+```
+and is packaged at `/home/soc/Data-Loss-Prevention/cybersentinel-cloud-guard.zip`.
+
+Copy it over (any one):
+- **SCP/WinSCP** the zip from the server and unzip to `C:\CyberSentinel\browser-extension\`, **or**
+- On the PC, if it has the repo: `git pull`, then use `agents\browser-extension\`.
+
+You should end up with a folder that contains `manifest.json` — e.g.:
+```
+C:\CyberSentinel\browser-extension\
+  manifest.json
+  src\  (inject.js, content.js, background.js)
+  native-host\  (csdlp_host.py, com.cybersentinel.dlp.json, install.ps1)
+  README.md
+```
+
+---
+
+## 2. Load the extension and copy its ID
+1. Open `chrome://extensions` (or `edge://extensions`).
+2. Turn on **Developer mode** (top-right).
+3. Click **Load unpacked** and select the folder that contains `manifest.json`
+   (`C:\CyberSentinel\browser-extension\`).
+4. The extension appears as **“CyberSentinel DLP — Cloud Upload Guard.”**
+   **Copy its ID** (a 32-character string under the name). You need it in Step 4.
+
+> Managed fleet: instead of “Load unpacked”, publish/pack it and push via the
+> `ExtensionInstallForcelist` group policy. The ID is fixed once published.
+
+---
+
+## 3. Make the host runnable
+Pick ONE.
+
+**Option A — build a standalone .exe (recommended, most reliable):**
+```powershell
+pip install pyinstaller requests
+cd C:\CyberSentinel\browser-extension\native-host
+pyinstaller --onefile csdlp_host.py
+# → produces dist\csdlp_host.exe
+mkdir "C:\Program Files\CyberSentinel" -Force
+copy dist\csdlp_host.exe "C:\Program Files\CyberSentinel\csdlp_host.exe"
+```
+Host command = `C:\Program Files\CyberSentinel\csdlp_host.exe`
+
+**Option B — quick .bat launcher (no build; needs Python + requests on PATH):**
+Create `C:\Program Files\CyberSentinel\csdlp_host.bat` containing:
+```bat
+@echo off
+python "C:\CyberSentinel\browser-extension\native-host\csdlp_host.py" %*
+```
+Host command = `C:\Program Files\CyberSentinel\csdlp_host.bat`
+(If native messaging misbehaves with the .bat, use Option A.)
+
+---
+
+## 4. Register the host (manifest + registry + server config)
+From the `native-host` folder, in an **elevated PowerShell** (Run as admin):
+```powershell
+cd C:\CyberSentinel\browser-extension\native-host
+.\install.ps1 `
+  -ExtensionId  <PASTE_EXTENSION_ID_FROM_STEP_2> `
+  -ServerUrl    https://<your-dlp-server>/api/v1 `
+  -AgentId      <this PC's agent id> `
+  -AgentKey     <this PC's agent API key> `
+  -HostCommand  "C:\Program Files\CyberSentinel\csdlp_host.exe"   # or the .bat
+```
+This writes `C:\ProgramData\CyberSentinel\com.cybersentinel.dlp.json`, the
+Chrome/Edge registry keys, and `C:\ProgramData\CyberSentinel\dlp-host.json`.
+
+---
+
+## 5. Where to get the agent id + API key
+The host authenticates to the server exactly like the endpoint agent (the
+`X-Agent-Key` header). Reuse **this PC's existing agent identity**:
+- The agent id is the machine's registered agent in the dashboard (Agents page).
+- The API key was issued when that agent registered. If you don't have it,
+  ask your DLP admin to retrieve it (it's stored server-side against the agent),
+  or re-register the agent to get a fresh key.
+
+---
+
+## 6. Test
+1. **Fully close** Chrome/Edge (all windows) and reopen.
+2. Sign in to Google Drive or Gmail.
+3. Upload a **plain text** file → **allowed** (a `cloud_upload_allowed` log
+   shows in the dashboard Events).
+4. Upload a file containing **PII / secrets** (e.g., a few test credit-card
+   numbers) → **blocked**: a red banner appears, and `cloud_upload_attempt` +
+   `cloud_upload_prevented` events show in the dashboard.
+
+**Host log (for troubleshooting):** `C:\ProgramData\CyberSentinel\dlp-host.log`
+
+---
+
+## Troubleshooting
+- **Nothing blocks / no log file** → the extension can't reach the host. Recheck
+  the Extension ID in the manifest `allowed_origins`, the registry key, and that
+  the `-HostCommand` path exists. Restart the browser.
+- **Everything is allowed even sensitive files** → the host reached the server
+  but got `allow`. Check `dlp-host.json` (`server_url`, `agent_id`, `agent_key`)
+  and that the two `cloud_upload_prevention` policies are **active** in the
+  dashboard. The host fails **open** on any error (see the log for the reason).
+- **403 in the log** → wrong/expired `agent_key`.
+- **Uploads via a native desktop client** (Google Drive/Dropbox app) are **not**
+  covered by the extension — that's the Phase B WFP driver.
+
+## Scope (this build)
+- Windows, Chrome/Edge browser uploads. Blocks sensitive uploads to **all**
+  cloud hosts (no sanctioned-domain allowlist). Content classified per file is
+  capped at 10 MB. Fail-open everywhere.

@@ -6599,8 +6599,11 @@ if (shouldMonitor) {
         result.classificationLevel = "Public";
 
         try {
-            // Read file content (limit to 10MB to avoid memory issues)
-            const size_t MAX_FILE_SIZE = 10 * 1024 * 1024;
+            // Cap on what we'll read into memory. The whole file is buffered and
+            // base64 makes it ~33% bigger, so an uncapped read would let a large
+            // copy exhaust the machine. 25MB matches the server's extractor limit
+            // and covers effectively every real document.
+            const size_t MAX_FILE_SIZE = 25 * 1024 * 1024;
 
             if (!fs::exists(filePath)) {
                 logger.Warning("File not found for classification: " + filePath);
@@ -6609,37 +6612,49 @@ if (shouldMonitor) {
             }
 
             size_t fileSize = fs::file_size(filePath);
-            if (fileSize > MAX_FILE_SIZE) {
-                logger.Warning("File too large for classification: " + std::to_string(fileSize) + " bytes");
-                result.reason = "File too large (>10MB)";
-                // For large files, fail-open (allow) but log
-                result.evaluationSucceeded = true;
-                return result;
+            // Files over the cap are NOT read — but we must not pretend they're
+            // clean. This used to return "allow" with evaluationSucceeded=true,
+            // i.e. "too big to check" was reported as "checked, it's fine" —
+            // so padding an archive past the cap bypassed DLP entirely. Instead
+            // we ask the server to decide, telling it we couldn't inspect.
+            const bool tooLargeToInspect = (fileSize > MAX_FILE_SIZE);
+            if (tooLargeToInspect) {
+                logger.Warning("File exceeds inspection cap (" + std::to_string(fileSize) +
+                               " bytes) — asking server to decide (uninspectable)");
             }
 
-            // Read file content
-            std::ifstream file(filePath, std::ios::binary);
-            if (!file.is_open()) {
-                logger.Warning("Cannot open file for classification: " + filePath);
-                result.reason = "Cannot read file";
-                return result;
+            std::string encodedContent;
+            if (!tooLargeToInspect) {
+                // Read file content
+                std::ifstream file(filePath, std::ios::binary);
+                if (!file.is_open()) {
+                    logger.Warning("Cannot open file for classification: " + filePath);
+                    result.reason = "Cannot read file";
+                    return result;
+                }
+
+                std::string fileContent((std::istreambuf_iterator<char>(file)),
+                                       std::istreambuf_iterator<char>());
+                file.close();
+
+                // Send the file's RAW bytes, base64-encoded, and let the server
+                // extract the text. Previously we stripped every non-printable byte
+                // here, which silently destroyed pdf/docx/xlsx content — those files
+                // then classified as "Public" and were allowed onto USB. The server
+                // decodes this and runs the proper parser per format.
+                encodedContent = Base64Encode(fileContent);
             }
-
-            std::string fileContent((std::istreambuf_iterator<char>(file)),
-                                   std::istreambuf_iterator<char>());
-            file.close();
-
-            // Send the file's RAW bytes, base64-encoded, and let the server
-            // extract the text. Previously we stripped every non-printable byte
-            // here, which silently destroyed pdf/docx/xlsx content — those files
-            // then classified as "Public" and were allowed onto USB. The server
-            // decodes this and runs the proper parser per format.
-            std::string encodedContent = Base64Encode(fileContent);
 
             // Build JSON request using JsonBuilder
             JsonBuilder json;
             json.AddString("file_name", fileName);
-            json.AddString("file_content_b64", encodedContent);
+            if (tooLargeToInspect) {
+                // No content: tell the server we couldn't inspect it so its
+                // policy decides (block/allow) instead of us assuming "allow".
+                json.AddString("inspection_skipped", "too_large");
+            } else {
+                json.AddString("file_content_b64", encodedContent);
+            }
             json.AddInt("file_size", static_cast<int>(fileSize));
             json.AddString("event_type", eventType);
             json.AddString("destination_type", "removable_drive");

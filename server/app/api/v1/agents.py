@@ -983,6 +983,14 @@ class PolicyEvaluationRequest(BaseModel):
     file_content_b64: Optional[str] = Field(
         None, description="Base64 of the raw file bytes (preferred over file_content)"
     )
+    # Set by a caller that COULD NOT inspect the file at all — e.g. the agent
+    # refusing to read a 500MB file into memory ("too_large"). Callers must send
+    # this instead of silently allowing: the server marks the content
+    # uninspectable so a policy decides, rather than an unread file being
+    # classified Public and let through.
+    inspection_skipped: Optional[str] = Field(
+        None, description="Why the caller could not inspect: too_large | unreadable"
+    )
     file_size: Optional[int] = Field(None, description="File size in bytes")
     event_type: str = Field(..., description="Event type (e.g., 'usb_file_transfer', 'clipboard')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
@@ -1051,7 +1059,19 @@ async def evaluate_policy_realtime(
         # (strict) or allow it (lenient). Defaults to readable for plain text.
         extraction_status = "readable"
         extraction_reason = ""
-        if request.file_content_b64:
+        if request.inspection_skipped:
+            # The caller told us up front it couldn't look inside (too big to
+            # read, etc). Don't pretend: mark it uninspectable and let policy rule.
+            extraction_status = "too_large" if request.inspection_skipped == "too_large" else "unreadable"
+            extract_kind = request.inspection_skipped
+            extraction_reason = f"caller skipped inspection: {request.inspection_skipped}"
+            content_to_classify = ""
+            logger.info(
+                "Caller skipped inspection",
+                agent_id=agent_id, file_name=request.file_name,
+                reason=request.inspection_skipped, file_size=request.file_size,
+            )
+        elif request.file_content_b64:
             import base64 as _b64
             from app.services.document_extract import extract_text as _extract_text
             try:
@@ -1064,9 +1084,10 @@ async def evaluate_policy_realtime(
             extraction_reason = extracted.reason
             if not extracted.ok:
                 # Unreadable (encrypted archive / scanned image / legacy .doc /
-                # opaque binary). Flag it so a policy can match on it instead of
-                # this silently becoming "Public".
-                extraction_status = "unreadable"
+                # opaque binary) or simply bigger than we'll parse. Kept as two
+                # distinct states so operators can treat them differently — an
+                # encrypted archive is suspicious, a 400MB video usually isn't.
+                extraction_status = "too_large" if extracted.kind == "too_large" else "unreadable"
                 logger.info(
                     "Content not extractable",
                     agent_id=agent_id, file_name=request.file_name,

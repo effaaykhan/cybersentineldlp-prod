@@ -23,9 +23,16 @@ class Decision(Tuple):
     pass
 
 
-async def evaluate(file_name: str, text: str, recipients: str) -> Tuple[str, Optional[str], str]:
+async def evaluate(file_name: str, text: str, recipients: str,
+                   skipped: Optional[str] = None) -> Tuple[str, Optional[str], str]:
     """Ask the DLP server to classify `text`. Returns (action, level, reason)
-    where action is one of block | alert | allow."""
+    where action is one of block | alert | allow.
+
+    `skipped` ("too_large" / "unreadable") is passed when we could NOT read the
+    attachment — the server then marks it uninspectable and its policy decides,
+    keeping email consistent with USB/cloud instead of each channel inventing
+    its own answer for content it can't see.
+    """
     if not config.DLP_AGENT_KEY:
         log.warning("no DLP_AGENT_KEY configured — cannot evaluate")
         return ("block" if config.BLOCK_ON_DLP_ERROR else "allow"), None, "relay-unconfigured"
@@ -41,6 +48,7 @@ async def evaluate(file_name: str, text: str, recipients: str) -> Tuple[str, Opt
                     "event_type": "email_send",
                     "destination_type": "email",
                     "destination_path": recipients,
+                    **({"inspection_skipped": skipped} if skipped else {}),
                 },
             )
             r.raise_for_status()

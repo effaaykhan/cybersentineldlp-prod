@@ -56,11 +56,22 @@ class DLPHandler:
             ex = extract_text("body.txt" if is_body else name, data)
 
             if not ex.ok and not is_body:
-                # Couldn't read it (encrypted, scanned image, legacy .doc, binary).
-                log.info("unreadable attachment %s (%s: %s)", name, ex.kind, ex.reason)
+                # Couldn't read it (encrypted archive, scanned image, legacy
+                # .doc, oversized, opaque binary). Never treat that as clean —
+                # ask the server so the same policy that governs USB/cloud
+                # decides here too. RELAY_BLOCK_UNEXTRACTABLE remains a local
+                # override for sites that want to reject without consulting policy.
+                log.info("uninspectable attachment %s (%s: %s)", name, ex.kind, ex.reason)
                 if config.BLOCK_UNEXTRACTABLE:
                     await self._record_block(sender, recipients, name, None,
-                                             f"Unreadable attachment blocked ({ex.reason})")
+                                             f"Uninspectable attachment blocked ({ex.reason})")
+                    return config.REJECT_MESSAGE
+                skipped = "too_large" if ex.kind == "too_large" else "unreadable"
+                action, level, reason = await evaluate(name, "", recipients, skipped=skipped)
+                if action == "block":
+                    await self._record_block(
+                        sender, recipients, name, level,
+                        f"Uninspectable attachment ({ex.reason}) blocked by policy"[:480])
                     return config.REJECT_MESSAGE
                 continue
             if not ex.text.strip():

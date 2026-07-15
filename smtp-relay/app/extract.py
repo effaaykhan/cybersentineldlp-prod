@@ -132,6 +132,107 @@ _PARSERS = {
 # so the caller can policy-decide rather than silently treating them as clean.
 _LEGACY_EXTS = {".doc", ".xls", ".ppt"}
 
+# ── Archives ────────────────────────────────────────────────────────────────
+# Zipping a file is the cheapest possible way to defeat content inspection, so
+# we expand archives and classify what's inside. Entries are fed back through
+# extract_text(), which means a PDF inside a zip is parsed as a PDF, and a zip
+# inside a zip recurses — bounded by the limits below.
+#
+# Those limits are the zip-bomb defence: a tiny archive can expand to petabytes,
+# so we cap nesting depth, entry count and total decompressed bytes, and stop as
+# soon as any is hit. Better to inspect the first N MB of a hostile archive than
+# to let it exhaust the box.
+ARCHIVE_EXTS = {".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z"}
+MAX_ARCHIVE_DEPTH = 3
+MAX_ARCHIVE_ENTRIES = 500
+MAX_ARCHIVE_TOTAL_BYTES = 100 * 1024 * 1024
+
+
+class _ArchiveBudget:
+    """Shared across one archive tree so nested members can't each spend the cap."""
+
+    def __init__(self) -> None:
+        self.bytes_left = MAX_ARCHIVE_TOTAL_BYTES
+        self.entries_left = MAX_ARCHIVE_ENTRIES
+        self.truncated = False
+
+    def take(self, n: int) -> bool:
+        if self.entries_left <= 0 or n > self.bytes_left:
+            self.truncated = True
+            return False
+        self.entries_left -= 1
+        self.bytes_left -= n
+        return True
+
+
+def _extract_zip(data: bytes, depth: int, budget: "_ArchiveBudget") -> tuple[str, bool, str]:
+    import zipfile
+    parts: list[str] = []
+    encrypted = False
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            if not budget.take(info.file_size):
+                break
+            try:
+                inner = zf.read(info)
+            except RuntimeError as e:              # "password required" => encrypted member
+                if "encrypted" in str(e).lower():
+                    encrypted = True
+                    continue
+                raise
+            except Exception:
+                continue
+            sub = extract_text(info.filename, inner, _depth=depth + 1, _budget=budget)
+            if sub.text.strip():
+                parts.append(sub.text)
+    reason = ""
+    if encrypted:
+        reason = "contains encrypted members"
+    return "\n".join(parts), encrypted, reason
+
+
+def _extract_tar(data: bytes, depth: int, budget: "_ArchiveBudget") -> str:
+    import tarfile
+    parts: list[str] = []
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
+        for member in tf:
+            if not member.isfile():
+                continue
+            if not budget.take(member.size):
+                break
+            fh = tf.extractfile(member)
+            if fh is None:
+                continue
+            sub = extract_text(member.name, fh.read(), _depth=depth + 1, _budget=budget)
+            if sub.text.strip():
+                parts.append(sub.text)
+    return "\n".join(parts)
+
+
+def _extract_gz(filename: str, data: bytes, depth: int, budget: "_ArchiveBudget") -> str:
+    import gzip
+    raw = gzip.decompress(data)
+    if not budget.take(len(raw)):
+        return ""
+    inner_name = filename[:-3] if filename.lower().endswith(".gz") else filename
+    return extract_text(inner_name, raw, _depth=depth + 1, _budget=budget).text
+
+
+def _extract_7z(data: bytes, depth: int, budget: "_ArchiveBudget") -> str:
+    import py7zr                                   # optional dep; absent => unreadable
+    parts: list[str] = []
+    with py7zr.SevenZipFile(io.BytesIO(data), mode="r") as z:
+        for name, bio in (z.readall() or {}).items():
+            payload = bio.read()
+            if not budget.take(len(payload)):
+                break
+            sub = extract_text(name, payload, _depth=depth + 1, _budget=budget)
+            if sub.text.strip():
+                parts.append(sub.text)
+    return "\n".join(parts)
+
 
 def sniff_kind(filename: str, data: bytes) -> str:
     """Best-effort format label from the extension, with a magic-byte fallback."""
@@ -149,8 +250,13 @@ def sniff_kind(filename: str, data: bytes) -> str:
     return "unknown"
 
 
-def extract_text(filename: str, data: bytes) -> Extracted:
-    """Return text suitable for classification, plus how we got it."""
+def extract_text(filename: str, data: bytes, _depth: int = 0,
+                 _budget: "_ArchiveBudget | None" = None) -> Extracted:
+    """Return text suitable for classification, plus how we got it.
+
+    _depth/_budget are internal: they bound recursion and total decompression
+    when expanding archives (see ARCHIVE_EXTS).
+    """
     if not data:
         return Extracted("", "empty", True, "no content")
     if len(data) > MAX_EXTRACT_BYTES:
@@ -158,9 +264,53 @@ def extract_text(filename: str, data: bytes) -> Extracted:
 
     ext = os.path.splitext(filename or "")[1].lower()
 
+    # Office parsers FIRST: .docx/.xlsx/.pptx are themselves zip containers, so
+    # they must go to their own parser rather than the archive expander (which
+    # would walk their internal XML plumbing instead of reading the document).
     parser = _PARSERS.get(ext)
     if parser is None and data[:5] == b"%PDF-":
         parser = _PARSERS[".pdf"]                       # mislabeled/extension-less PDF
+
+    if parser is None:
+        is_archive_ext = ext in ARCHIVE_EXTS
+        looks_zip = data[:4] == b"PK\x03\x04"
+        if is_archive_ext or looks_zip:
+            if _depth >= MAX_ARCHIVE_DEPTH:
+                return Extracted("", "archive", False, "nesting depth limit reached")
+            budget = _budget or _ArchiveBudget()
+            try:
+                if ext in (".tar", ".tgz", ".bz2", ".xz") or (ext == ".gz" and filename.lower().endswith(".tar.gz")):
+                    text = _extract_tar(data, _depth, budget)
+                    encrypted, reason = False, ""
+                elif ext == ".gz":
+                    text = _extract_gz(filename, data, _depth, budget)
+                    encrypted, reason = False, ""
+                elif ext == ".7z":
+                    text = _extract_7z(data, _depth, budget)
+                    encrypted, reason = False, ""
+                else:
+                    text, encrypted, reason = _extract_zip(data, _depth, budget)
+            except ImportError:
+                return Extracted("", "archive", False, f"{ext} support not installed")
+            except Exception as e:                      # corrupt / encrypted / unsupported
+                # Password-protected archives raise deep library-specific errors;
+                # surface a clean, actionable reason instead of a raw dump.
+                msg = str(e).lower()
+                if "password" in msg or "encrypted" in msg:
+                    log.info("encrypted archive %s — cannot inspect", filename)
+                    return Extracted("", "archive", False, "encrypted archive (password required)")
+                log.warning("archive extract failed for %s: %s", filename, e)
+                return Extracted("", "archive", False, f"archive: {str(e)[:120]}")
+
+            if budget.truncated:
+                reason = (reason + "; " if reason else "") + "archive truncated at safety limits"
+            if text.strip():
+                # Found readable content — classify it. Note ok=True even if some
+                # members were encrypted: what we COULD read still counts.
+                return Extracted(_clip(text), "archive", True, reason)
+            # Nothing readable: an encrypted or opaque archive. Say so rather
+            # than letting empty text classify as "Public".
+            return Extracted("", "archive", False, reason or "no readable content in archive")
 
     if parser is not None:
         kind, fn = parser

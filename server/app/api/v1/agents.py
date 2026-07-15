@@ -1006,6 +1006,11 @@ class PolicyEvaluationResponse(BaseModel):
     policies_triggered: List[Dict[str, Any]] = Field(default_factory=list, description="Policies that matched")
     should_log: bool = Field(True, description="Whether to log this event")
     alert_severity: Optional[str] = Field(None, description="Alert severity if applicable")
+    # How the content was read. extraction_status="unreadable" means we could NOT
+    # see inside (encrypted archive, scanned image, opaque binary) — the
+    # classification below is therefore not evidence of being clean.
+    extraction_status: str = Field("readable", description="readable | unreadable")
+    extraction_kind: str = Field("text", description="pdf | docx | xlsx | archive | text | ...")
 
 
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
@@ -1039,6 +1044,13 @@ async def evaluate_policy_realtime(
         #    into a string yields compressed garbage that always looks "Public".
         content_to_classify = request.file_content or ""
         extract_kind = "text"
+        # readable | unreadable — whether we could actually see inside the file.
+        # An encrypted archive / scanned image / opaque binary is NOT the same as
+        # "clean", and must never be silently treated as Public. We surface it as
+        # a policy-matchable field so operators choose: block unreadable content
+        # (strict) or allow it (lenient). Defaults to readable for plain text.
+        extraction_status = "readable"
+        extraction_reason = ""
         if request.file_content_b64:
             import base64 as _b64
             from app.services.document_extract import extract_text as _extract_text
@@ -1049,12 +1061,14 @@ async def evaluate_policy_realtime(
             extracted = _extract_text(request.file_name, raw)
             content_to_classify = extracted.text
             extract_kind = extracted.kind
+            extraction_reason = extracted.reason
             if not extracted.ok:
-                # Unreadable (encrypted / scanned image / legacy .doc / binary).
-                # We say so explicitly rather than classifying empty text as
-                # "Public" — the caller decides whether to fail open or closed.
+                # Unreadable (encrypted archive / scanned image / legacy .doc /
+                # opaque binary). Flag it so a policy can match on it instead of
+                # this silently becoming "Public".
+                extraction_status = "unreadable"
                 logger.info(
-                    "Attachment not extractable",
+                    "Content not extractable",
                     agent_id=agent_id, file_name=request.file_name,
                     kind=extracted.kind, reason=extracted.reason,
                 )
@@ -1095,6 +1109,12 @@ async def evaluate_policy_realtime(
             "file_name": request.file_name,
             "file_size": request.file_size,
             "agent_id": agent_id,
+            # Policy-matchable: lets an operator write
+            #   extraction_status equals unreadable -> block
+            # to stop password-protected archives / scanned images, which we
+            # cannot inspect and which would otherwise look "Public".
+            "extraction_status": extraction_status,
+            "extraction_kind": extract_kind,
         }
 
         # 3. Evaluate classification-aware policies
@@ -1165,6 +1185,8 @@ async def evaluate_policy_realtime(
             policies_triggered=triggered_policies,
             should_log=True,
             alert_severity=alert_severity,
+            extraction_status=extraction_status,
+            extraction_kind=extract_kind,
         )
 
     except Exception as e:

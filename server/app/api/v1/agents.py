@@ -969,7 +969,20 @@ async def sync_agent_policies(
 class PolicyEvaluationRequest(BaseModel):
     """Request model for real-time policy evaluation"""
     file_name: str = Field(..., description="Name of the file being transferred")
-    file_content: str = Field(..., description="Content of the file to classify")
+    file_content: str = Field(
+        "",
+        description=(
+            "Plain-text content to classify. Correct only for text formats — a "
+            "binary file (pdf/docx/xlsx) decoded into this field is unreadable "
+            "to the classifier and will look Public. Send file_content_b64 instead."
+        ),
+    )
+    # Raw file bytes, base64-encoded. Preferred for ANY file: the server decodes
+    # and extracts real text (pdf/docx/xlsx/pptx/text), so binary documents are
+    # classified on their actual contents rather than their compressed bytes.
+    file_content_b64: Optional[str] = Field(
+        None, description="Base64 of the raw file bytes (preferred over file_content)"
+    )
     file_size: Optional[int] = Field(None, description="File size in bytes")
     event_type: str = Field(..., description="Event type (e.g., 'usb_file_transfer', 'clipboard')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
@@ -1020,10 +1033,36 @@ async def evaluate_policy_realtime(
     await verify_agent_key(http_request)
 
     try:
+        # 0. Resolve the text to classify. When the caller sends raw bytes we
+        #    extract real text from them (pdf/docx/xlsx/pptx/text). This is what
+        #    makes binary documents classifiable at all — decoding their bytes
+        #    into a string yields compressed garbage that always looks "Public".
+        content_to_classify = request.file_content or ""
+        extract_kind = "text"
+        if request.file_content_b64:
+            import base64 as _b64
+            from app.services.document_extract import extract_text as _extract_text
+            try:
+                raw = _b64.b64decode(request.file_content_b64, validate=False)
+            except Exception as e:  # noqa: BLE001 — malformed base64 from an agent
+                raise HTTPException(400, f"file_content_b64 is not valid base64: {e}")
+            extracted = _extract_text(request.file_name, raw)
+            content_to_classify = extracted.text
+            extract_kind = extracted.kind
+            if not extracted.ok:
+                # Unreadable (encrypted / scanned image / legacy .doc / binary).
+                # We say so explicitly rather than classifying empty text as
+                # "Public" — the caller decides whether to fail open or closed.
+                logger.info(
+                    "Attachment not extractable",
+                    agent_id=agent_id, file_name=request.file_name,
+                    kind=extracted.kind, reason=extracted.reason,
+                )
+
         # 1. Classify the file content using ClassificationEngine
         classification_engine = ClassificationEngine(db)
         classification_result = await classification_engine.classify_content(
-            request.file_content,
+            content_to_classify,
             context={
                 "event_type": request.event_type,
                 "file_name": request.file_name,

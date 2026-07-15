@@ -6544,6 +6544,46 @@ if (shouldMonitor) {
     };
 
     // Call server-side real-time policy evaluation
+    // Base64-encode raw bytes for transport in JSON.
+    //
+    // Why this exists: JSON strings can't carry arbitrary bytes, and the old
+    // code "escaped" content by replacing every non-printable byte with a
+    // space. That is lossy — it destroyed the contents of any binary document
+    // (pdf/docx/xlsx) before the server ever saw it, so those files always
+    // classified as "Public" and were allowed through. Base64 maps arbitrary
+    // bytes onto a safe ASCII alphabet losslessly (~33% larger), so the server
+    // can decode the real file and extract its text.
+    //
+    // Self-contained on purpose: no wincrypt/crypt32 dependency, so the
+    // existing build command is unchanged.
+    static std::string Base64Encode(const std::string& in) {
+        static const char* T =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string out;
+        out.reserve(((in.size() + 2) / 3) * 4);
+        size_t i = 0;
+        while (i + 2 < in.size()) {
+            unsigned v = (static_cast<unsigned char>(in[i]) << 16) |
+                         (static_cast<unsigned char>(in[i + 1]) << 8) |
+                         (static_cast<unsigned char>(in[i + 2]));
+            out += T[(v >> 18) & 0x3F];
+            out += T[(v >> 12) & 0x3F];
+            out += T[(v >> 6) & 0x3F];
+            out += T[v & 0x3F];
+            i += 3;
+        }
+        if (i < in.size()) {
+            unsigned v = static_cast<unsigned char>(in[i]) << 16;
+            bool two = (i + 1 < in.size());
+            if (two) v |= static_cast<unsigned char>(in[i + 1]) << 8;
+            out += T[(v >> 18) & 0x3F];
+            out += T[(v >> 12) & 0x3F];
+            out += two ? T[(v >> 6) & 0x3F] : '=';
+            out += '=';
+        }
+        return out;
+    }
+
     PolicyEvaluationResult EvaluatePolicyRealtime(
         const std::string& fileName,
         const std::string& filePath,
@@ -6589,30 +6629,17 @@ if (shouldMonitor) {
                                    std::istreambuf_iterator<char>());
             file.close();
 
-            // Escape the file content for JSON (basic escaping)
-            std::string escapedContent;
-            escapedContent.reserve(fileContent.size());
-            for (char c : fileContent) {
-                switch (c) {
-                    case '"': escapedContent += "\\\""; break;
-                    case '\\': escapedContent += "\\\\"; break;
-                    case '\n': escapedContent += "\\n"; break;
-                    case '\r': escapedContent += "\\r"; break;
-                    case '\t': escapedContent += "\\t"; break;
-                    default:
-                        if (c >= 32 && c < 127) {
-                            escapedContent += c;
-                        } else {
-                            // Skip non-printable characters
-                            escapedContent += ' ';
-                        }
-                }
-            }
+            // Send the file's RAW bytes, base64-encoded, and let the server
+            // extract the text. Previously we stripped every non-printable byte
+            // here, which silently destroyed pdf/docx/xlsx content — those files
+            // then classified as "Public" and were allowed onto USB. The server
+            // decodes this and runs the proper parser per format.
+            std::string encodedContent = Base64Encode(fileContent);
 
             // Build JSON request using JsonBuilder
             JsonBuilder json;
             json.AddString("file_name", fileName);
-            json.AddString("file_content", escapedContent);
+            json.AddString("file_content_b64", encodedContent);
             json.AddInt("file_size", static_cast<int>(fileSize));
             json.AddString("event_type", eventType);
             json.AddString("destination_type", "removable_drive");

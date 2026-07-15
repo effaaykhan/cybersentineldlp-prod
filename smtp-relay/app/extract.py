@@ -1,5 +1,5 @@
 """
-Document text extraction for DLP classification.
+Document text extraction for DLP classification (canonical implementation).
 
 The classification engine scans TEXT. Binary office/PDF attachments decode to
 garbage bytes, which is why they previously classified as "Public" and slipped
@@ -12,6 +12,12 @@ A parser that blows up, a corrupt/encrypted file, or a format we don't handle
 returns a result with ok=False rather than raising, and byte/char caps stop a
 hostile attachment from exhausting memory. The caller decides the policy for
 un-extractable content — this module never decides allow/block.
+
+Used by /agents/{id}/policy/evaluate when a caller sends `file_content_b64`:
+the endpoint agent (USB / file transfer), the browser upload guard, and the
+SMTP relay all send raw bytes and let the server do the parsing — so binary
+office/PDF attachments are classified on their real text instead of the
+compressed bytes (which always looked like "Public" and were let through).
 """
 from __future__ import annotations
 
@@ -54,6 +60,15 @@ def _decode(data: bytes) -> str:
         except (UnicodeDecodeError, LookupError):
             continue
     return data.decode("utf-8", errors="ignore")
+
+
+def _looks_textual(text: str) -> bool:
+    """True when a decoded blob is mostly printable — i.e. it really is text."""
+    if not text:
+        return False
+    sample = text[:4096]
+    printable = sum(c.isprintable() or c.isspace() for c in sample)
+    return (printable / max(1, len(sample))) > 0.85
 
 
 def _extract_pdf(data: bytes) -> str:
@@ -151,7 +166,19 @@ def extract_text(filename: str, data: bytes) -> Extracted:
         kind, fn = parser
         try:
             text = _clip(fn(data))
-        except Exception as e:                          # corrupt / encrypted / unsupported variant
+        except Exception as e:                          # corrupt / encrypted / extension lies
+            # SECURITY: never conclude "unreadable => clean" just because the
+            # parser for the *claimed* format rejected it. The commonest cause
+            # is that the extension is a lie — rename secret.txt to secret.docx
+            # and the Word parser fails; if we stopped here the content would
+            # classify as Public and sail through. So fall back to scanning the
+            # raw bytes as text, which catches exactly that evasion.
+            fallback = _decode(data)
+            if _looks_textual(fallback):
+                log.warning("%s: %s parser failed (%s) — content is textual, scanning as text",
+                            filename, kind, e)
+                return Extracted(_clip(fallback), "text", True,
+                                 f"{kind} parse failed; content scanned as text")
             log.warning("extract failed for %s (%s): %s", filename, kind, e)
             return Extracted("", "error", False, f"{kind}: {e}")
         if not text.strip():
@@ -167,8 +194,7 @@ def extract_text(filename: str, data: bytes) -> Extracted:
 
     # Unknown extension: if it decodes cleanly it's text; otherwise say so.
     text = _decode(data)
-    printable = sum(c.isprintable() or c.isspace() for c in text[:4096])
-    if text and printable / max(1, len(text[:4096])) > 0.85:
+    if _looks_textual(text):
         return Extracted(_clip(text), "text", True)
 
     return Extracted("", "unsupported", False, f"binary/unknown format {ext or '(none)'}")

@@ -14,6 +14,7 @@ export type PolicyType =
   | 'onedrive_cloud_monitoring'
   | 'classification_aware_policy'
   | 'cloud_upload_prevention'
+  | 'email_send_prevention'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log' | 'block'

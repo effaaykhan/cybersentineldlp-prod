@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -55,6 +55,12 @@ const policyTypes: Array<{
     label: 'Cloud Upload Prevention',
     description: 'Block Confidential/Restricted files from being uploaded to any cloud app; alert on Internal',
     icon: UploadCloud
+  },
+  {
+    type: 'email_send_prevention',
+    label: 'Email Send Prevention',
+    description: 'Block outbound email carrying Confidential/Restricted attachments or body text; alert on Internal',
+    icon: Mail
   }
 ]
 

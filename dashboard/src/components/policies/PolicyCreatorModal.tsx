@@ -29,28 +29,58 @@ interface PolicyCreatorModalProps {
   editingPolicy?: Policy | null
 }
 
-// Both the generic classification-aware policy and cloud-upload prevention use
+/*
+ * Channel-scoped classification policies.
+ *
+ * These use the same conditions/actions builder as `classification_aware_policy`
+ * (rules like "classification_level in [Confidential, Restricted] -> block")
+ * but ALSO carry a `type`, which is what scopes them server-side to one
+ * channel's events. Each entry is the template an admin starts from; they can
+ * tune the rules afterwards. Adding a new channel = one entry here + a tile in
+ * PolicyTypeSelector + the union member in types/policy.ts.
+ */
+type ClassificationTemplate = {
+  conditions: { match: 'all' | 'any'; rules: Array<{ field: string; operator: string; value: any }> }
+  actions: Record<string, any>
+}
+
+const SENSITIVE_LEVELS = ['Confidential', 'Restricted']
+
+const POLICY_TEMPLATES: Partial<Record<PolicyType, ClassificationTemplate>> = {
+  cloud_upload_prevention: {
+    conditions: {
+      match: 'all',
+      rules: [
+        { field: 'event_type', operator: 'equals', value: 'cloud_upload' },
+        { field: 'classification_level', operator: 'in', value: SENSITIVE_LEVELS },
+      ],
+    },
+    actions: { block: {}, alert: { severity: 'critical', message: 'Sensitive data upload to cloud blocked' } },
+  },
+  email_send_prevention: {
+    conditions: {
+      match: 'all',
+      rules: [
+        { field: 'event_type', operator: 'equals', value: 'email_send' },
+        { field: 'classification_level', operator: 'in', value: SENSITIVE_LEVELS },
+      ],
+    },
+    actions: { block: {}, alert: { severity: 'critical', message: 'Sensitive data blocked from outbound email' } },
+  },
+}
+
+const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in POLICY_TEMPLATES
+
+// The generic classification policy and every channel-scoped policy above use
 // the conditions/actions builder rather than a typed `config` object.
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
-  t === 'classification_aware_policy' || t === 'cloud_upload_prevention'
-
-// Seed rules for a cloud-upload-prevention policy: block Confidential/Restricted
-// uploads to any cloud app, alert on Internal. The admin can tune from here.
-const CLOUD_UPLOAD_TEMPLATE = {
-  conditions: {
-    match: 'all' as const,
-    rules: [
-      { field: 'event_type', operator: 'equals', value: 'cloud_upload' },
-      { field: 'classification_level', operator: 'in', value: ['Confidential', 'Restricted'] },
-    ],
-  },
-  actions: { block: {}, alert: { severity: 'critical', message: 'Sensitive data upload to cloud blocked' } },
-}
+  t === 'classification_aware_policy' || isChannelPolicy(t)
 
 const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
+    case 'email_send_prevention':
       // These use conditions/actions, not a typed config object.
       return {}
 
@@ -312,7 +342,7 @@ export default function PolicyCreatorModal({
         // Stamp the type for cloud-upload prevention so the server-side
         // evaluator scopes it to cloud_upload events; the generic
         // classification policy stays type-less.
-        type: policyType === 'cloud_upload_prevention' ? 'cloud_upload_prevention' : undefined,
+        type: isChannelPolicy(policyType) ? policyType : undefined,
       } as unknown as Partial<Policy> & { match: 'all' | 'any' }
     } else {
       // Traditional policy uses type/severity/config format
@@ -408,11 +438,13 @@ export default function PolicyCreatorModal({
               onSelectType={(type) => {
                 setPolicyType(type)
                 setConfig(getDefaultConfig(type))
-                // Pre-fill the conditions/actions builder with the cloud-upload
+                // Pre-fill the conditions/actions builder with that channel's
                 // matrix (block Confidential/Restricted) so the admin starts
-                // from a working policy and can tune it.
-                if (type === 'cloud_upload_prevention') {
-                  setClassificationPolicy(JSON.parse(JSON.stringify(CLOUD_UPLOAD_TEMPLATE)))
+                // from a working policy and can tune it. Deep-copied so editing
+                // the form never mutates the shared template.
+                const template = POLICY_TEMPLATES[type]
+                if (template) {
+                  setClassificationPolicy(JSON.parse(JSON.stringify(template)))
                 }
               }}
             />

@@ -159,8 +159,15 @@ class ClassificationEngine:
     """
 
     # Content size limits to prevent DoS
-    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10 MB
-    MAX_REGEX_TIMEOUT_CHARS = 1_000_000     # Limit regex evaluation to first 1M chars
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10 MB — the ONE bound on rule work.
+    # There is deliberately no second, smaller regex window. A 1M-char cap here
+    # used to hide everything past it: filler in front of a secret produced zero
+    # matches, so the file classified Public and was allowed (an 87KB zip was
+    # enough to do it). Windowing would not have helped ReDoS either — a hostile
+    # pattern backtracks just as badly inside one window — so the real bound is
+    # total content length above. Callers must keep content at or under it and
+    # report anything they had to drop (see document_extract.Extracted.truncated),
+    # because unscanned content is not clean content.
 
     def __init__(self, session: AsyncSession, cache_ttl_seconds: int = 60):
         self.session = session
@@ -190,8 +197,17 @@ class ClassificationEngine:
                 details={"reason": "No content to classify"},
             )
 
-        # Truncate oversized content to prevent DoS
+        # Truncate oversized content to prevent DoS. Callers that extract from
+        # files stay under this (document_extract.MAX_TEXT_CHARS), so this is a
+        # backstop for raw-text callers. Log it: silently dropping content is how
+        # unscanned data ends up reported as Public.
         eval_content = content[:self.MAX_CONTENT_LENGTH]
+        if len(content) > self.MAX_CONTENT_LENGTH:
+            logger.warning(
+                "Content exceeds classifier bound — tail NOT scanned; caller must "
+                "treat this result as partial, not clean",
+                content_length=len(content), scanned=self.MAX_CONTENT_LENGTH,
+            )
         ctx = context or {}
 
         # Step 1: Fingerprint check (authoritative)
@@ -343,8 +359,10 @@ class ClassificationEngine:
         if pattern is None:
             return False, 0, 0
 
-        # Limit regex evaluation to prevent ReDoS
-        eval_text = content[:self.MAX_REGEX_TIMEOUT_CHARS]
+        # Scan ALL of it. classify_content() has already bounded `content` to
+        # MAX_CONTENT_LENGTH, which is what keeps this call finite; clipping
+        # again here would silently skip content and report it as clean.
+        eval_text = content
         raw_matches = pattern.findall(eval_text)
         raw_count = len(raw_matches)
 

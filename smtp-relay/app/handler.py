@@ -79,7 +79,23 @@ class DLPHandler:
 
             action, level, reason = await evaluate(name if not is_body else "(message body)",
                                                    ex.text, recipients)
-            log.info("part=%s kind=%s level=%s action=%s", name, ex.kind, level, action)
+            log.info("part=%s kind=%s level=%s action=%s truncated=%s",
+                     name, ex.kind, level, action, ex.truncated)
+
+            if action != "block" and ex.truncated and not is_body:
+                # We only read part of this attachment (it outran the scan budget,
+                # or an archive hit its safety limits) and what we read looked
+                # clean — but "clean so far" is not clean. Re-ask as uninspectable
+                # so the same policy that governs an unopenable attachment decides,
+                # rather than letting filler in front of a secret buy a pass.
+                log.info("partially inspected attachment %s (%s) — consulting policy",
+                         name, ex.reason)
+                action, level, reason = await evaluate(name, "", recipients, skipped="too_large")
+                if action == "block":
+                    await self._record_block(
+                        sender, recipients, name, level,
+                        f"Partially inspected attachment ({ex.reason}) blocked by policy"[:480])
+                    return config.REJECT_MESSAGE
 
             if action == "block":
                 await self._record_block(

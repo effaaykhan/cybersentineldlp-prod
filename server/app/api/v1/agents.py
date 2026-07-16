@@ -1093,6 +1093,22 @@ async def evaluate_policy_realtime(
                     agent_id=agent_id, file_name=request.file_name,
                     kind=extracted.kind, reason=extracted.reason,
                 )
+            elif extracted.truncated:
+                # We read it, but not all of it: it outran the scan budget, or an
+                # archive hit its safety limits. The text we DID get is still
+                # classified below — it may convict the file on its own — but we
+                # must not certify the part we never saw. Reported as too_large so
+                # the existing "Block Uninspectable Content" policy governs it,
+                # exactly as for a file that was too big to open. Otherwise padding
+                # a file with filler until the secret falls past the budget is a
+                # trivial bypass.
+                extraction_status = "too_large"
+                logger.info(
+                    "Content only partially inspected",
+                    agent_id=agent_id, file_name=request.file_name,
+                    kind=extracted.kind, reason=extracted.reason,
+                    scanned_chars=len(extracted.text),
+                )
 
         # 1. Classify the file content using ClassificationEngine
         classification_engine = ClassificationEngine(db)

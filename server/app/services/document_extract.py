@@ -30,8 +30,21 @@ log = logging.getLogger(__name__)
 
 # Don't even attempt to parse an attachment larger than this.
 MAX_EXTRACT_BYTES = 25 * 1024 * 1024
-# Cap the text handed to the classifier (keeps evaluate calls bounded).
-MAX_TEXT_CHARS = 1_000_000
+
+# Cap the text handed to the classifier.
+#
+# This is a SECURITY boundary, not just a performance knob: text past the cap is
+# never scanned, so truncating silently meant "secret at character 1,000,001" =>
+# no matches => Public => allowed. Padding a file with filler ahead of the real
+# content was therefore a complete bypass (an 87KB zip was enough). Whenever we
+# clip we now set Extracted.truncated so the caller can refuse to bless the part
+# we never read — see the module docstring's rule: uninspectable != clean.
+#
+# Sized to stay under ClassificationEngine.MAX_CONTENT_LENGTH (10 MiB) so the
+# classifier never silently truncates further. Rule evaluation costs ~700ms per
+# 1M chars, putting a worst-case full scan near 7s — inside the endpoint agent's
+# default 30s WinHTTP receive timeout.
+MAX_TEXT_CHARS = 10_000_000
 
 # Formats that are already text — decode, don't parse.
 TEXT_EXTS = {
@@ -47,10 +60,18 @@ class Extracted(NamedTuple):
     kind: str      # pdf | docx | xlsx | pptx | text | unsupported | error | too_large | empty
     ok: bool       # True when we produced text we trust for classification
     reason: str = ""
+    # True when we read only PART of the content (hit MAX_TEXT_CHARS, or an
+    # archive hit its safety budget). `text` is still worth classifying — it may
+    # convict the file on its own — but the caller must NOT treat a clean result
+    # as proof the file is clean, because we did not see all of it.
+    truncated: bool = False
 
 
-def _clip(s: str) -> str:
-    return s if len(s) <= MAX_TEXT_CHARS else s[:MAX_TEXT_CHARS]
+def _clip(s: str) -> tuple[str, bool]:
+    """Clip to the scan budget. Returns (text, was_truncated)."""
+    if len(s) <= MAX_TEXT_CHARS:
+        return s, False
+    return s[:MAX_TEXT_CHARS], True
 
 
 def _decode(data: bytes) -> str:
@@ -185,6 +206,8 @@ def _extract_zip(data: bytes, depth: int, budget: "_ArchiveBudget") -> tuple[str
             except Exception:
                 continue
             sub = extract_text(info.filename, inner, _depth=depth + 1, _budget=budget)
+            if sub.truncated:
+                budget.truncated = True     # a member we could only partly read
             if sub.text.strip():
                 parts.append(sub.text)
     reason = ""
@@ -206,6 +229,8 @@ def _extract_tar(data: bytes, depth: int, budget: "_ArchiveBudget") -> str:
             if fh is None:
                 continue
             sub = extract_text(member.name, fh.read(), _depth=depth + 1, _budget=budget)
+            if sub.truncated:
+                budget.truncated = True
             if sub.text.strip():
                 parts.append(sub.text)
     return "\n".join(parts)
@@ -217,7 +242,10 @@ def _extract_gz(filename: str, data: bytes, depth: int, budget: "_ArchiveBudget"
     if not budget.take(len(raw)):
         return ""
     inner_name = filename[:-3] if filename.lower().endswith(".gz") else filename
-    return extract_text(inner_name, raw, _depth=depth + 1, _budget=budget).text
+    sub = extract_text(inner_name, raw, _depth=depth + 1, _budget=budget)
+    if sub.truncated:
+        budget.truncated = True
+    return sub.text
 
 
 def _extract_7z(data: bytes, depth: int, budget: "_ArchiveBudget") -> str:
@@ -229,6 +257,8 @@ def _extract_7z(data: bytes, depth: int, budget: "_ArchiveBudget") -> str:
             if not budget.take(len(payload)):
                 break
             sub = extract_text(name, payload, _depth=depth + 1, _budget=budget)
+            if sub.truncated:
+                budget.truncated = True
             if sub.text.strip():
                 parts.append(sub.text)
     return "\n".join(parts)
@@ -307,7 +337,14 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
             if text.strip():
                 # Found readable content — classify it. Note ok=True even if some
                 # members were encrypted: what we COULD read still counts.
-                return Extracted(_clip(text), "archive", True, reason)
+                clipped, was_clipped = _clip(text)
+                if was_clipped:
+                    reason = (reason + "; " if reason else "") + \
+                        f"archive text clipped at {MAX_TEXT_CHARS} chars"
+                # budget.truncated => we stopped early (entry/byte/depth limit or
+                # a partly-read member), so the archive was NOT fully inspected.
+                return Extracted(clipped, "archive", True, reason,
+                                 was_clipped or budget.truncated)
             # Nothing readable: an encrypted or opaque archive. Say so rather
             # than letting empty text classify as "Public".
             return Extracted("", "archive", False, reason or "no readable content in archive")
@@ -315,7 +352,7 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
     if parser is not None:
         kind, fn = parser
         try:
-            text = _clip(fn(data))
+            text, was_clipped = _clip(fn(data))
         except Exception as e:                          # corrupt / encrypted / extension lies
             # SECURITY: never conclude "unreadable => clean" just because the
             # parser for the *claimed* format rejected it. The commonest cause
@@ -327,17 +364,22 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
             if _looks_textual(fallback):
                 log.warning("%s: %s parser failed (%s) — content is textual, scanning as text",
                             filename, kind, e)
-                return Extracted(_clip(fallback), "text", True,
-                                 f"{kind} parse failed; content scanned as text")
+                clipped, clipped_flag = _clip(fallback)
+                return Extracted(clipped, "text", True,
+                                 f"{kind} parse failed; content scanned as text", clipped_flag)
             log.warning("extract failed for %s (%s): %s", filename, kind, e)
             return Extracted("", "error", False, f"{kind}: {e}")
         if not text.strip():
             # Parsed fine but produced nothing — e.g. a scanned/image-only PDF.
             return Extracted("", kind, False, "no extractable text (image-only?)")
-        return Extracted(text, kind, True)
+        reason = f"text clipped at {MAX_TEXT_CHARS} chars" if was_clipped else ""
+        return Extracted(text, kind, True, reason, was_clipped)
 
     if ext in TEXT_EXTS:
-        return Extracted(_clip(_decode(data)), "text", True)
+        clipped, was_clipped = _clip(_decode(data))
+        return Extracted(clipped, "text", True,
+                         f"text clipped at {MAX_TEXT_CHARS} chars" if was_clipped else "",
+                         was_clipped)
 
     if ext in _LEGACY_EXTS:
         return Extracted("", "unsupported", False, f"legacy format {ext} not supported")
@@ -345,6 +387,9 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
     # Unknown extension: if it decodes cleanly it's text; otherwise say so.
     text = _decode(data)
     if _looks_textual(text):
-        return Extracted(_clip(text), "text", True)
+        clipped, was_clipped = _clip(text)
+        return Extracted(clipped, "text", True,
+                         f"text clipped at {MAX_TEXT_CHARS} chars" if was_clipped else "",
+                         was_clipped)
 
     return Extracted("", "unsupported", False, f"binary/unknown format {ext or '(none)'}")

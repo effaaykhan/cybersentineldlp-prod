@@ -120,13 +120,20 @@ openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 
-# 5. Apply database migrations (required — the app auto-creates the base schema,
-#    but new columns/roles on existing installs only land via Alembic)
-docker exec cybersentinel-manager alembic upgrade head
-
-# 6. Retrieve the auto-generated admin password
-docker logs cybersentinel-manager 2>&1 | grep -i "generated_password"
+# 5. Mark the migration state. On a FRESH install the manager auto-creates the
+#    full schema at startup, so DON'T run `alembic upgrade head` here — it errors
+#    with "type userrole already exists". Instead stamp the DB as current so
+#    future upgrades apply cleanly:
+docker exec cybersentinel-manager alembic stamp head
 ```
+
+> **Upgrading an existing install** is the opposite: run `alembic upgrade head`
+> (see [Install updates](#install-updates)) so new columns/roles land on the
+> already-populated database.
+
+**First login:** the manager seeds a default admin on first boot —
+username **`admin`**, password **`Admin@1234`**. Change it immediately after
+logging in (Settings → Profile → Change Password).
 
 - Dashboard: `http://<server-ip>:3023`  (override with `DASHBOARD_HOST_PORT` in `.env`)
 - API docs: `http://<server-ip>:55000/api/v1/docs`

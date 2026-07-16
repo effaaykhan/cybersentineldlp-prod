@@ -136,6 +136,12 @@ services:
       - PORT=55000
       - WORKERS=4
       - VERSION=2.1.0
+      # Run in production mode by default. Without this the app fell back to its
+      # "development" default, which skips production-only hardening — wildcard
+      # CORS rejection and fail-closed auth when Redis is unavailable. Override
+      # to "development" in .env only for local debugging.
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - DEBUG=${DEBUG:-False}
 
       # OpenSearch
       - OPENSEARCH_HOST=opensearch

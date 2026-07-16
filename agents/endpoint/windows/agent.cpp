@@ -712,12 +712,21 @@ void Log(const std::string& level, const std::string& message) {
                     agentName = GetHostname();
                 }
                 
-                // Extract agent_id (or generate new one)
+                // Extract agent_id, or generate one AND persist it. Persisting
+                // is what makes identity stable across restarts: without it the
+                // agent minted a fresh UUID every launch, so it re-registered as
+                // a new "phantom" agent each time, split its dashboard history,
+                // and — if it first booted during a server outage — could never
+                // recover a registration (every heartbeat 404'd). We do NOT call
+                // SaveToFile here: that rewrites the file with only a subset of
+                // keys and would drop an installer's richer config. Instead we
+                // splice this single key into the existing JSON verbatim.
                 std::string extractedId = ExtractJsonValue(content, "agent_id");
                 if (!extractedId.empty()) {
                     agentId = extractedId;
                 } else {
                     agentId = GenerateUUID();
+                    PersistAgentIdToConfig(path, content, agentId);
                 }
                 
                 // Extract heartbeat_interval
@@ -851,8 +860,51 @@ void Log(const std::string& level, const std::string& message) {
             file << "}\n";
             
             file.close();
-            
+
             std::cout << "Configuration saved to: " << path << std::endl;
+        }
+
+        // Splice a generated "agent_id" into the existing config JSON without
+        // disturbing any other key. Deliberately NOT SaveToFile: that emits only
+        // the handful of fields it knows about and would silently drop richer
+        // installer-written config (monitored_paths, cache_path, ...). We insert
+        // the key right after the opening brace, preserving the rest verbatim.
+        void PersistAgentIdToConfig(const std::string& path,
+                                    const std::string& originalContent,
+                                    const std::string& id) {
+            try {
+                size_t brace = originalContent.find('{');
+                if (brace == std::string::npos) {
+                    // Not JSON we recognise — don't risk mangling it.
+                    std::cerr << "WARNING: could not persist agent_id (config not JSON): "
+                              << path << std::endl;
+                    return;
+                }
+                // A trailing comma is valid only if the object has other members.
+                size_t after = brace + 1;
+                while (after < originalContent.size() &&
+                       std::isspace(static_cast<unsigned char>(originalContent[after]))) {
+                    after++;
+                }
+                bool emptyObject = (after >= originalContent.size() || originalContent[after] == '}');
+                std::string insertion = "\n  \"agent_id\": \"" + id + "\"" +
+                                        (emptyObject ? "\n" : ",");
+                std::string updated = originalContent.substr(0, brace + 1) +
+                                      insertion + originalContent.substr(brace + 1);
+
+                std::ofstream f(path, std::ios::trunc | std::ios::binary);
+                if (!f.is_open()) {
+                    // Non-fatal: the agent still runs this session with the id in
+                    // memory; it just won't be stable until a writable config.
+                    std::cerr << "WARNING: generated agent_id but could not persist to "
+                              << path << " (running with a volatile id)" << std::endl;
+                    return;
+                }
+                f << updated;
+                std::cout << "Persisted generated agent_id to config: " << id << std::endl;
+            } catch (...) {
+                std::cerr << "WARNING: failed to persist agent_id to config" << std::endl;
+            }
         }
     };
  
@@ -3960,6 +4012,16 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  FlushSpooledEvents();
              } else if (status == 0) {
                  logger.Debug("Cannot reach server for heartbeat");
+             } else if (status == 404) {
+                 // The server is up (we got a response) but doesn't know this
+                 // agent_id. That happens when the agent first registered while
+                 // the server was down — RegisterAgent() runs once at startup, so
+                 // a failed first registration was never retried and every
+                 // heartbeat 404'd forever, which also meant the spool never
+                 // drained. Re-register here so the agent self-heals; the next
+                 // heartbeat then succeeds and flushes.
+                 logger.Warning("Heartbeat 404 — agent not registered server-side; re-registering");
+                 RegisterAgent();
              } else {
                  logger.Debug("Heartbeat response: HTTP " + std::to_string(status));
              }

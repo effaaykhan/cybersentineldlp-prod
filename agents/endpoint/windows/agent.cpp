@@ -589,7 +589,17 @@ void Log(const std::string& level, const std::string& message) {
         std::string serverUrl;
         int heartbeatInterval = 3;
         int policySyncInterval = 60;
-        
+
+        // What to do when the DLP server can't answer (timeout, 5xx, exception).
+        // We do NOT know what the file holds, and "unknown" must not mean "clean":
+        // allowing on error let anyone who could stop, block or merely slow the
+        // manager copy sensitive data to USB freely. true => let the callers'
+        // existing fail-closed fallback run (block per the matched policy).
+        // Set "block_on_dlp_error": false in agent_config.json to prefer
+        // availability over enforcement. Mirrors the SMTP relay's
+        // RELAY_BLOCK_ON_DLP_ERROR so every channel is configured the same way.
+        bool blockOnDlpError = true;
+
         AgentConfig(const std::string& configPath = "agent_config.json") {
             // Try to load from file first
             if (!LoadFromFile(configPath)) {
@@ -709,7 +719,11 @@ void Log(const std::string& level, const std::string& message) {
                 } else {
                     policySyncInterval = 60;
                 }
-                
+
+                // Absent => true: an existing config file written before this
+                // option existed must still fail closed.
+                blockOnDlpError = ExtractJsonBool(content, "block_on_dlp_error", true);
+
                 // Load other configs with defaults
                 monitoring.fileSystem = true;
                 monitoring.clipboard = true;
@@ -747,6 +761,32 @@ void Log(const std::string& level, const std::string& message) {
         }
 
     public:
+        // ExtractJsonValue understands strings and numbers only: a bare JSON
+        // true/false falls into its numeric branch and returns "", which is
+        // indistinguishable from "key absent". A security toggle must not be
+        // decided by that ambiguity, so parse booleans explicitly and return an
+        // explicit default when the key is missing or unparseable. Accepts both
+        // true and "true".
+        bool ExtractJsonBool(const std::string& json, const std::string& key, bool defaultValue) {
+            size_t keyPos = json.find("\"" + key + "\"");
+            if (keyPos == std::string::npos) return defaultValue;
+
+            size_t colonPos = json.find(":", keyPos);
+            if (colonPos == std::string::npos) return defaultValue;
+
+            size_t valueStart = colonPos + 1;
+            while (valueStart < json.length() &&
+                   (std::isspace(static_cast<unsigned char>(json[valueStart])) ||
+                    json[valueStart] == '"')) {
+                valueStart++;
+            }
+            if (valueStart >= json.length()) return defaultValue;
+
+            if (json.compare(valueStart, 4, "true") == 0) return true;
+            if (json.compare(valueStart, 5, "false") == 0) return false;
+            return defaultValue;
+        }
+
         std::string ExtractJsonValue(const std::string& json, const std::string& key) {
             size_t keyPos = json.find("\"" + key + "\"");
             if (keyPos == std::string::npos) return "";
@@ -790,7 +830,8 @@ void Log(const std::string& level, const std::string& message) {
             file << "  \"agent_id\": \"" << agentId << "\",\n";
             file << "  \"agent_name\": \"" << agentName << "\",\n";
             file << "  \"heartbeat_interval\": " << heartbeatInterval << ",\n";
-            file << "  \"policy_sync_interval\": " << policySyncInterval << "\n";
+            file << "  \"policy_sync_interval\": " << policySyncInterval << ",\n";
+            file << "  \"block_on_dlp_error\": " << (blockOnDlpError ? "true" : "false") << "\n";
             file << "}\n";
             
             file.close();
@@ -6674,8 +6715,17 @@ if (shouldMonitor) {
                 logger.Warning("Classification API returned status " + std::to_string(statusCode));
                 logger.Debug("Response: " + responseBody);
                 result.reason = "API error: " + std::to_string(statusCode);
-                // Fail-open: allow on API error
-                result.evaluationSucceeded = true;
+                // Do NOT report success for a file we never inspected. Both
+                // callers already fall back to the matched policy's action when
+                // evaluation fails; claiming "succeeded" here skipped that
+                // fallback and dropped the file straight into the allow path, so
+                // a server that was down, blocked or merely slow became a free
+                // pass for any file. Same rule as everywhere else: uninspected
+                // is not clean.
+                result.evaluationSucceeded = !config.blockOnDlpError;
+                if (config.blockOnDlpError) {
+                    logger.Warning("⚠️ Failing closed: policy action will be applied to " + fileName);
+                }
                 return result;
             }
 
@@ -6754,7 +6804,9 @@ if (shouldMonitor) {
         } catch (const std::exception& e) {
             logger.Error("Error in real-time evaluation: " + std::string(e.what()));
             result.reason = "Evaluation error: " + std::string(e.what());
-            result.evaluationSucceeded = true;  // Fail-open
+            // As above: an exception means we did not inspect the file, so let
+            // the caller's fail-closed fallback decide rather than allowing.
+            result.evaluationSucceeded = !config.blockOnDlpError;
             return result;
         }
     }

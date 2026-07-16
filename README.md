@@ -50,6 +50,26 @@ docker exec cybersentinel-manager alembic upgrade head
 docker ps
 ```
 
+#### Pinning a release (recommended for client deployments)
+
+Every release is published to GHCR under both a moving `:latest` tag and an
+immutable version tag (current: **`2.1.0`**), for `dlp-manager` and
+`dlp-dashboard`. Client/production hosts should **pin the version** so an
+upstream `:latest` change never lands unexpectedly. Set it once in `.env`:
+
+```bash
+echo "DLP_IMAGE_TAG=2.1.0" >> .env
+```
+
+and reference `${DLP_IMAGE_TAG:-latest}` in your image lines, or simply edit the
+two `image:` tags in `docker-compose.prod.yml` from `:latest` to `:2.1.0`. To roll
+a client back, point the tag at a known-good version and `up -d` again — the
+image carries all code and dependencies, so nothing else changes on the host.
+
+> The published images are self-contained: **no source code or build files are
+> ever copied to the deployment host** — only the two container images are pulled.
+> Everything the platform needs at runtime (including the OCR engine) is baked in.
+
 **Manual install (production, step-by-step):**
 
 Use this on any fresh Ubuntu/Debian server. Every step below is required; skipping

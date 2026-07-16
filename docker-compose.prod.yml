@@ -135,7 +135,7 @@ services:
       # Server
       - PORT=55000
       - WORKERS=4
-      - VERSION=2.0.0
+      - VERSION=2.1.0
 
       # OpenSearch
       - OPENSEARCH_HOST=opensearch

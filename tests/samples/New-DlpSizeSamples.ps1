@@ -36,6 +36,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Windows PowerShell 5.1 does not load these by default, so [ZipArchive] /
+# [ZipArchiveMode] / [CompressionLevel] resolve only after an explicit load.
+# PowerShell 7 already has them and the load is a harmless no-op there, hence
+# the tolerant catch. ZipArchive+ZipArchiveMode+CompressionLevel live in
+# System.IO.Compression; ZipFile lives in System.IO.Compression.FileSystem.
+foreach ($assembly in 'System.IO.Compression', 'System.IO.Compression.FileSystem') {
+    try { Add-Type -AssemblyName $assembly -ErrorAction Stop } catch { }
+}
+if (-not ('System.IO.Compression.ZipArchiveMode' -as [type])) {
+    throw "Could not load System.IO.Compression. PowerShell 5.1+ / .NET 4.5+ is required."
+}
+
 # Deliberately high-weight, unambiguous detectors (rules table: AWS Access Key
 # 0.95, Credit Card 0.95, SSN 0.9). Any one alone clears the >=0.8 "Restricted"
 # threshold, so the test does not hinge on a single rule staying enabled.

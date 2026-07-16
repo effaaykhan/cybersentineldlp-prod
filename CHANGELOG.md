@@ -8,6 +8,90 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Content-Inspection Hardening, Outage Resilience & OCR (July 15–16, 2026)
+
+### Summary
+
+A sustained hardening pass on content inspection and agent resilience, plus a new
+OCR capability. Every item below was validated end-to-end on a live Windows
+endpoint. The unifying principle: **content we could not fully inspect must never
+be treated as clean** — classification reports what it saw; policy decides what to
+do about not knowing (via `extraction_status = readable | unreadable | too_large`).
+
+### Content-inspection bypasses closed
+
+Each of these previously produced a green "allowed / Public" event while sensitive
+data left the machine:
+
+1. **Binary documents** (`312acf2`) — the C++ agent shredded non-printable bytes
+   before upload, destroying PDF/DOCX/XLSX content so it classified Public. Fixed:
+   the agent sends raw bytes (base64) and the server extracts text (pypdf,
+   python-docx, openpyxl, python-pptx).
+2. **Rename evasion** (`a4e0acb`) — `secret.txt` → `secret.docx` made the parser
+   fail and the file read as empty → Public. Fixed: on parser failure, fall back
+   to scanning the raw bytes as text when they look textual.
+3. **Archives** (`bff19a6`) — zipping defeated inspection. Fixed: expand
+   zip/tar/gz/7z (py7zr pinned `0.21.1`), recursing members back through the
+   extractor under a zip-bomb budget (depth 3 / 500 entries / 100 MB).
+4. **Oversize padding** (`b007deb`) — files over the agent cap returned allow.
+   Fixed: cap raised 10 MB → 25 MB; over-cap sends `inspection_skipped=too_large`
+   and enforces the server's decision.
+5. **Scan window** (`e1f83b0`) — text past a 1 M-char cap was never scanned but
+   reported as a complete read, so filler ahead of a secret classified Public (an
+   87 KB zip was enough). Fixed: `Extracted.truncated` propagates through nested
+   archives; a truncated read maps to `too_large`; the second regex cap was
+   removed; `MAX_TEXT_CHARS` raised to 10 M. Regression tests added.
+6. **Agent fail-open** (`0bbdb74`) — on API error/timeout the agent reported
+   success and allowed the file, so stopping the server disabled USB inspection.
+   Fixed: honour the existing fail-closed fallback, gated by a new
+   `block_on_dlp_error` config flag (default true).
+7. **No policy persistence** (`e55ddf0`) — policies lived only in memory, so an
+   agent that restarted while the server was down enforced *nothing*. Fixed:
+   cache the policy bundle to disk and load it at startup before the first sync.
+
+### Outage resilience (endpoint agent)
+
+- **Offline event spool** (`ba70719`) — events raised while the server is
+  unreachable are written to `cybersentinel_events.spool` (16 MB cap) and
+  replayed on reconnect, so an enforcement action always leaves an audit record.
+- **Bounded HTTP timeouts** (`ba70719`) — added `WinHttpSetTimeouts` (connect 5 s,
+  receive 60 s); previously a downed server stalled every USB copy for 60 s.
+- **Stable identity + self-heal** (`a2b5718`) — the agent persists a generated
+  `agent_id` into its config (no more new identity per restart) and re-registers
+  automatically on a `404` heartbeat.
+
+### OCR — scanned PDFs & images (`9158819`)
+
+Scanned/image-only PDFs and screenshots have no text layer and were the last
+uninspectable category. The server now OCRs them (Tesseract): image-only PDFs are
+rasterised via poppler/pdf2image; raster images go straight to Tesseract (also
+sniffed by magic bytes). Bounded by `DLP_OCR_MAX_PAGES`/`DLP_OCR_DPI`/
+`DLP_OCR_PAGE_TIMEOUT`. Fully optional and graceful — if the OCR stack is absent
+the file stays *uninspectable* (blocked by policy), never "clean". Manager image
+gained `tesseract-ocr`, `tesseract-ocr-eng`, `poppler-utils` (system) and
+`pytesseract`, `pdf2image`, `Pillow` (pip).
+
+### Email DLP (built, not yet deployed)
+
+- **SMTP relay** (`smtp-relay/`, `7d4487b`) — an aiosmtpd relay that MIME-walks
+  outbound mail, asks the same server decision API, and rejects sensitive
+  attachments/bodies with a real `550` at DATA. Deployment (Google Workspace
+  outbound gateway + STARTTLS) is pending.
+- **Dashboard email policy type** (`85b9afc`) — `email_send_prevention` added to
+  the policy creator alongside `cloud_upload_prevention`.
+
+### Files & tests
+
+- Core extractor: `server/app/services/document_extract.py` (mirrored to
+  `smtp-relay/app/extract.py`).
+- Decision API: `server/app/api/v1/agents.py` (`/agents/{id}/policy/evaluate`).
+- Agent: `agents/endpoint/windows/agent.cpp`.
+- Regression tests: `server/tests/test_document_extract_truncation.py`.
+- Test-sample generators: `tests/samples/New-DlpSizeSamples.ps1`,
+  `tests/samples/New-DlpScanWindowSamples.ps1`.
+
+---
+
 ## 🚀 OneDrive Hybrid Modification Detection (December 25, 2025)
 
 ### Summary

@@ -54,10 +54,31 @@ TEXT_EXTS = {
     ".sh", ".ps1", ".bat",
 }
 
+# ── OCR (optical character recognition) ─────────────────────────────────────
+# A scanned PDF or a screenshot has NO text layer: pypdf returns "" and the file
+# would classify Public and slip through, or (with the uninspectable policy) get
+# blocked blindly without us knowing WHAT it is. OCR turns those pixels into text
+# so the same rules that catch a typed SSN also catch a photographed one.
+#
+# Requires Tesseract (system binary) + pytesseract, and poppler + pdf2image to
+# rasterise PDF pages. All are optional: if any import/binary is missing, OCR
+# silently no-ops and the file stays "unreadable" (blocked by policy) — never
+# silently "clean". This keeps the SMTP relay (which ships a slim image without
+# the OCR stack) working unchanged; its images just remain uninspectable there.
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
+
+# Bounds — OCR is the most expensive path here (seconds per page), and the input
+# is untrusted, so cap the work regardless of what the file claims.
+OCR_ENABLED = os.getenv("DLP_OCR_ENABLED", "1").lower() not in ("0", "false", "no")
+OCR_MAX_PAGES = int(os.getenv("DLP_OCR_MAX_PAGES", "20"))   # pages of a scanned PDF
+OCR_DPI = int(os.getenv("DLP_OCR_DPI", "200"))              # render resolution
+OCR_LANG = os.getenv("DLP_OCR_LANG", "eng")
+OCR_PAGE_TIMEOUT = int(os.getenv("DLP_OCR_PAGE_TIMEOUT", "30"))  # seconds per page/image
+
 
 class Extracted(NamedTuple):
     text: str
-    kind: str      # pdf | docx | xlsx | pptx | text | unsupported | error | too_large | empty
+    kind: str      # pdf | pdf_ocr | image_ocr | docx | xlsx | pptx | text | image | unsupported | error | too_large | empty
     ok: bool       # True when we produced text we trust for classification
     reason: str = ""
     # True when we read only PART of the content (hit MAX_TEXT_CHARS, or an
@@ -101,6 +122,72 @@ def _extract_pdf(data: bytes) -> str:
         except Exception:
             raise ValueError("encrypted pdf")
     return "\n".join((page.extract_text() or "") for page in reader.pages)
+
+
+def _ocr_available() -> bool:
+    if not OCR_ENABLED:
+        return False
+    try:
+        import pytesseract  # noqa: F401
+        from PIL import Image  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _ocr_image_bytes(data: bytes) -> str:
+    """OCR a single raster image (png/jpg/…). Returns '' on any failure."""
+    if not _ocr_available():
+        return ""
+    try:
+        import pytesseract
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as img:
+            # Normalise mode so Tesseract gets something sane; convert lazily.
+            if img.mode not in ("L", "RGB"):
+                img = img.convert("RGB")
+            return pytesseract.image_to_string(
+                img, lang=OCR_LANG, timeout=OCR_PAGE_TIMEOUT) or ""
+    except Exception as e:  # noqa: BLE001 — OCR must never raise into the caller
+        log.warning("image OCR failed: %s", e)
+        return ""
+
+
+def _ocr_pdf_bytes(data: bytes) -> str:
+    """Rasterise a scanned PDF and OCR each page, bounded by OCR_MAX_PAGES.
+
+    Only called when pypdf found no text layer, so the cost lands only on PDFs
+    that actually need it. Returns '' if the OCR stack (poppler/pdf2image) is
+    absent or anything fails.
+    """
+    if not _ocr_available():
+        return ""
+    try:
+        import pytesseract
+        from pdf2image import convert_from_bytes
+    except ImportError:
+        return ""
+    try:
+        # last_page bounds how many pages poppler even renders — a 5000-page
+        # scan can't run us out of memory or time.
+        pages = convert_from_bytes(
+            data, dpi=OCR_DPI, first_page=1, last_page=OCR_MAX_PAGES, fmt="png")
+    except Exception as e:  # noqa: BLE001 — corrupt / huge / malicious pdf
+        log.warning("pdf rasterisation for OCR failed: %s", e)
+        return ""
+    parts: list[str] = []
+    for i, page in enumerate(pages):
+        try:
+            parts.append(pytesseract.image_to_string(
+                page, lang=OCR_LANG, timeout=OCR_PAGE_TIMEOUT) or "")
+        except Exception as e:  # noqa: BLE001
+            log.warning("OCR failed on pdf page %d: %s", i + 1, e)
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+    return "\n".join(parts)
 
 
 def _extract_docx(data: bytes) -> str:
@@ -370,10 +457,36 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
             log.warning("extract failed for %s (%s): %s", filename, kind, e)
             return Extracted("", "error", False, f"{kind}: {e}")
         if not text.strip():
-            # Parsed fine but produced nothing — e.g. a scanned/image-only PDF.
+            # Parsed fine but produced nothing — a scanned / image-only PDF. Try
+            # OCR before giving up; only PDFs that actually lack a text layer pay
+            # the cost. If OCR is unavailable or finds nothing, stay unreadable
+            # (policy blocks it) — never fall through to "clean".
+            if kind == "pdf":
+                ocr = _ocr_pdf_bytes(data)
+                if ocr.strip():
+                    clipped, wc = _clip(ocr)
+                    log.info("%s: no text layer — recovered %d chars via OCR",
+                             filename, len(clipped))
+                    return Extracted(clipped, "pdf_ocr", True,
+                                     "scanned pdf read via OCR", wc)
             return Extracted("", kind, False, "no extractable text (image-only?)")
         reason = f"text clipped at {MAX_TEXT_CHARS} chars" if was_clipped else ""
         return Extracted(text, kind, True, reason, was_clipped)
+
+    # Raster images (screenshots, photos of documents): no text layer at all, so
+    # OCR is the only way to see inside. Same invariant — OCR miss => unreadable,
+    # not clean.
+    if ext in IMAGE_EXTS or data[:8] == b"\x89PNG\r\n\x1a\n" or data[:3] == b"\xff\xd8\xff":
+        ocr = _ocr_image_bytes(data)
+        if ocr.strip():
+            clipped, wc = _clip(ocr)
+            log.info("%s: image read via OCR (%d chars)", filename, len(clipped))
+            return Extracted(clipped, "image_ocr", True, "image read via OCR", wc)
+        # Distinguish "OCR ran, found nothing" from "no OCR available" so the
+        # reason is honest, but both are unreadable to policy.
+        reason = "no text found in image (OCR)" if _ocr_available() else \
+                 "image not inspectable (OCR unavailable)"
+        return Extracted("", "image", False, reason)
 
     if ext in TEXT_EXTS:
         clipped, was_clipped = _clip(_decode(data))

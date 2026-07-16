@@ -2593,6 +2593,12 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          logger.Info("Testing server connectivity...");
          RegisterAgent();
          
+         // Load cached policies FIRST so we are already enforcing if the server
+         // is unreachable. A successful sync below replaces them; an
+         // "up_to_date" reply keeps them (the cache is what makes
+         // installed_version meaningful across restarts).
+         LoadCachedPolicyBundle();
+
          logger.Info("Fetching initial policies...");
          SyncPolicies(true);
          if (allowEvents && hasFilePolices) {
@@ -3145,6 +3151,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  } else {
                      logger.Info("Policy bundle received from server");
                      ApplyPolicyBundle(response);
+                     // Persist the authoritative bundle so a restart while the
+                     // server is unreachable still enforces the last known
+                     // policy instead of enforcing nothing at all.
+                     SavePolicyBundleToCache(response);
                  }
              } else if (status == 0) {
                  logger.Error("Cannot connect to server for policy sync");
@@ -3162,11 +3172,78 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          }
      }
      
+     std::string PolicyCachePath() const {
+         // Same placement rule as the log and the event spool.
+         const char* envLogDir = std::getenv("CYBERSENTINEL_LOG_DIR");
+         std::string dir = envLogDir ? envLogDir : "";
+         return dir.empty() ? std::string("cybersentinel_policies.cache")
+                            : dir + "\\cybersentinel_policies.cache";
+     }
+
+     void SavePolicyBundleToCache(const std::string& bundleJson) {
+         try {
+             std::ofstream f(PolicyCachePath(), std::ios::trunc | std::ios::binary);
+             if (!f.is_open()) {
+                 logger.Warning("Could not write policy cache: " + PolicyCachePath());
+                 return;
+             }
+             f << bundleJson;
+             logger.Debug("Policy bundle cached to " + PolicyCachePath());
+         } catch (const std::exception& e) {
+             logger.Warning(std::string("Failed to cache policy bundle: ") + e.what());
+         } catch (...) {
+             logger.Warning("Failed to cache policy bundle");
+         }
+     }
+
+     // Load the last bundle the server gave us, so the agent starts enforcing
+     // BEFORE (or without) a successful sync.
+     //
+     // Policies used to live only in memory. An agent that started while the
+     // server was unreachable therefore had no policies, and every enforcement
+     // path is gated on hasUsbTransferPolicies/allowEvents — so it silently
+     // enforced NOTHING. That turned "fail closed on API error" into "fail wide
+     // open after a restart", and made the bypass as cheap as: kill the agent,
+     // block the server, restart. A laptop booting off-VPN hit the same hole
+     // with no malice at all.
+     //
+     // The server already versions bundles (installed_version -> "up_to_date"),
+     // so a cached bundle costs one comparison on the next sync and is replaced
+     // the moment the server answers.
+     void LoadCachedPolicyBundle() {
+         try {
+             const std::string path = PolicyCachePath();
+             std::error_code ec;
+             if (!fs::exists(path, ec) || ec) {
+                 logger.Info("No cached policy bundle (first run?) — the agent cannot "
+                             "enforce until it reaches the server at least once");
+                 return;
+             }
+             std::ifstream f(path, std::ios::binary);
+             if (!f.is_open()) return;
+             std::string bundle((std::istreambuf_iterator<char>(f)),
+                                std::istreambuf_iterator<char>());
+             if (bundle.empty()) return;
+
+             logger.Info("Loading cached policy bundle from " + path);
+             ApplyPolicyBundle(bundle);
+             if (allowEvents) {
+                 logger.Info("Enforcing CACHED policies until the server confirms a newer bundle");
+             } else {
+                 logger.Warning("Cached policy bundle contained no active policies");
+             }
+         } catch (const std::exception& e) {
+             logger.Warning(std::string("Could not load cached policy bundle: ") + e.what());
+         } catch (...) {
+             logger.Warning("Could not load cached policy bundle");
+         }
+     }
+
      void ApplyPolicyBundle(const std::string& bundleJson) {
          std::lock_guard<std::mutex> lock(policiesMutex);
-         
+
          logger.Debug("Parsing policy bundle from server...");
-         
+
          // Reset policy flags and storage
          hasFilePolices = false;
          hasClipboardPolicies = false;

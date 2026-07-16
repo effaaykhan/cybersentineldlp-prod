@@ -331,6 +331,22 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
              WINHTTP_NO_PROXY_BYPASS, 0);
          
          if (hSession) {
+             // Bound how long a call may stall. WinHTTP's defaults are resolve
+             // = infinite and connect = 60s, so with the server down every USB
+             // file copy hung for a full minute before failing closed — the
+             // machine looked frozen to the user.
+             //
+             // Connect/resolve are cut to 5s: an unreachable server should be
+             // obvious immediately. RECEIVE is deliberately RAISED to 60s (from
+             // the 30s default) because a legitimate scan of a large file takes
+             // real time — measured ~11-17s for 10M+ characters — and a receive
+             // timeout mid-scan would abort a request the server was correctly
+             // working on.
+             WinHttpSetTimeouts(hSession,
+                                5000,    // resolve
+                                5000,    // connect
+                                30000,   // send (large base64 bodies over slow links)
+                                60000);  // receive (server-side content scanning)
              std::wstring whost(host.begin(), host.end());
              hConnect = WinHttpConnect(hSession, whost.c_str(), port, 0);
          }
@@ -1596,7 +1612,16 @@ static ClassificationResult Classify(const std::string& content,
      AgentConfig config;
      Logger logger;
      std::unique_ptr<HttpClient> httpClient;
-     
+
+     // Offline event spool: events raised while the server is unreachable are
+     // written to disk and replayed on reconnect, so an enforcement action can
+     // never happen without a record of it. Bounded so a long outage cannot
+     // fill the disk.
+     std::mutex spoolMutex;
+     bool spoolFullWarned = false;
+     static const size_t MAX_SPOOL_BYTES = 16 * 1024 * 1024;   // ~16MB of evidence
+     static const size_t MAX_FLUSH_BATCH = 100;                // per heartbeat
+
      std::atomic<bool> running{false};
      std::atomic<bool> hasFilePolices{false};
      std::atomic<bool> hasClipboardPolicies{false};
@@ -2481,9 +2506,14 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
         json.AddString("timestamp", GetCurrentTimestampISO());
 
-        SendEvent(json.Build());
-
-        logger.Info("✅ Event sent to server: " + action + " - " + fileName);
+        if (SendEvent(json.Build())) {
+            logger.Info("✅ Event sent to server: " + action + " - " + fileName);
+        } else {
+            // Don't claim delivery we didn't get. This line previously ran
+            // unconditionally, so the log read "Failed to send event: 0"
+            // immediately followed by "✅ Event sent to server".
+            logger.Warning("⚠️ Event NOT delivered, spooled for retry: " + action + " - " + fileName);
+        }
     } catch (const std::exception& e) {
         logger.Error("Failed to send USB transfer event: " + std::string(e.what()));
     }
@@ -3848,6 +3878,9 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              
              if (status == 200) {
                  logger.Debug("Heartbeat sent successfully");
+                 // The heartbeat is the agent's existing "server is up" signal —
+                 // reuse it to drain anything buffered during an outage.
+                 FlushSpooledEvents();
              } else if (status == 0) {
                  logger.Debug("Cannot reach server for heartbeat");
              } else {
@@ -4729,8 +4762,11 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("timestamp", GetCurrentTimestampISO());
             
             std::cout << "[DEBUG] Sending event to server..." << std::endl;
-            SendEvent(json.Build());
-            std::cout << "[DEBUG] Event sent successfully" << std::endl;
+            if (SendEvent(json.Build())) {
+                std::cout << "[DEBUG] Event sent successfully" << std::endl;
+            } else {
+                std::cout << "[DEBUG] Event NOT delivered — spooled for retry" << std::endl;
+            }
             
             // Display alert based on action
             if (policyAction == "alert" || policyAction == "block") {
@@ -6019,29 +6055,169 @@ if (shouldMonitor) {
              json.AddString("transfer_type", "usb_copy");
              json.AddString("timestamp", GetCurrentTimestampISO());
              
-             SendEvent(json.Build());
-             logger.Info("Transfer event sent - Blocked: " + std::to_string(blocked));
+             if (SendEvent(json.Build())) {
+                 logger.Info("Transfer event sent - Blocked: " + std::to_string(blocked));
+             } else {
+                 logger.Warning("Transfer event NOT delivered, spooled for retry - Blocked: " +
+                                std::to_string(blocked));
+             }
          } catch (...) {
              logger.Error("Error sending blocked transfer event");
          }
      }
      
-     void SendEvent(const std::string& eventData) {
+     // Returns true only when the server actually accepted the event.
+     //
+     // Events are EVIDENCE. A block whose event never arrives is enforcement
+     // with no audit trail — the file was stopped, but nothing can prove it,
+     // which defeats the log-retention requirement the product is built around.
+     // This used to Post once and discard the outcome, so every event raised
+     // while the server was unreachable was lost silently. Now a failed send is
+     // spooled to disk and replayed on reconnect (see FlushSpooledEvents).
+     bool SendEvent(const std::string& eventData) {
          try {
              if (!allowEvents) {
                  logger.Debug("Dropping event because no active policies");
-                 return;
+                 return false;
              }
-             
+
              auto [status, response] = httpClient->Post("/events", eventData);
-             
+
              if (status == 200 || status == 201) {
                  logger.Debug("Event sent successfully");
-             } else {
-                 logger.Warning("Failed to send event: " + std::to_string(status));
+                 return true;
              }
+             logger.Warning("Failed to send event (HTTP " + std::to_string(status) +
+                            ") — spooling for retry");
+             SpoolEvent(eventData);
+             return false;
          } catch (...) {
-             logger.Error("Error sending event");
+             logger.Error("Error sending event — spooling for retry");
+             SpoolEvent(eventData);
+             return false;
+         }
+     }
+
+     std::string SpoolFilePath() const {
+         // Same placement rule as the log file, so everything the agent writes
+         // lives together (see Logger).
+         const char* envLogDir = std::getenv("CYBERSENTINEL_LOG_DIR");
+         std::string dir = envLogDir ? envLogDir : "";
+         return dir.empty() ? std::string("cybersentinel_events.spool")
+                            : dir + "\\cybersentinel_events.spool";
+     }
+
+     // One JSON object per line. JsonBuilder::EscapeJson turns newlines into
+     // \n escapes, so an event can never span lines and corrupt the file.
+     void SpoolEvent(const std::string& eventData) {
+         try {
+             std::lock_guard<std::mutex> lock(spoolMutex);
+             const std::string path = SpoolFilePath();
+             std::error_code ec;
+             uintmax_t size = fs::exists(path, ec) && !ec ? fs::file_size(path, ec) : 0;
+             if (ec) size = 0;
+
+             if (size + eventData.size() + 1 > MAX_SPOOL_BYTES) {
+                 // Full: drop the NEW event, keeping the earliest evidence of an
+                 // incident rather than the latest. Say so loudly — a silent drop
+                 // is exactly the "looks fine, isn't" failure this agent has been
+                 // burned by before.
+                 if (!spoolFullWarned) {
+                     logger.Error("Event spool is FULL (" + std::to_string(MAX_SPOOL_BYTES) +
+                                  " bytes) — new events are being DROPPED until the server "
+                                  "is reachable again");
+                     spoolFullWarned = true;
+                 }
+                 return;
+             }
+
+             std::ofstream f(path, std::ios::app | std::ios::binary);
+             if (!f.is_open()) {
+                 logger.Error("Could not open event spool for write: " + path);
+                 return;
+             }
+             f << eventData << "\n";
+         } catch (const std::exception& e) {
+             logger.Error(std::string("Failed to spool event: ") + e.what());
+         } catch (...) {
+             logger.Error("Failed to spool event");
+         }
+     }
+
+     // Replay buffered events once the server answers again. Called from the
+     // heartbeat, which is the agent's existing "is the server up?" signal.
+     void FlushSpooledEvents() {
+         try {
+             std::lock_guard<std::mutex> lock(spoolMutex);
+             const std::string path = SpoolFilePath();
+             std::error_code ec;
+             if (!fs::exists(path, ec) || ec) return;
+
+             std::vector<std::string> pending;
+             {
+                 std::ifstream f(path, std::ios::binary);
+                 if (!f.is_open()) return;
+                 std::string line;
+                 while (std::getline(f, line)) {
+                     if (!line.empty() && line.back() == '\r') line.pop_back();
+                     if (!line.empty()) pending.push_back(line);
+                 }
+             }
+             if (pending.empty()) {
+                 fs::remove(path, ec);
+                 spoolFullWarned = false;
+                 return;
+             }
+
+             logger.Info("Replaying " + std::to_string(pending.size()) +
+                         " spooled event(s) to the server");
+
+             size_t sent = 0;
+             bool serverGoneAgain = false;
+             std::vector<std::string> remaining;
+
+             for (size_t i = 0; i < pending.size(); ++i) {
+                 // Once a send fails, keep this event and every one after it, in
+                 // order, instead of hammering a dead endpoint 5000 times. Also
+                 // cap the batch: this runs on the heartbeat thread holding
+                 // spoolMutex, and the next beat is only seconds away.
+                 if (serverGoneAgain || sent >= MAX_FLUSH_BATCH) {
+                     remaining.push_back(pending[i]);
+                     continue;
+                 }
+                 int status = 0;
+                 try {
+                     auto r = httpClient->Post("/events", pending[i]);
+                     status = r.first;
+                 } catch (...) {
+                     status = 0;
+                 }
+                 if (status == 200 || status == 201) {
+                     sent++;
+                 } else {
+                     serverGoneAgain = true;
+                     remaining.push_back(pending[i]);
+                 }
+             }
+
+             if (remaining.empty()) {
+                 fs::remove(path, ec);
+                 spoolFullWarned = false;
+                 logger.Info("Replayed " + std::to_string(sent) +
+                             " spooled event(s); spool cleared");
+             } else {
+                 std::ofstream f(path, std::ios::trunc | std::ios::binary);
+                 if (f.is_open()) {
+                     for (const auto& line : remaining) f << line << "\n";
+                 }
+                 spoolFullWarned = false;   // we just freed space
+                 logger.Warning("Replayed " + std::to_string(sent) + " event(s); " +
+                                std::to_string(remaining.size()) + " still spooled");
+             }
+         } catch (const std::exception& e) {
+             logger.Error(std::string("Failed to flush event spool: ") + e.what());
+         } catch (...) {
+             logger.Error("Failed to flush event spool");
          }
      }
      void CleanupOldOriginalContents() {

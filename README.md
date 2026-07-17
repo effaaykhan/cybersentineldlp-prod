@@ -39,11 +39,31 @@ fresh install, but new columns/roles on existing tables only land via Alembic
 (for example the domain-scoped RBAC release adds `policies.domain` and three
 admin roles):
 
+**Refresh the compose file first.** `docker compose pull` updates *images only* —
+it does not touch `docker-compose.prod.yml`, which is a copy taken at install
+time. Skipping this silently strands every compose-level change (service image
+versions, new environment variables, healthchecks) while the images move on:
+
 ```bash
+cd /opt/cybersentineldlp
+
+# 1. Refresh the deployment file itself (keep a backup of any local edits)
+cp docker-compose.prod.yml docker-compose.prod.yml.bak
+curl -fsSL -o docker-compose.prod.yml \
+  https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/docker-compose.prod.yml
+
+# 2. Then pull images and restart
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
+
+# 3. Apply migrations (existing DB — see the fresh-install note above, which stamps instead)
 docker exec cybersentineldlp-manager alembic upgrade head
 ```
+
+> If `/health` reports an older `version` than you just pulled, it's this: the
+> version string comes from `VERSION` in the compose file, so a stale file
+> reports a stale version even though the image is current. Re-running
+> `install.sh` also refreshes the compose file and is equivalent to step 1.
 
 #### Verify
 ```bash

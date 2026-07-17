@@ -355,6 +355,33 @@ Write-Host ""
 Write-ColorOutput "Step 7: Creating configuration file..." -Type "Info"
 
 $configPath = Join-Path $INSTALL_DIR $CONFIG_NAME
+
+# Carry over an existing agent identity.
+#
+# Without this, re-running the installer writes a config with no agent_id, the
+# agent mints a fresh random one on next start, and this endpoint re-registers
+# as a brand-new "phantom" agent — orphaning all of its dashboard history and
+# leaving stale agents behind. We look in the current install dir first, then in
+# the legacy "CyberSentinel" directory so identity survives the rename to
+# "CyberSentinelDLP". If neither has one, the agent generates and persists its
+# own on first start, which is the correct behaviour for a genuinely new box.
+$existingAgentId = $null
+$legacyConfig = "C:\Program Files\CyberSentinel\$CONFIG_NAME"
+foreach ($candidate in @($configPath, $legacyConfig)) {
+    if (Test-Path $candidate) {
+        try {
+            $previous = Get-Content $candidate -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($previous.agent_id) {
+                $existingAgentId = $previous.agent_id
+                Write-ColorOutput "Preserving existing agent identity: $existingAgentId (from $candidate)" -Type "Info"
+                break
+            }
+        } catch {
+            Write-ColorOutput "Could not read $candidate — ignoring it" -Type "Warning"
+        }
+    }
+}
+
 $config = @{
     server_url = $serverURL
     agent_name = $agentName
@@ -378,7 +405,14 @@ $config = @{
     cache_path = "$DATA_DIR\cache"
 }
 
-$config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding UTF8 -Force
+# Only emit agent_id when we actually recovered one — writing an empty/null key
+# would be read back as "no id" anyway, but an explicit null in the file is
+# misleading to anyone inspecting it.
+if ($existingAgentId) { $config.agent_id = $existingAgentId }
+
+# ASCII, not UTF8: PowerShell 5.1's -Encoding UTF8 writes a BOM, and the agent
+# reads this file with a byte-oriented parser rather than a JSON library.
+$config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding ASCII -Force
 Write-ColorOutput "Configuration created: $configPath" -Type "Success"
 Write-Host ""
 

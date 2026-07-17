@@ -109,7 +109,13 @@ if [ ! -f "${ENV_FILE}" ]; then
     # API's CORS allowlist is not left wide open and does not need to be
     # hand-edited on every install. Operators can tighten it later.
     HOST_IP_GUESS="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
-    CORS_JSON_DEFAULT="[\"http://${HOST_IP_GUESS}\",\"https://${HOST_IP_GUESS}\",\"http://localhost\",\"http://127.0.0.1\"]"
+    # The dashboard is served on DASHBOARD_HOST_PORT (default 3023), so the
+    # browser's Origin carries that port. Listing the bare host would not match
+    # it. Same-origin nginx proxying means CORS is usually not exercised at all,
+    # but the allowlist should still describe reality.
+    DASH_PORT_DEFAULT="$(grep -E '^DASHBOARD_HOST_PORT=' "${ENV_EXAMPLE}" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' ' | head -1)"
+    DASH_PORT_DEFAULT="${DASH_PORT_DEFAULT:-3023}"
+    CORS_JSON_DEFAULT="[\"http://${HOST_IP_GUESS}:${DASH_PORT_DEFAULT}\",\"https://${HOST_IP_GUESS}:${DASH_PORT_DEFAULT}\",\"http://localhost:${DASH_PORT_DEFAULT}\",\"http://127.0.0.1:${DASH_PORT_DEFAULT}\"]"
     ALLOWED_HOSTS_DEFAULT="${HOST_IP_GUESS},localhost,127.0.0.1"
 
     # Safe in-place substitution. `|` as the sed delimiter so the JSON
@@ -197,13 +203,39 @@ if ! curl -fsS http://localhost:55000/health >/dev/null 2>&1; then
     exit 1
 fi
 
+# ─── 8b. Mark the migration state ─────────────────────────────────────
+# The manager auto-creates the whole schema at startup, so on a fresh install
+# `alembic upgrade head` would fail ("type userrole already exists"). We stamp
+# instead, which records the DB as being at the latest revision so future
+# upgrades apply cleanly.
+#
+# Only stamp when the DB has never been stamped. If this is a re-run against an
+# existing install, stamping would silently mark pending migrations as done and
+# skip them — that case is an upgrade and must use `alembic upgrade head`.
+# `alembic current` prints the revision on stdout ("022_ioc_threat_intel (head)")
+# and its INFO chatter on stderr, so non-empty stdout == already stamped. Don't
+# pattern-match the revision id: this project names them "022_ioc_threat_intel",
+# not hex hashes, so a /[0-9a-f]{6,}/ test silently never matches.
+if [ -n "$(docker exec cybersentinel-manager alembic current 2>/dev/null | tr -d '[:space:]')" ]; then
+    say "Alembic revision already stamped — leaving migration state untouched"
+    c_yellow "  (upgrading an existing install? run: docker exec cybersentinel-manager alembic upgrade head)"
+else
+    say "Stamping database at the latest Alembic revision (fresh install)"
+    docker exec cybersentinel-manager alembic stamp head >/dev/null 2>&1 \
+        && say "Migration state stamped" \
+        || c_yellow "[!] Could not stamp Alembic revision — run it manually: docker exec cybersentinel-manager alembic stamp head"
+fi
+
 # ─── 9. Print connection details ──────────────────────────────────────
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
 
-# Admin bootstrap password is fixed: Admin@1234.
-# Operators are expected to change it after first login via
-# Settings -> Profile -> Change Password.
-ADMIN_PASS="Admin@1234"
+# The manager seeds the first admin with a RANDOM password (unique per
+# deployment) and logs it exactly once — there is no fixed default any more.
+# Pull it back out of the logs so the operator never has to go hunting.
+# If DLP_ADMIN_PASSWORD was set in .env, the manager uses that and logs nothing.
+ADMIN_PASS="$(docker compose -f "${COMPOSE_FILE}" logs manager 2>&1 \
+    | grep -oE '"generated_password": "[^"]+"' | head -1 \
+    | sed -e 's/^"generated_password": "//' -e 's/"$//' || true)"
 
 echo
 c_green "================================================================"
@@ -227,7 +259,8 @@ echo "  API Docs       : http://${HOST_IP}:55000/api/v1/docs"
 echo "  Health probe   : http://${HOST_IP}:55000/health"
 echo
 c_yellow "  NOTE: TLS termination is NOT enabled by default. The dashboard"
-c_yellow "        nginx serves plain HTTP on port 80. For HTTPS, front the"
+c_yellow "        nginx serves plain HTTP on container port 3000 (published as"
+c_yellow "        ${DASH_PORT} on this host). For HTTPS, front the"
 c_yellow "        deployment with Caddy / Traefik / nginx-proxy + Let's"
 c_yellow "        Encrypt, or mount a custom nginx-ssl.conf into the dashboard"
 c_yellow "        container. Self-signed certs are generated in ${INSTALL_DIR}/certs/"
@@ -235,8 +268,19 @@ c_yellow "        for that purpose."
 echo
 c_blue "First-login credentials:"
 echo "  Username : admin"
-echo "  Password : ${ADMIN_PASS}"
-c_yellow "  → Change this password after first login (Settings → Profile → Change Password)."
+if [ -n "${ADMIN_PASS}" ]; then
+    echo "  Password : ${ADMIN_PASS}"
+    c_yellow "  → Randomly generated for THIS deployment and shown only once."
+    c_yellow "    Record it now, then change it after first login"
+    c_yellow "    (Settings → Profile → Change Password)."
+    c_yellow "    To retrieve it again:"
+    c_yellow "      docker logs cybersentinel-manager 2>&1 | grep generated_password"
+else
+    echo "  Password : (set by you via DLP_ADMIN_PASSWORD in ${ENV_FILE})"
+    c_yellow "  → If you did NOT set DLP_ADMIN_PASSWORD, the admin may already have"
+    c_yellow "    existed. Retrieve the first-boot password with:"
+    c_yellow "      docker logs cybersentinel-manager 2>&1 | grep generated_password"
+fi
 echo
 c_blue "Database tier (internal-only — no host port binding):"
 echo "  postgres / mongodb / redis / opensearch are reachable only on the"

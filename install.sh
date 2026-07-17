@@ -178,6 +178,50 @@ fi
 # just for any host paths the operator may add later)
 mkdir -p "${INSTALL_DIR}/data"
 
+# ─── 6b. Guard against a stale OpenSearch volume ──────────────────────
+# OPENSEARCH_INITIAL_ADMIN_PASSWORD is applied ONLY when OpenSearch first
+# initialises its security index. If a volume survives from an earlier attempt,
+# the password baked into it wins and the value in .env is ignored forever —
+# every request then fails with "Authentication finally failed for admin", the
+# healthcheck goes unhealthy, and the manager never starts behind a confusing
+# "dependency failed to start" error.
+#
+# We can't repair that in place (the password lives inside the security index),
+# so detect it and tell the operator exactly what to run rather than dying with
+# a dependency error 3 minutes later.
+OS_VOL="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)opensearch_data$' | head -1 || true)"
+if [ -n "${OS_VOL}" ]; then
+    ENV_OS_PASS="$(grep -E '^OPENSEARCH_PASSWORD=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | head -1)"
+    say "Existing OpenSearch volume detected (${OS_VOL}) — verifying its password still matches ${ENV_FILE}"
+    docker compose -f "${COMPOSE_FILE}" up -d opensearch >/dev/null 2>&1 || true
+    OS_OK=0
+    for _ in $(seq 1 30); do
+        if docker compose -f "${COMPOSE_FILE}" exec -T opensearch \
+             curl -s -f -k -u "admin:${ENV_OS_PASS}" https://localhost:9200/_cluster/health >/dev/null 2>&1; then
+            OS_OK=1; break
+        fi
+        sleep 5
+    done
+    if [ "${OS_OK}" -ne 1 ]; then
+        echo
+        c_red "[FATAL] The existing OpenSearch volume rejects the password in ${ENV_FILE}."
+        c_red ""
+        c_red "OpenSearch only honours OPENSEARCH_INITIAL_ADMIN_PASSWORD the first time it"
+        c_red "initialises. This volume was created by an earlier run with a different"
+        c_red "password, so it can never accept the current one and cannot be fixed in place."
+        c_red ""
+        c_red "If this box holds no data you need (a failed/first install), reset and re-run:"
+        c_red "  cd ${INSTALL_DIR}"
+        c_red "  docker compose -f ${COMPOSE_FILE} down -v      # deletes ALL volumes"
+        c_red "  curl -fsSL ${RAW_BASE}/install.sh | sudo bash"
+        c_red ""
+        c_red "If you DO have data to keep, restore the original OPENSEARCH_PASSWORD into"
+        c_red "${ENV_FILE} instead — that value is the only one this volume will accept."
+        exit 1
+    fi
+    say "Existing OpenSearch volume accepts the configured password"
+fi
+
 # ─── 7. Pull pre-built images and start ───────────────────────────────
 say "Pulling pre-built images from ghcr.io/${GITHUB_REPO} ..."
 docker compose -f "${COMPOSE_FILE}" pull

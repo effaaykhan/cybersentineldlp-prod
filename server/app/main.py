@@ -403,16 +403,49 @@ async def _seed_default_policies():
             for policy in policies_data:
                 await session.execute(
                     text(
-                        "INSERT INTO policies (id, name, description, enabled, priority, type, severity, "
+                        # `status` MUST be listed explicitly. Policy.status is
+                        # NOT NULL and its "active" default is a SQLAlchemy ORM
+                        # default — it only fires when inserting through the ORM.
+                        # This is raw SQL, so omitting the column inserted NULL
+                        # and every row failed with:
+                        #   null value in column "status" violates not-null constraint
+                        # The whole seed then aborted into the except below and
+                        # logged a warning, so a fresh install silently came up
+                        # with ZERO policies — DLP installed and enforcing
+                        # nothing. Nothing caught it because the only databases
+                        # that had policies got them from the API/UI, which does
+                        # go through the ORM.
+                        # Columns must match the MODEL, not the legacy schema.
+                        #
+                        # `enabled` is NOT a column — Policy.enabled is a property
+                        # derived from `status` ("Derived from status — no separate
+                        # column needed"). Long-lived databases still carry an
+                        # `enabled` column as a leftover from old migrations, which
+                        # is why inserting it appeared to work there; on a FRESH
+                        # create_all database the column does not exist and every
+                        # insert died with:
+                        #   column "enabled" of relation "policies" does not exist
+                        # The seed aborted into the except below, so a brand-new
+                        # install came up with ZERO policies — DLP running and
+                        # enforcing nothing, silently.
+                        #
+                        # `status` is likewise mandatory here: it is NOT NULL and its
+                        # "active" default is an ORM default, which raw SQL bypasses.
+                        "INSERT INTO policies (id, name, description, status, priority, type, severity, "
                         "config, conditions, actions, compliance_tags, agent_ids, created_by, created_at, updated_at) "
-                        "VALUES (gen_random_uuid(), :name, :description, :enabled, :priority, :type, :severity, "
+                        "VALUES (gen_random_uuid(), :name, :description, :status, :priority, :type, :severity, "
                         ":config, :conditions, :actions, :compliance_tags, :agent_ids, :created_by, NOW(), NOW()) "
                         "ON CONFLICT (name) DO NOTHING"
                     ),
                     {
                         "name": policy["name"],
                         "description": policy.get("description"),
-                        "enabled": policy.get("enabled", True),
+                        # The seed files express intent as `enabled`; the schema
+                        # stores it as `status`. Translate rather than inserting both.
+                        "status": policy.get(
+                            "status",
+                            "active" if policy.get("enabled", True) else "inactive",
+                        ),
                         "priority": policy.get("priority", 100),
                         "type": policy.get("type"),
                         "severity": policy.get("severity", "medium"),

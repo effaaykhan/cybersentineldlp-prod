@@ -61,7 +61,7 @@ class UserCreateRequest(BaseModel):
     password: str
     full_name: str
     role: str = Field(default="VIEWER")
-    organization: str = Field(default="CyberSentinel")
+    organization: str = Field(default="CyberSentinelDLP")
     username: Optional[str] = None
     department: Optional[str] = None
     clearance_level: int = Field(default=1, ge=0, le=10)
@@ -89,7 +89,7 @@ def _to_out(user, effective: Optional[set] = None, direct: Optional[set] = None)
         "email": user.email,
         "full_name": user.full_name,
         "role": str(role_val),
-        "organization": user.organization or "CyberSentinel",
+        "organization": user.organization or "CyberSentinelDLP",
         "department": user.department,
         "clearance_level": getattr(user, "clearance_level", 1) or 1,
         "is_active": user.is_active,
@@ -195,7 +195,7 @@ async def create_user(
             password=payload.password,
             full_name=payload.full_name,
             role=role_in,
-            organization=payload.organization or "CyberSentinel",
+            organization=payload.organization or "CyberSentinelDLP",
             username=payload.username,
             department=payload.department,
             clearance_level=payload.clearance_level,

@@ -108,14 +108,14 @@ docker compose restart                  # Restart all
 ### Database Access
 ```bash
 # PostgreSQL
-docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp
+docker compose exec postgres psql -U dlp_user -d cybersentineldlp
 
 # MongoDB
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec -it cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp
+docker exec -it cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp
 
 # Clear MongoDB events
-docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp --eval "db.dlp_events.deleteMany({})"
+docker exec cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp --eval "db.dlp_events.deleteMany({})"
 ```
 
 ## Service Ports

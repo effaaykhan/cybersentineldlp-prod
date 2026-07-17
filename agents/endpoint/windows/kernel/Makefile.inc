@@ -24,4 +24,4 @@
 #
 # Test signing (development):
 #   bcdedit /set testsigning on
-#   signtool sign /v /s PrivateCertStore /n "CyberSentinel" csfilter.sys
+#   signtool sign /v /s PrivateCertStore /n "CyberSentinelDLP" csfilter.sys

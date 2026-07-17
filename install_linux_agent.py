@@ -11,7 +11,7 @@ Usage:
     sudo python3 install_linux_agent.py --server-url http://10.0.0.5:55000/api/v1 --no-start
 
 One-liner (download and run):
-    curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
+    curl -sLO https://raw.githubusercontent.com/cybersentineldlp-06/Data-Loss-Prevention/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
 """
 
 import argparse
@@ -31,11 +31,11 @@ import uuid
 # Configuration
 # ──────────────────────────────────────────────
 
-REPO_OWNER = "cybersentinel-06"
+REPO_OWNER = "cybersentineldlp-06"
 REPO_NAME = "Data-Loss-Prevention"
 DEFAULT_BRANCH = "main"
-DEFAULT_INSTALL_DIR = "/opt/cybersentinel/agent"
-DEFAULT_CONFIG_DIR = "/etc/cybersentinel"
+DEFAULT_INSTALL_DIR = "/opt/cybersentineldlp/agent"
+DEFAULT_CONFIG_DIR = "/etc/cybersentineldlp"
 SERVICE_NAME = "cybersentineldlp-agent"
 
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}"
@@ -363,7 +363,7 @@ def generate_config(config_dir, server_url, install_dir, force):
                 "/home/*/.cache",
                 "/home/*/.local/share",
                 "/home/*/snap",
-                "/opt/cybersentinel"
+                "/opt/cybersentineldlp"
             ],
             "file_extensions": [
                 ".pdf", ".docx", ".xlsx", ".txt", ".csv",
@@ -411,7 +411,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory={install_dir}
-Environment=CYBERSENTINEL_SERVER_URL={server_url}
+Environment=CYBERSENTINELDLP_SERVER_URL={server_url}
 ExecStart={venv_python} {agent_script}
 Restart=on-failure
 RestartSec=5
@@ -508,7 +508,7 @@ def main():
               sudo python3 install_linux_agent.py --server-url http://myserver:55000/api/v1 --force
 
             One-liner:
-              curl -sLO https://raw.githubusercontent.com/cybersentinel-06/Data-Loss-Prevention/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
+              curl -sLO https://raw.githubusercontent.com/cybersentineldlp-06/Data-Loss-Prevention/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
         """),
     )
     parser.add_argument(

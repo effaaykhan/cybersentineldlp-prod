@@ -40,7 +40,7 @@ async def import_default_rules():
     postgres_port = os.getenv("POSTGRES_PORT", "5432")
     postgres_user = os.getenv("POSTGRES_USER", "dlp_user")
     postgres_password = os.getenv("POSTGRES_PASSWORD", "")
-    postgres_db = os.getenv("POSTGRES_DB", "cybersentinel_dlp")
+    postgres_db = os.getenv("POSTGRES_DB", "cybersentineldlp")
 
     postgres_url = f"postgresql+asyncpg://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
     engine = create_async_engine(postgres_url, echo=False)

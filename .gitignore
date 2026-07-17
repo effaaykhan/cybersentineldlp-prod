@@ -209,8 +209,8 @@ FIX_*.sh
 
 # Ignore backup directories
 backend/
-cybersentinel-dlp-agent-windows/
-cybersentinel-dlp-server/
+cybersentineldlp-dlp-agent-windows/
+cybersentineldlp-dlp-server/
 
 # Redis dumps
 dump.rdb

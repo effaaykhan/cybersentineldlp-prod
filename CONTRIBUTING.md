@@ -56,8 +56,8 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ```bash
 # Clone the repository
-git clone https://github.com/cybersentinel-06/cybersentinel-dlp.git
-cd cybersentinel-dlp
+git clone https://github.com/cybersentineldlp-06/cybersentineldlp-dlp.git
+cd cybersentineldlp-dlp
 
 # Backend setup
 cd server
@@ -124,7 +124,7 @@ Fixes #42
 ## Project Structure
 
 ```
-cybersentinel-dlp/
+cybersentineldlp-dlp/
 ├── server/              # FastAPI backend
 │   ├── app/
 │   │   ├── api/         # API routes

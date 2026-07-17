@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = Field(default=5432)
     POSTGRES_USER: str = Field(default="dlp_user")
     POSTGRES_PASSWORD: str = Field(...)
-    POSTGRES_DB: str = Field(default="cybersentinel_dlp")
+    POSTGRES_DB: str = Field(default="cybersentineldlp")
     POSTGRES_POOL_SIZE: int = Field(default=20)
     POSTGRES_MAX_OVERFLOW: int = Field(default=10)
 
@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     MONGODB_PORT: int = Field(default=27017)
     MONGODB_USER: str = Field(default="dlp_user")
     MONGODB_PASSWORD: str = Field(...)
-    MONGODB_DB: str = Field(default="cybersentinel_dlp")
+    MONGODB_DB: str = Field(default="cybersentineldlp")
     MONGODB_MAX_POOL_SIZE: int = Field(default=100)
 
     @property
@@ -126,7 +126,7 @@ class Settings(BaseSettings):
     OPENSEARCH_PASSWORD: str = Field(...)
     OPENSEARCH_USE_SSL: bool = Field(default=True)
     OPENSEARCH_VERIFY_CERTS: bool = Field(default=False)
-    OPENSEARCH_INDEX_PREFIX: str = Field(default="cybersentinel")
+    OPENSEARCH_INDEX_PREFIX: str = Field(default="cybersentineldlp")
     OPENSEARCH_RETENTION_DAYS: int = Field(default=90)
 
     # Event Retention Configuration
@@ -152,8 +152,8 @@ class Settings(BaseSettings):
     SMTP_TLS: bool = Field(default=True)
     SMTP_USER: Optional[str] = Field(default=None)
     SMTP_PASSWORD: Optional[str] = Field(default=None)
-    SMTP_FROM: str = Field(default="dlp@cybersentinel.local")
-    SMTP_FROM_EMAIL: str = Field(default="dlp@cybersentinel.local")
+    SMTP_FROM: str = Field(default="dlp@cybersentineldlp.local")
+    SMTP_FROM_EMAIL: str = Field(default="dlp@cybersentineldlp.local")
 
     # Wazuh Integration
     WAZUH_HOST: str = Field(default="localhost")

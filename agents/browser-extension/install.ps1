@@ -14,7 +14,7 @@
         -ServerUrl    https://dlp.example.com/api/v1 `
         -AgentId      win-ws-01 `
         -AgentKey     0f3a...agent-api-key... `
-        -HostCommand  "C:\Program Files\CyberSentinel\csdlp_host.exe"
+        -HostCommand  "C:\Program Files\CyberSentinelDLP\csdlp_host.exe"
 #>
 param(
   [Parameter(Mandatory = $true)][string]$ExtensionId,
@@ -33,9 +33,9 @@ $dir = Join-Path $env:ProgramData 'CyberSentinel'
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
 # 1) Native-messaging host manifest ------------------------------------------
-$manifestPath = Join-Path $dir 'com.cybersentinel.dlp.json'
+$manifestPath = Join-Path $dir 'com.cybersentineldlp.dlp.json'
 [ordered]@{
-  name            = 'com.cybersentinel.dlp'
+  name            = 'com.cybersentineldlp.dlp'
   description     = 'CyberSentinel DLP native messaging host (cloud upload guard)'
   path            = $HostCommand
   type            = 'stdio'
@@ -46,8 +46,8 @@ Write-Host "[+] Host manifest : $manifestPath"
 # 2) Registry registration ----------------------------------------------------
 $root = if ($Scope -eq 'machine') { 'HKLM:' } else { 'HKCU:' }
 $keys = @()
-if ($Browser -in 'chrome', 'both') { $keys += "$root\SOFTWARE\Google\Chrome\NativeMessagingHosts\com.cybersentinel.dlp" }
-if ($Browser -in 'edge',   'both') { $keys += "$root\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\com.cybersentinel.dlp" }
+if ($Browser -in 'chrome', 'both') { $keys += "$root\SOFTWARE\Google\Chrome\NativeMessagingHosts\com.cybersentineldlp.dlp" }
+if ($Browser -in 'edge',   'both') { $keys += "$root\SOFTWARE\Microsoft\Edge\NativeMessagingHosts\com.cybersentineldlp.dlp" }
 foreach ($k in $keys) {
   New-Item -Path $k -Force | Out-Null
   Set-ItemProperty -Path $k -Name '(Default)' -Value $manifestPath

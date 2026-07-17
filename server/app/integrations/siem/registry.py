@@ -60,7 +60,7 @@ def build_connector(cfg: Dict[str, Any]) -> SIEMConnector:
             hec_token=cfg.get("hec_token"), username=cfg.get("username"),
             password=cfg.get("password"), use_ssl=bool(cfg.get("use_ssl", True)),
             verify_certs=bool(cfg.get("verify_certs", True)),
-            source=cfg.get("source") or "cybersentinel_dlp",
+            source=cfg.get("source") or "cybersentineldlp",
             sourcetype=cfg.get("sourcetype") or "dlp:event",
             index=cfg.get("index") or "dlp",
         )

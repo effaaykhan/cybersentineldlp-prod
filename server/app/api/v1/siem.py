@@ -238,7 +238,7 @@ async def register_connector(
                 password=config.password,
                 use_ssl=config.use_ssl,
                 verify_certs=config.verify_certs,
-                source=config.source or "cybersentinel_dlp",
+                source=config.source or "cybersentineldlp",
                 sourcetype=config.sourcetype or "dlp:event",
                 index=config.index or "dlp"
             )

@@ -36,7 +36,7 @@ async def create_default_user():
     async with postgres_session_factory() as session:
         # Check if user already exists
         result = await session.execute(
-            text("SELECT id FROM users WHERE email = 'admin@cybersentinel.local'")
+            text("SELECT id FROM users WHERE email = 'admin@cybersentineldlp.local'")
         )
         if result.scalar():
             print("  Admin user already exists")
@@ -45,11 +45,11 @@ async def create_default_user():
         # Create admin user
         admin_user = User(
             id=uuid.uuid4(),
-            email="admin@cybersentinel.local",
+            email="admin@cybersentineldlp.local",
             hashed_password=get_password_hash("ChangeMe123!"),
             full_name="System Administrator",
             role=UserRole.ADMIN,
-            organization="CyberSentinel",
+            organization="CyberSentinelDLP",
             is_active=True,
             is_verified=True
         )
@@ -57,7 +57,7 @@ async def create_default_user():
         session.add(admin_user)
         await session.commit()
         print("✓ Default admin user created")
-        print("  Email: admin@cybersentinel.local")
+        print("  Email: admin@cybersentineldlp.local")
         print("  Password: ChangeMe123!")
 
 
@@ -101,7 +101,7 @@ async def create_default_policies():
 
         # Get admin user ID
         result = await session.execute(
-            text("SELECT id FROM users WHERE email = 'admin@cybersentinel.local'")
+            text("SELECT id FROM users WHERE email = 'admin@cybersentineldlp.local'")
         )
         admin_id = result.scalar()
 
@@ -212,7 +212,7 @@ async def main():
         print("Next steps:")
         print("1. Start the server: cd server && uvicorn app.main:app --reload")
         print("2. Access dashboard: http://localhost:3000")
-        print("3. Login with: admin@cybersentinel.local / ChangeMe123!")
+        print("3. Login with: admin@cybersentineldlp.local / ChangeMe123!")
         print()
 
     except Exception as e:

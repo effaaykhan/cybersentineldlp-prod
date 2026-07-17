@@ -37,23 +37,23 @@ sudo apt-get install python3 python3-pip
 pip3 install -r requirements.txt
 
 # Create directories
-sudo mkdir -p /opt/cybersentinel
-sudo mkdir -p /etc/cybersentinel
+sudo mkdir -p /opt/cybersentineldlp
+sudo mkdir -p /etc/cybersentineldlp
 
 # Copy files
-sudo cp agent.py /opt/cybersentinel/
-sudo cp agent_config.json /etc/cybersentinel/
-sudo cp cybersentinel-agent.service /etc/systemd/system/
+sudo cp agent.py /opt/cybersentineldlp/
+sudo cp agent_config.json /etc/cybersentineldlp/
+sudo cp cybersentineldlp-agent.service /etc/systemd/system/
 
 # Start service
 sudo systemctl daemon-reload
-sudo systemctl enable cybersentinel-agent
-sudo systemctl start cybersentinel-agent
+sudo systemctl enable cybersentineldlp-agent
+sudo systemctl start cybersentineldlp-agent
 ```
 
 ## Configuration
 
-Edit `/etc/cybersentinel/agent_config.json`:
+Edit `/etc/cybersentineldlp/agent_config.json`:
 
 ```json
 {
@@ -70,36 +70,36 @@ Edit `/etc/cybersentinel/agent_config.json`:
 
 After editing, restart the agent:
 ```bash
-sudo systemctl restart cybersentinel-agent
+sudo systemctl restart cybersentineldlp-agent
 ```
 
 ## Usage
 
 ### Start Agent
 ```bash
-sudo systemctl start cybersentinel-agent
+sudo systemctl start cybersentineldlp-agent
 ```
 
 ### Stop Agent
 ```bash
-sudo systemctl stop cybersentinel-agent
+sudo systemctl stop cybersentineldlp-agent
 ```
 
 ### Check Status
 ```bash
-sudo systemctl status cybersentinel-agent
+sudo systemctl status cybersentineldlp-agent
 ```
 
 ### View Logs
 ```bash
 # Real-time logs
-sudo journalctl -u cybersentinel-agent -f
+sudo journalctl -u cybersentineldlp-agent -f
 
 # Last 100 lines
-sudo journalctl -u cybersentinel-agent -n 100
+sudo journalctl -u cybersentineldlp-agent -n 100
 
 # Log file
-sudo tail -f /var/log/cybersentinel_agent.log
+sudo tail -f /var/log/cybersentineldlp_agent.log
 ```
 
 ## Monitored Events
@@ -124,17 +124,17 @@ The agent detects:
 
 ### Check if agent is running
 ```bash
-sudo systemctl status cybersentinel-agent
+sudo systemctl status cybersentineldlp-agent
 ps aux | grep agent.py
 ```
 
 ### Agent won't start
 ```bash
 # Check logs
-sudo journalctl -u cybersentinel-agent -n 50
+sudo journalctl -u cybersentineldlp-agent -n 50
 
 # Check configuration
-sudo cat /etc/cybersentinel/agent_config.json
+sudo cat /etc/cybersentineldlp/agent_config.json
 
 # Test connectivity
 curl http://YOUR-SERVER-IP:8000/health
@@ -143,8 +143,8 @@ curl http://YOUR-SERVER-IP:8000/health
 ### Permission errors
 ```bash
 # Ensure proper permissions
-sudo chown -R root:root /opt/cybersentinel
-sudo chmod +x /opt/cybersentinel/agent.py
+sudo chown -R root:root /opt/cybersentineldlp
+sudo chmod +x /opt/cybersentineldlp/agent.py
 ```
 
 ### High CPU usage
@@ -156,13 +156,13 @@ sudo chmod +x /opt/cybersentinel/agent.py
 
 ```bash
 # Stop and disable service
-sudo systemctl stop cybersentinel-agent
-sudo systemctl disable cybersentinel-agent
+sudo systemctl stop cybersentineldlp-agent
+sudo systemctl disable cybersentineldlp-agent
 
 # Remove files
-sudo rm /etc/systemd/system/cybersentinel-agent.service
-sudo rm -rf /opt/cybersentinel
-sudo rm -rf /etc/cybersentinel
+sudo rm /etc/systemd/system/cybersentineldlp-agent.service
+sudo rm -rf /opt/cybersentineldlp
+sudo rm -rf /etc/cybersentineldlp
 
 # Reload systemd
 sudo systemctl daemon-reload
@@ -185,8 +185,8 @@ sudo systemctl daemon-reload
 ## Support
 
 For issues or questions:
-- Check logs: `/var/log/cybersentinel_agent.log`
-- System logs: `sudo journalctl -u cybersentinel-agent`
+- Check logs: `/var/log/cybersentineldlp_agent.log`
+- System logs: `sudo journalctl -u cybersentineldlp-agent`
 - Review server logs
 
 ## Version

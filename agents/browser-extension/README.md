@@ -31,7 +31,7 @@ asserted on an explicit `block` decision.
 ## Components
 - `manifest.json`, `src/` — the MV3 extension (Chrome / Edge).
 - `native-host/csdlp_host.py` — the native-messaging host (reference impl).
-- `native-host/com.cybersentinel.dlp.json` — the host manifest template.
+- `native-host/com.cybersentineldlp.dlp.json` — the host manifest template.
 
 ## Install (Windows, per managed machine)
 1. **Load the extension**
@@ -41,15 +41,15 @@ asserted on an explicit `block` decision.
    - Note the **extension ID** it gets assigned.
 2. **Install the native host**
    - Copy `native-host/csdlp_host.py` (or a PyInstaller `.exe`) to
-     `C:\Program Files\CyberSentinel\`.
-   - Edit `com.cybersentinel.dlp.json`: set `path` to the host executable and
+     `C:\Program Files\CyberSentinelDLP\`.
+   - Edit `com.cybersentineldlp.dlp.json`: set `path` to the host executable and
      `allowed_origins` to `chrome-extension://<EXTENSION_ID>/`.
    - Register it (Chrome): create registry key
-     `HKLM\Software\Google\Chrome\NativeMessagingHosts\com.cybersentinel.dlp`
+     `HKLM\Software\Google\Chrome\NativeMessagingHosts\com.cybersentineldlp.dlp`
      with the default value = full path to the manifest json. For Edge use
-     `HKLM\Software\Microsoft\Edge\NativeMessagingHosts\com.cybersentinel.dlp`.
+     `HKLM\Software\Microsoft\Edge\NativeMessagingHosts\com.cybersentineldlp.dlp`.
 3. **Point the host at the DLP server + agent key**
-   - Create `C:\ProgramData\CyberSentinel\dlp-host.json`:
+   - Create `C:\ProgramData\CyberSentinelDLP\dlp-host.json`:
      ```json
      { "server_url": "https://<dlp-host>/api/v1",
        "agent_id": "<this machine's agent id>",
@@ -64,7 +64,7 @@ asserted on an explicit `block` decision.
 - Upload a file containing **PII / secrets** (e.g., credit-card numbers) →
   **blocked**, an on-page red banner shows, and `cloud_upload_attempt` +
   `cloud_upload_prevented` events appear.
-- Host activity/errors log to `C:\ProgramData\CyberSentinel\dlp-host.log`.
+- Host activity/errors log to `C:\ProgramData\CyberSentinelDLP\dlp-host.log`.
 
 ## Current scope / limitations (MVP, Phase A)
 - Covers **browser** uploads (fetch/XHR carrying a File/Blob/FormData) on the

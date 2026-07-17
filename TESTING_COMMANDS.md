@@ -396,7 +396,7 @@ Set-Clipboard -Value "API Key: sk-1234567890abcdef"
 ### 8.1 Check Windows Agent Logs
 ```powershell
 # In PowerShell (on Windows machine)
-Get-Content D:\CyberSentinelAgent\cybersentinel_agent.log -Tail 20
+Get-Content D:\CyberSentinelAgent\cybersentineldlp_agent.log -Tail 20
 ```
 
 **Verify:**
@@ -783,7 +783,7 @@ ps aux | grep agent.py | grep -v grep
 ### Events Not Showing
 - Check agent logs for errors
 - Verify agent is sending events: `docker-compose logs manager | grep -i event`
-- Check MongoDB: `docker-compose exec mongodb mongosh --eval "use cybersentinel_dlp; db.dlp_events.countDocuments()"`
+- Check MongoDB: `docker-compose exec mongodb mongosh --eval "use cybersentineldlp; db.dlp_events.countDocuments()"`
 
 ### USB Monitoring Error (Windows)
 - Ensure using latest `agent.py` with COM initialization fix

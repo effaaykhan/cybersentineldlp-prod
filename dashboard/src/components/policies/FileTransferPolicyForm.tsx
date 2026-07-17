@@ -378,7 +378,7 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
               type="text"
               value={config.quarantinePath ?? ''}
               onChange={(e) => update({ quarantinePath: e.target.value || undefined })}
-              placeholder="e.g., C:\\CyberSentinel\\Quarantine"
+              placeholder="e.g., C:\\CyberSentinelDLP\\Quarantine"
               className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
             />
             <p className="text-xs text-gray-400 mt-2">

@@ -7,9 +7,9 @@ services:
     # .env — every prod deploy got 401 and logged "continuing without it",
     # running with no event indexing/search while still looking healthy.
     image: opensearchproject/opensearch:2.19.0
-    container_name: cybersentinel-opensearch
+    container_name: cybersentineldlp-opensearch
     environment:
-      - cluster.name=cybersentinel-cluster
+      - cluster.name=cybersentineldlp-cluster
       - node.name=opensearch-node1
       - discovery.type=single-node
       - bootstrap.memory_lock=true
@@ -26,7 +26,7 @@ services:
     volumes:
       - opensearch_data:/usr/share/opensearch/data
     networks:
-      - cybersentinel
+      - cybersentineldlp
     # SECURITY: data tier is reachable only on the internal docker
     # network. No host port binding — operators who need local ops
     # access should use `docker compose exec` or bind to 127.0.0.1.
@@ -52,16 +52,16 @@ services:
   # MongoDB for agent data
   mongodb:
     image: mongo:7.0
-    container_name: cybersentinel-mongodb
+    container_name: cybersentineldlp-mongodb
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:?Set this password in .env file}
-      MONGO_INITDB_DATABASE: cybersentinel
+      MONGO_INITDB_DATABASE: cybersentineldlp
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
     networks:
-      - cybersentinel
+      - cybersentineldlp
     security_opt:
       - no-new-privileges:true
     # ports intentionally omitted — database tier is internal only
@@ -82,16 +82,16 @@ services:
   # PostgreSQL for user data
   postgres:
     image: postgres:16-alpine
-    container_name: cybersentinel-postgres
+    container_name: cybersentineldlp-postgres
     environment:
-      POSTGRES_USER: cybersentinel
+      POSTGRES_USER: cybersentineldlp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set this password in .env file}
-      POSTGRES_DB: cybersentinel
+      POSTGRES_DB: cybersentineldlp
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - cybersentinel
+      - cybersentineldlp
     security_opt:
       - no-new-privileges:true
     # ports intentionally omitted — internal only
@@ -103,7 +103,7 @@ services:
         reservations:
           memory: 256M
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cybersentinel"]
+      test: ["CMD-SHELL", "pg_isready -U cybersentineldlp"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -112,12 +112,12 @@ services:
   # Redis for caching
   redis:
     image: redis:7-alpine
-    container_name: cybersentinel-redis
+    container_name: cybersentineldlp-redis
     command: redis-server --requirepass ${REDIS_PASSWORD:?Set this password in .env file} --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     networks:
-      - cybersentinel
+      - cybersentineldlp
     security_opt:
       - no-new-privileges:true
     # ports intentionally omitted — internal only
@@ -138,12 +138,12 @@ services:
   # Manager API
   manager:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest
-    container_name: cybersentinel-manager
+    container_name: cybersentineldlp-manager
     environment:
       # Server
       - PORT=55000
       - WORKERS=4
-      - VERSION=2.1.1
+      - VERSION=2.1.2
       # Run in production mode by default. Without this the app fell back to its
       # "development" default, which skips production-only hardening — wildcard
       # CORS rejection and fail-closed auth when Redis is unavailable. Override
@@ -158,21 +158,21 @@ services:
       - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
       - OPENSEARCH_USE_SSL=true
       - OPENSEARCH_VERIFY_CERTS=false
-      - OPENSEARCH_INDEX_PREFIX=cybersentinel
+      - OPENSEARCH_INDEX_PREFIX=cybersentineldlp
 
       # MongoDB
       - MONGODB_HOST=mongodb
       - MONGODB_PORT=27017
       - MONGODB_USER=admin
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
-      - MONGODB_DB=cybersentinel
+      - MONGODB_DB=cybersentineldlp
 
       # PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=cybersentinel
+      - POSTGRES_USER=cybersentineldlp
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
-      - POSTGRES_DB=cybersentinel
+      - POSTGRES_DB=cybersentineldlp
 
       # Redis
       - REDIS_HOST=redis
@@ -206,8 +206,8 @@ services:
       - ONEDRIVE_REDIRECT_URI=${ONEDRIVE_REDIRECT_URI:-}
       - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID:-common}
     volumes:
-      - ./config:/etc/cybersentinel:ro
-      - ./server/logs:/var/log/cybersentinel
+      - ./config:/etc/cybersentineldlp:ro
+      - ./server/logs:/var/log/cybersentineldlp
       - ./quarantine:/app/quarantine
     ports:
       - "55000:55000"
@@ -221,7 +221,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - cybersentinel
+      - cybersentineldlp
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -242,7 +242,7 @@ services:
   # Dashboard
   dashboard:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest
-    container_name: cybersentinel-dashboard
+    container_name: cybersentineldlp-dashboard
     # nginx inside the container runs as the unprivileged `nginx` user
     # and listens on 3000 (non-privileged port). The host port is
     # configurable via DASHBOARD_HOST_PORT in .env — default 3023.
@@ -261,7 +261,7 @@ services:
     depends_on:
       - manager
     networks:
-      - cybersentinel
+      - cybersentineldlp
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -288,7 +288,7 @@ services:
   # Celery Worker
   celery-worker:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest
-    container_name: cybersentinel-celery-worker
+    container_name: cybersentineldlp-celery-worker
     command: celery -A app.tasks worker --loglevel=info --concurrency=4
     environment:
       # OpenSearch
@@ -304,14 +304,14 @@ services:
       - MONGODB_PORT=27017
       - MONGODB_USER=admin
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
-      - MONGODB_DB=cybersentinel
+      - MONGODB_DB=cybersentineldlp
 
       # PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=cybersentinel
+      - POSTGRES_USER=cybersentineldlp
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
-      - POSTGRES_DB=cybersentinel
+      - POSTGRES_DB=cybersentineldlp
 
       # Redis
       - REDIS_HOST=redis
@@ -328,7 +328,7 @@ services:
       # code 2 and keeps restarting.
       - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
     volumes:
-      - ./server/logs:/var/log/cybersentinel
+      - ./server/logs:/var/log/cybersentineldlp
     depends_on:
       postgres:
         condition: service_healthy
@@ -339,7 +339,7 @@ services:
       manager:
         condition: service_healthy
     networks:
-      - cybersentinel
+      - cybersentineldlp
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -359,7 +359,7 @@ services:
   # Celery Beat (Scheduler)
   celery-beat:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest
-    container_name: cybersentinel-celery-beat
+    container_name: cybersentineldlp-celery-beat
     # --pidfile and --schedule both point at /tmp which is always
     # writable by any container user. Previously beat tried to write
     # the schedule file to its CWD (/app) under the unprivileged
@@ -390,16 +390,16 @@ services:
       # PostgreSQL
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=cybersentinel
+      - POSTGRES_USER=cybersentineldlp
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
-      - POSTGRES_DB=cybersentinel
+      - POSTGRES_DB=cybersentineldlp
 
       # MongoDB
       - MONGODB_HOST=mongodb
       - MONGODB_PORT=27017
       - MONGODB_USER=admin
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
-      - MONGODB_DB=cybersentinel
+      - MONGODB_DB=cybersentineldlp
 
       # JWT & Security
       - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
@@ -412,7 +412,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - cybersentinel
+      - cybersentineldlp
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -430,7 +430,7 @@ services:
     restart: unless-stopped
 
 networks:
-  cybersentinel:
+  cybersentineldlp:
     driver: bridge
     ipam:
       config:

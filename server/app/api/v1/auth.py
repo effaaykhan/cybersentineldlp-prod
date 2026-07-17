@@ -517,7 +517,7 @@ async def sso_exchange(
             detail="Invalid exchange token: wrong purpose",
         )
 
-    if payload.get("iss") != "cybersentinel-siem":
+    if payload.get("iss") != "cybersentineldlp-siem":
         logger.warning("SSO exchange: wrong issuer", iss=payload.get("iss"))
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

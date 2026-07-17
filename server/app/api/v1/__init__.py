@@ -39,7 +39,7 @@ async def health_check():
     """
     Health check endpoint for monitoring and agent connectivity tests
     """
-    return {"status": "healthy", "service": "cybersentinel-dlp"}
+    return {"status": "healthy", "service": "cybersentineldlp-dlp"}
 
 # Include sub-routers
 api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])

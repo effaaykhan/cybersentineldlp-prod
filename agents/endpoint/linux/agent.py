@@ -25,7 +25,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 # Configure logging
-log_file = os.path.expanduser('~/cybersentinel_agent.log')
+log_file = os.path.expanduser('~/cybersentineldlp_agent.log')
 os.makedirs(os.path.dirname(log_file), exist_ok=True)
 logging.basicConfig(
     level=logging.DEBUG,  # Changed to DEBUG to see suppression messages
@@ -43,9 +43,9 @@ class AgentConfig:
     def __init__(self, config_path: str = None):
         if config_path is None:
             # Use local config file if /etc is not accessible
-            local_config = os.path.expanduser("~/cybersentinel_agent_config.json")
-            if os.path.exists("/etc/cybersentinel/agent_config.json"):
-                self.config_path = "/etc/cybersentinel/agent_config.json"
+            local_config = os.path.expanduser("~/cybersentineldlp_agent_config.json")
+            if os.path.exists("/etc/cybersentineldlp/agent_config.json"):
+                self.config_path = "/etc/cybersentineldlp/agent_config.json"
             elif os.path.exists("agent_config.json"):
                 self.config_path = "agent_config.json"
             else:
@@ -57,7 +57,7 @@ class AgentConfig:
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from file"""
         # Check environment variable first, then config file, then default
-        default_server_url = os.getenv("CYBERSENTINEL_SERVER_URL", "http://localhost:55000/api/v1")
+        default_server_url = os.getenv("CYBERSENTINELDLP_SERVER_URL", "http://localhost:55000/api/v1")
         default_config = {
             "server_url": default_server_url,
             "agent_id": str(uuid.uuid4()),
@@ -82,7 +82,7 @@ class AgentConfig:
                 # Global quarantine toggle for this agent
                 "enabled": True,
                 # Default quarantine folder on Linux endpoints
-                "folder": "/opt/cybersentinel/quarantine"
+                "folder": "/opt/cybersentineldlp/quarantine"
             },
             "classification": {
                 "enabled": True,
@@ -182,7 +182,7 @@ class TransferDestinationHandler(FileSystemEventHandler):
 class DLPAgent:
     """Main DLP Agent class"""
 
-    def __init__(self, config_path: str = "/etc/cybersentinel/agent_config.json"):
+    def __init__(self, config_path: str = "/etc/cybersentineldlp/agent_config.json"):
         self.config = AgentConfig(config_path)
         self.agent_id = self.config.get("agent_id")
         self.server_url = self.config.get("server_url")

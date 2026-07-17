@@ -82,14 +82,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ```bash
 # Build image
-docker build -t cybersentinel-server .
+docker build -t cybersentineldlp-server .
 
 # Run container
 docker run -d \
   -p 8000:8000 \
   --env-file .env \
-  --name cybersentinel-server \
-  cybersentinel-server
+  --name cybersentineldlp-server \
+  cybersentineldlp-server
 ```
 
 ## Configuration
@@ -109,14 +109,14 @@ POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_USER=dlp_user
 POSTGRES_PASSWORD=<secure-password>
-POSTGRES_DB=cybersentinel_dlp
+POSTGRES_DB=cybersentineldlp
 
 # MongoDB
 MONGODB_HOST=localhost
 MONGODB_PORT=27017
 MONGODB_USER=dlp_user
 MONGODB_PASSWORD=<secure-password>
-MONGODB_DB=cybersentinel_dlp
+MONGODB_DB=cybersentineldlp
 
 # Redis
 REDIS_HOST=localhost
@@ -190,7 +190,7 @@ Example:
 # Login
 curl -X POST http://localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=admin@cybersentinel.local&password=ChangeMe123!"
+  -d "username=admin@cybersentineldlp.local&password=ChangeMe123!"
 
 # Use token
 curl http://localhost:8000/api/v1/events \
@@ -261,7 +261,7 @@ Structured JSON logs with:
 View logs:
 ```bash
 # Docker
-docker logs -f cybersentinel-server
+docker logs -f cybersentineldlp-server
 
 # Local
 tail -f server/logs/app.log
@@ -300,7 +300,7 @@ cat .env
 
 ```bash
 # Test PostgreSQL
-docker-compose exec postgres psql -U dlp_user -d cybersentinel_dlp
+docker-compose exec postgres psql -U dlp_user -d cybersentineldlp
 
 # Test MongoDB
 docker-compose exec mongodb mongosh -u dlp_user -p
@@ -334,5 +334,5 @@ docker-compose restart server
 
 For issues or questions:
 - GitHub Issues: [Link]
-- Email: support@cybersentinel.local
+- Email: support@cybersentineldlp.local
 - Documentation: [MASTER_DOCUMENTATION.md](../../MASTER_DOCUMENTATION.md)

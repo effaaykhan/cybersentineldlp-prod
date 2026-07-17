@@ -20,7 +20,7 @@ async def test_google_drive_connection_token_encryption(db_session):
         hashed_password="hashed",
         full_name="Drive User",
         role=UserRole.ADMIN,
-        organization="CyberSentinel",
+        organization="CyberSentinelDLP",
     )
     db_session.add(user)
     await db_session.flush()
@@ -53,7 +53,7 @@ async def test_google_drive_folder_cascade_delete(db_session):
         hashed_password="hashed",
         full_name="Folder Owner",
         role=UserRole.ADMIN,
-        organization="CyberSentinel",
+        organization="CyberSentinelDLP",
     )
     db_session.add(user)
     await db_session.flush()

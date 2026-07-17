@@ -2,11 +2,11 @@
 -- This script is executed when PostgreSQL container starts for the first time
 
 -- Create database if not exists
-SELECT 'CREATE DATABASE cybersentinel_dlp'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'cybersentinel_dlp')\gexec
+SELECT 'CREATE DATABASE cybersentineldlp'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'cybersentineldlp')\gexec
 
 -- Connect to database
-\c cybersentinel_dlp;
+\c cybersentineldlp;
 
 -- Create UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -31,7 +31,7 @@ EXCEPTION
 END $$;
 
 -- Grant privileges to DLP user
-GRANT ALL PRIVILEGES ON DATABASE cybersentinel_dlp TO dlp_user;
+GRANT ALL PRIVILEGES ON DATABASE cybersentineldlp TO dlp_user;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO dlp_user;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO dlp_user;
 GRANT USAGE ON SCHEMA public TO dlp_user;

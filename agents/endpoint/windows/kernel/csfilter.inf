@@ -64,7 +64,7 @@ csfilter.sys = 1,,
 ;;; --- Strings ---
 
 [Strings]
-ProviderString      = "CyberSentinel"
+ProviderString      = "CyberSentinelDLP"
 ServiceName         = "CyberSentinelFilter"
 ServiceDescription  = "CyberSentinel DLP File System Minifilter"
 DefaultInstance     = "CyberSentinel Default Instance"

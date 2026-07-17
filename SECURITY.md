@@ -47,7 +47,7 @@ Deferred items are tracked at the bottom of this file with a rationale.
 admin password must be supplied via `OPENSEARCH_PASSWORD`. All database
 tier services (postgres, mongo, redis, opensearch) lost their
 `ports: - "…:…"` keys in both prod and deploy compose files. Databases
-are internal-only on the `cybersentinel` / `cybersentinel-net` docker
+are internal-only on the `cybersentineldlp` / `cybersentineldlp-net` docker
 networks. Only `manager` (55000) and `dashboard` (80→3000) remain host-
 exposed. `security_opt: - no-new-privileges:true` added to every
 container.

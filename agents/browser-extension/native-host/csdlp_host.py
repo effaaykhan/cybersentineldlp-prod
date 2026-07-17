@@ -2,7 +2,7 @@
 """
 CyberSentinel DLP — browser native-messaging host.
 
-The browser launches this per the host manifest (com.cybersentinel.dlp) and
+The browser launches this per the host manifest (com.cybersentineldlp.dlp) and
 speaks the Chrome Native Messaging protocol over stdio: each message is a
 little-endian uint32 length followed by that many UTF-8 JSON bytes.
 
@@ -18,8 +18,8 @@ For each "classify" request from the extension it:
 Fail-open: any error yields action=allow so a DLP hiccup never bricks uploads.
 Config (first found wins):
   - env CSDLP_HOST_CONFIG  → path to a JSON file
-  - %ProgramData%\\CyberSentinel\\dlp-host.json  (Windows)
-  - /etc/cybersentinel/dlp-host.json             (Linux/macOS)
+  - %ProgramData%\\CyberSentinelDLP\\dlp-host.json  (Windows)
+  - /etc/cybersentineldlp/dlp-host.json             (Linux/macOS)
 JSON keys: server_url, agent_id, agent_key.  (env overrides:
   CSDLP_SERVER_URL, CSDLP_AGENT_ID, CSDLP_AGENT_KEY)
 
@@ -42,7 +42,7 @@ except Exception:  # requests missing → still speak the protocol, fail open
 
 LOG_PATH = os.environ.get(
     "CSDLP_HOST_LOG",
-    os.path.join(os.environ.get("ProgramData", "/tmp"), "CyberSentinel", "dlp-host.log"),
+    os.path.join(os.environ.get("ProgramData", "/tmp"), "CyberSentinelDLP", "dlp-host.log"),
 )
 
 
@@ -62,8 +62,8 @@ def load_config():
     path = os.environ.get("CSDLP_HOST_CONFIG")
     candidates = [path] if path else []
     candidates += [
-        os.path.join(os.environ.get("ProgramData", ""), "CyberSentinel", "dlp-host.json"),
-        "/etc/cybersentinel/dlp-host.json",
+        os.path.join(os.environ.get("ProgramData", ""), "CyberSentinelDLP", "dlp-host.json"),
+        "/etc/cybersentineldlp/dlp-host.json",
     ]
     for p in candidates:
         if p and os.path.isfile(p):

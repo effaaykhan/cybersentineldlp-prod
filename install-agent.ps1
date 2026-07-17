@@ -9,7 +9,7 @@
 #   2. Cleans previous installs (scheduled task, service, running process).
 #   3. Installs Chocolatey + Tesseract for the screenshot OCR fallback
 #      (only if missing).
-#   4. Downloads cybersentinel_agent.exe from the repo, verifies its
+#   4. Downloads cybersentineldlp_agent.exe from the repo, verifies its
 #      SHA-256 against the sidecar manifest in the repo, and refuses to
 #      install if the hash doesn't match.
 #   5. Optional Authenticode signature check (warn-only until an EV
@@ -24,9 +24,9 @@
 
 # Configuration
 $GITHUB_REPO = "effaaykhan/cybersentineldlp-prod"
-$INSTALL_DIR = "C:\Program Files\CyberSentinel"
-$DATA_DIR = "C:\ProgramData\CyberSentinel"
-$EXE_NAME = "cybersentinel_agent.exe"
+$INSTALL_DIR = "C:\Program Files\CyberSentinelDLP"
+$DATA_DIR = "C:\ProgramData\CyberSentinelDLP"
+$EXE_NAME = "cybersentineldlp_agent.exe"
 $CONFIG_NAME = "agent_config.json"
 $TASK_NAME = "CyberSentinel DLP Agent"
 $RAW_BASE = "https://raw.githubusercontent.com/$GITHUB_REPO/main"
@@ -163,7 +163,7 @@ if ($svc) {
     Stop-Service "CyberSentinelAgent" -Force -ErrorAction SilentlyContinue
     sc.exe delete "CyberSentinelAgent" 2>$null
 }
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 Write-ColorOutput "Previous installations cleaned" -Type "Success"
 Write-Host ""
 
@@ -314,7 +314,7 @@ try {
     $expectedHash = (Invoke-WebRequest -Uri $sumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0].ToUpper()
 } catch {
     Write-ColorOutput "WARNING: no SHA-256 sidecar at $sumUrl — skipping integrity check." -Type "Warning"
-    Write-ColorOutput "  Create one at repo root/.../cybersentinel_agent.exe.sha256 to gate installs." -Type "Warning"
+    Write-ColorOutput "  Create one at repo root/.../cybersentineldlp_agent.exe.sha256 to gate installs." -Type "Warning"
 }
 
 if ($expectedHash) {
@@ -346,8 +346,8 @@ Write-Host ""
 
 # Step 6: Set environment variable
 Write-ColorOutput "Step 6: Setting environment variables..." -Type "Info"
-[Environment]::SetEnvironmentVariable("CYBERSENTINEL_SERVER_URL", $serverURL, "Machine")
-$env:CYBERSENTINEL_SERVER_URL = $serverURL
+[Environment]::SetEnvironmentVariable("CYBERSENTINELDLP_SERVER_URL", $serverURL, "Machine")
+$env:CYBERSENTINELDLP_SERVER_URL = $serverURL
 Write-ColorOutput "Environment variable set" -Type "Success"
 Write-Host ""
 
@@ -453,14 +453,14 @@ try {
     Start-ScheduledTask -TaskName $TASK_NAME
     Start-Sleep -Seconds 5
 
-    $process = Get-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
+    $process = Get-Process -Name "cybersentineldlp_agent" -ErrorAction SilentlyContinue
     if ($process) {
         Write-ColorOutput "Agent is running! (PID: $($process.Id))" -Type "Success"
         Write-ColorOutput "Running in background mode (no visible window)" -Type "Success"
     } else {
         Write-ColorOutput "Agent started, waiting for process to initialize..." -Type "Warning"
         Start-Sleep -Seconds 5
-        $process = Get-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
+        $process = Get-Process -Name "cybersentineldlp_agent" -ErrorAction SilentlyContinue
         if ($process) {
             Write-ColorOutput "Agent is running! (PID: $($process.Id))" -Type "Success"
         } else {
@@ -488,15 +488,15 @@ Write-Host "  Server:          $serverURL"
 Write-Host ""
 Write-Host "Management Commands:" -ForegroundColor Yellow
 Write-Host "  Start Agent:     Start-ScheduledTask -TaskName '$TASK_NAME'"
-Write-Host "  Stop Agent:      Stop-Process -Name 'cybersentinel_agent' -Force"
-Write-Host "  Check Status:    Get-Process -Name 'cybersentinel_agent'"
-Write-Host "  View Logs:       Get-Content '$INSTALL_DIR\cybersentinel_agent.log' -Tail 30"
+Write-Host "  Stop Agent:      Stop-Process -Name 'cybersentineldlp_agent' -Force"
+Write-Host "  Check Status:    Get-Process -Name 'cybersentineldlp_agent'"
+Write-Host "  View Logs:       Get-Content '$INSTALL_DIR\cybersentineldlp_agent.log' -Tail 30"
 Write-Host "  Disable Auto:    Disable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host "  Enable Auto:     Enable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host ""
 Write-Host "Uninstall:" -ForegroundColor Yellow
 Write-Host "  Unregister-ScheduledTask -TaskName '$TASK_NAME' -Confirm:`$false"
-Write-Host "  Stop-Process -Name 'cybersentinel_agent' -Force"
+Write-Host "  Stop-Process -Name 'cybersentineldlp_agent' -Force"
 Write-Host "  Remove-Item '$INSTALL_DIR' -Recurse -Force"
 Write-Host "  Remove-Item '$DATA_DIR' -Recurse -Force"
 Write-Host ""

@@ -57,7 +57,7 @@ async def test_poll_connection_inserts_events(monkeypatch, db_session):
         hashed_password="hashed",
         full_name="Cloud User",
         role=UserRole.ADMIN,
-        organization="CyberSentinel",
+        organization="CyberSentinelDLP",
     )
     db_session.add(user)
     await db_session.flush()

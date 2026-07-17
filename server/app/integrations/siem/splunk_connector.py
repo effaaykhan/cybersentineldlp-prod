@@ -37,7 +37,7 @@ class SplunkConnector(SIEMConnector):
         password: Optional[str] = None,
         use_ssl: bool = True,
         verify_certs: bool = True,
-        source: str = "cybersentinel_dlp",
+        source: str = "cybersentineldlp",
         sourcetype: str = "dlp:event",
         index: str = "dlp",
         **kwargs

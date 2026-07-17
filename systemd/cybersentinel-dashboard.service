@@ -1,17 +1,17 @@
 [Unit]
 Description=CyberSentinel DLP Dashboard (Next.js)
-Documentation=https://github.com/your-org/cybersentinel-dlp
-After=network.target cybersentinel-server.service
-Wants=cybersentinel-server.service
+Documentation=https://github.com/your-org/cybersentineldlp-dlp
+After=network.target cybersentineldlp-server.service
+Wants=cybersentineldlp-server.service
 
 [Service]
 Type=simple
 User=dlp
 Group=dlp
-WorkingDirectory=/opt/cybersentinel-dlp/dashboard
+WorkingDirectory=/opt/cybersentineldlp-dlp/dashboard
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
 Environment="NODE_ENV=production"
-EnvironmentFile=/opt/cybersentinel-dlp/.env
+EnvironmentFile=/opt/cybersentineldlp-dlp/.env
 ExecStart=/usr/bin/npm run start -- -H 0.0.0.0
 
 # Performance tuning
@@ -23,7 +23,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/cybersentinel-dlp/dashboard
+ReadWritePaths=/opt/cybersentineldlp-dlp/dashboard
 
 # Restart policy
 Restart=always
@@ -34,7 +34,7 @@ StartLimitBurst=5
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=cybersentinel-dashboard
+SyslogIdentifier=cybersentineldlp-dashboard
 
 [Install]
 WantedBy=multi-user.target

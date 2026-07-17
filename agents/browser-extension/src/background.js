@@ -2,7 +2,7 @@
  * CyberSentinel DLP - background service worker (MV3).
  *
  * Owns the Native Messaging connection to the endpoint agent
- * ("com.cybersentinel.dlp"). Relays classify requests and returns the agent's
+ * ("com.cybersentineldlp.dlp"). Relays classify requests and returns the agent's
  * allow/alert/block decision. Fail-open everywhere (a DLP outage must never
  * brick the browser) — but every failure is now LOGGED to this service
  * worker's console so setup problems are visible instead of silent.
@@ -15,7 +15,7 @@
  */
 "use strict";
 
-const NATIVE_HOST = "com.cybersentinel.dlp";
+const NATIVE_HOST = "com.cybersentineldlp.dlp";
 const AGENT_TIMEOUT_MS = 7000;
 
 function log(...a) { console.log("[CS-DLP]", ...a); }

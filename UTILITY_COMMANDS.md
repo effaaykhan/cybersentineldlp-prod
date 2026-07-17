@@ -10,7 +10,7 @@ This file contains useful commands for managing and testing the CyberSentinel DL
 ```bash
 cd /home/vansh/Code/Data-Loss-Prevention
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp --eval "const before = db.dlp_events.countDocuments({}); print('Events before: ' + before); const result = db.dlp_events.deleteMany({}); print('Deleted: ' + result.deletedCount); const after = db.dlp_events.countDocuments({}); print('Events after: ' + after);"
+docker exec cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp --eval "const before = db.dlp_events.countDocuments({}); print('Events before: ' + before); const result = db.dlp_events.deleteMany({}); print('Deleted: ' + result.deletedCount); const after = db.dlp_events.countDocuments({}); print('Events after: ' + after);"
 ```
 
 **What it does:**
@@ -24,21 +24,21 @@ docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --a
 ```bash
 cd /home/vansh/Code/Data-Loss-Prevention
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp --eval "print('Total events:', db.dlp_events.countDocuments({})); print('Windows agent events:', db.dlp_events.countDocuments({agent_id: 'windows-agent-001'})); print('Linux agent events:', db.dlp_events.countDocuments({agent_id: {$ne: 'windows-agent-001'}}))"
+docker exec cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp --eval "print('Total events:', db.dlp_events.countDocuments({})); print('Windows agent events:', db.dlp_events.countDocuments({agent_id: 'windows-agent-001'})); print('Linux agent events:', db.dlp_events.countDocuments({agent_id: {$ne: 'windows-agent-001'}}))"
 ```
 
 ### View Recent Events
 ```bash
 cd /home/vansh/Code/Data-Loss-Prevention
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp --eval "db.dlp_events.find({}).sort({timestamp: -1}).limit(10).forEach(e => print(JSON.stringify(e, null, 2)))"
+docker exec cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp --eval "db.dlp_events.find({}).sort({timestamp: -1}).limit(10).forEach(e => print(JSON.stringify(e, null, 2)))"
 ```
 
 ### View Windows Agent Events Only
 ```bash
 cd /home/vansh/Code/Data-Loss-Prevention
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp --eval "db.dlp_events.find({agent_id: 'windows-agent-001'}).sort({timestamp: -1}).limit(5).forEach(e => print(JSON.stringify(e, null, 2)))"
+docker exec cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp --eval "db.dlp_events.find({agent_id: 'windows-agent-001'}).sort({timestamp: -1}).limit(5).forEach(e => print(JSON.stringify(e, null, 2)))"
 ```
 
 ---
@@ -89,7 +89,7 @@ pkill -f agent.py
 
 ### Check Agent Logs (Linux)
 ```bash
-tail -f ~/cybersentinel_agent.log
+tail -f ~/cybersentineldlp_agent.log
 ```
 
 ---
@@ -145,14 +145,14 @@ docker compose run --rm manager python init_db.py
 
 ### Access PostgreSQL
 ```bash
-docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp
+docker compose exec postgres psql -U dlp_user -d cybersentineldlp
 ```
 
 ### Access MongoDB Shell
 ```bash
 cd /home/vansh/Code/Data-Loss-Prevention
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec -it cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp
+docker exec -it cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp
 ```
 
 ---
@@ -176,7 +176,7 @@ docker compose run --rm manager python init_db.py
 
 # 5. Clear events
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp --eval "db.dlp_events.deleteMany({})"
+docker exec cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp --eval "db.dlp_events.deleteMany({})"
 
 # 6. Start Linux agent (in separate terminal)
 cd /home/vansh/Code/Data-Loss-Prevention/agents/endpoint/linux
@@ -187,7 +187,7 @@ echo "SSN: 123-45-6789" > /tmp/test.txt
 
 # 8. Check events
 MONGODB_PASSWORD=$(grep "^MONGODB_PASSWORD=" .env | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-docker exec cybersentinel-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentinel_dlp --eval "print('Events:', db.dlp_events.countDocuments({}))"
+docker exec cybersentineldlp-mongodb mongosh -u dlp_user -p "$MONGODB_PASSWORD" --authenticationDatabase admin cybersentineldlp --eval "print('Events:', db.dlp_events.countDocuments({}))"
 ```
 
 ---

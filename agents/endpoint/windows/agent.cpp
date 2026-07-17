@@ -4,7 +4,7 @@
  * Monitors file operations, clipboard, and USB devices for data loss prevention
  * 
  * Build Instructions (MinGW):
- * g++ -std=c++17 -O2 agent.cpp -o cybersentinel_agent.exe -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lws2_32 -static
+ * g++ -std=c++17 -O2 agent.cpp -o cybersentineldlp_agent.exe -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lws2_32 -static
  * 
  * Build Instructions (MSVC):
  * cl.exe /EHsc /std:c++17 /O2 agent.cpp /link winhttp.lib wbemuuid.lib ole32.lib oleaut32.lib user32.lib ws2_32.lib
@@ -447,9 +447,9 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
         const size_t MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
         
     public:
-        Logger(const std::string& filename = "cybersentinel_agent.log") {
+        Logger(const std::string& filename = "cybersentineldlp_agent.log") {
             // Check if custom log directory is specified in environment
-            const char* envLogDir = std::getenv("CYBERSENTINEL_LOG_DIR");
+            const char* envLogDir = std::getenv("CYBERSENTINELDLP_LOG_DIR");
             std::string logDir = envLogDir ? envLogDir : "";
             
             if (!logDir.empty()) {
@@ -632,7 +632,7 @@ void Log(const std::string& level, const std::string& message) {
     private:
         void LoadDefaults() {
             // Default server URL: check environment variable, then use localhost
-            const char* envUrl = std::getenv("CYBERSENTINEL_SERVER_URL");
+            const char* envUrl = std::getenv("CYBERSENTINELDLP_SERVER_URL");
             serverUrl = envUrl ? envUrl : "http://localhost:55000/api/v1";
             
             // Generate unique agent ID
@@ -700,7 +700,7 @@ void Log(const std::string& level, const std::string& message) {
                     serverUrl = extractedUrl;
                 } else {
                     // Fallback to environment or default
-                    const char* envUrl = std::getenv("CYBERSENTINEL_SERVER_URL");
+                    const char* envUrl = std::getenv("CYBERSENTINELDLP_SERVER_URL");
                     serverUrl = envUrl ? envUrl : "http://localhost:55000/api/v1";
                 }
                 
@@ -3226,10 +3226,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      
      std::string PolicyCachePath() const {
          // Same placement rule as the log and the event spool.
-         const char* envLogDir = std::getenv("CYBERSENTINEL_LOG_DIR");
+         const char* envLogDir = std::getenv("CYBERSENTINELDLP_LOG_DIR");
          std::string dir = envLogDir ? envLogDir : "";
-         return dir.empty() ? std::string("cybersentinel_policies.cache")
-                            : dir + "\\cybersentinel_policies.cache";
+         return dir.empty() ? std::string("cybersentineldlp_policies.cache")
+                            : dir + "\\cybersentineldlp_policies.cache";
      }
 
      void SavePolicyBundleToCache(const std::string& bundleJson) {
@@ -6240,10 +6240,10 @@ if (shouldMonitor) {
      std::string SpoolFilePath() const {
          // Same placement rule as the log file, so everything the agent writes
          // lives together (see Logger).
-         const char* envLogDir = std::getenv("CYBERSENTINEL_LOG_DIR");
+         const char* envLogDir = std::getenv("CYBERSENTINELDLP_LOG_DIR");
          std::string dir = envLogDir ? envLogDir : "";
-         return dir.empty() ? std::string("cybersentinel_events.spool")
-                            : dir + "\\cybersentinel_events.spool";
+         return dir.empty() ? std::string("cybersentineldlp_events.spool")
+                            : dir + "\\cybersentineldlp_events.spool";
      }
 
      // One JSON object per line. JsonBuilder::EscapeJson turns newlines into
@@ -7961,15 +7961,15 @@ void HideConsoleWindow() {
 }
 
 void ShowUsage() {
-    std::cout << "Usage: cybersentinel_agent.exe [OPTIONS]\n\n";
+    std::cout << "Usage: cybersentineldlp_agent.exe [OPTIONS]\n\n";
     std::cout << "Options:\n";
     std::cout << "  -background, --background, -bg, --bg, bg\n";
     std::cout << "                        Run agent in background mode (no console output)\n";
     std::cout << "  -h, --help            Show this help message\n\n";
     std::cout << "Examples:\n";
-    std::cout << "  cybersentinel_agent.exe\n";
-    std::cout << "  cybersentinel_agent.exe -background\n";
-    std::cout << "  cybersentinel_agent.exe --bg\n\n";
+    std::cout << "  cybersentineldlp_agent.exe\n";
+    std::cout << "  cybersentineldlp_agent.exe -background\n";
+    std::cout << "  cybersentineldlp_agent.exe --bg\n\n";
 }
  
 int main(int argc, char* argv[]) {
@@ -7995,13 +7995,13 @@ int main(int argc, char* argv[]) {
         std::cout << "============================================================\n\n";
         
         // Check for server URL environment variable
-        const char* envUrl = std::getenv("CYBERSENTINEL_SERVER_URL");
+        const char* envUrl = std::getenv("CYBERSENTINELDLP_SERVER_URL");
         if (envUrl) {
             std::cout << "Using server URL from environment: " << envUrl << "\n";
         } else {
             std::cout << "Using default server URL: http://localhost:55000/api/v1\n";
             std::cout << "To change server URL, set environment variable:\n";
-            std::cout << "  set CYBERSENTINEL_SERVER_URL=http://your-server:port/api/v1\n\n";
+            std::cout << "  set CYBERSENTINELDLP_SERVER_URL=http://your-server:port/api/v1\n\n";
         }
     }
     

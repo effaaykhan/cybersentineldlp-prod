@@ -227,7 +227,7 @@ class SyslogConnector(SIEMConnector):
         name = self._event_name(f)
         header = "|".join([
             "CEF:0",
-            "CyberSentinel",
+            "CyberSentinelDLP",
             "DLP",
             "2.0.0",
             self._cef_hdr_escape(sig),
@@ -273,7 +273,7 @@ class SyslogConnector(SIEMConnector):
 
         event_id = str(dlp.get("classification_type") or f.get("event_type") or "dlp_event")
         # LEEF 2.0 header with explicit tab delimiter marker: LEEF:2.0|...|<TAB>
-        header = "|".join(["LEEF:2.0", "CyberSentinel", "DLP", "2.0.0",
+        header = "|".join(["LEEF:2.0", "CyberSentinelDLP", "DLP", "2.0.0",
                            event_id.replace("|", "_"), "0x09"])
 
         attrs = [

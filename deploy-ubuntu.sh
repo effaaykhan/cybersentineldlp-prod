@@ -187,19 +187,19 @@ CORS_ORIGINS=http://localhost:3000,http://0.0.0.0:3000,http://$server_ip:3000
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432
 POSTGRES_USER=dlp_user
-POSTGRES_DB=cybersentinel_dlp
+POSTGRES_DB=cybersentineldlp
 
 MONGODB_HOST=mongodb
 MONGODB_PORT=27017
 MONGODB_USER=dlp_user
-MONGODB_DB=cybersentinel_dlp
+MONGODB_DB=cybersentineldlp
 
 REDIS_HOST=redis
 REDIS_PORT=6379
 
 # Logging
 LOG_LEVEL=INFO
-LOG_FILE_PATH=/var/log/cybersentinel
+LOG_FILE_PATH=/var/log/cybersentineldlp
 
 # Quarantine
 QUARANTINE_ENABLED=true
@@ -243,13 +243,13 @@ configure_firewall() {
 create_directories() {
     log_info "Creating required directories..."
 
-    mkdir -p /var/log/cybersentinel
+    mkdir -p /var/log/cybersentineldlp
     mkdir -p /var/quarantine/dlp
     mkdir -p /backup/postgres
     mkdir -p /backup/mongodb
 
     if [ -n "$SUDO_USER" ]; then
-        chown -R $SUDO_USER:$SUDO_USER /var/log/cybersentinel /var/quarantine/dlp
+        chown -R $SUDO_USER:$SUDO_USER /var/log/cybersentineldlp /var/quarantine/dlp
     fi
 
     log_success "Directories created"
@@ -332,13 +332,13 @@ verify_deployment() {
 setup_backup() {
     log_info "Setting up automatic backups..."
 
-    backup_script="/usr/local/bin/cybersentinel-backup.sh"
+    backup_script="/usr/local/bin/cybersentineldlp-backup.sh"
 
     cat > $backup_script << 'EOF'
 #!/bin/bash
 BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
-docker exec cybersentinel-postgres pg_dump -U dlp_user cybersentinel_dlp | gzip > /backup/postgres/backup_${BACKUP_DATE}.sql.gz
-docker exec cybersentinel-mongodb mongodump --archive=/backup/mongodb/backup_${BACKUP_DATE}.archive
+docker exec cybersentineldlp-postgres pg_dump -U dlp_user cybersentineldlp | gzip > /backup/postgres/backup_${BACKUP_DATE}.sql.gz
+docker exec cybersentineldlp-mongodb mongodump --archive=/backup/mongodb/backup_${BACKUP_DATE}.archive
 # Delete backups older than 30 days
 find /backup/postgres -name "*.sql.gz" -mtime +30 -delete
 find /backup/mongodb -name "*.archive" -mtime +30 -delete

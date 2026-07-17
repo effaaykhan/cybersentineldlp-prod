@@ -120,7 +120,7 @@ public:
     static constexpr size_t MAX_BUNDLE_HISTORY = 5;
 
     ProductionPolicyCache(
-        const std::string& cacheDir = "C:\\ProgramData\\CyberSentinel\\cache",
+        const std::string& cacheDir = "C:\\ProgramData\\CyberSentinelDLP\\cache",
         PolicyEngine* engine = nullptr
     ) : cacheDir_(cacheDir), engine_(engine) {
         /* Ensure cache directory exists */

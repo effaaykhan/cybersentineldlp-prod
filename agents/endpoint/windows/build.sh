@@ -15,9 +15,9 @@ if [ ! -f "agent.cpp" ]; then
 fi
 
 # Backup old executable if it exists
-if [ -f "cybersentinel_agent.exe" ]; then
+if [ -f "cybersentineldlp_agent.exe" ]; then
     echo "Backing up existing executable..."
-    cp cybersentinel_agent.exe cybersentinel_agent.exe.backup.$(date +%Y%m%d_%H%M%S)
+    cp cybersentineldlp_agent.exe cybersentineldlp_agent.exe.backup.$(date +%Y%m%d_%H%M%S)
     echo "✓ Backup created"
     echo ""
 fi
@@ -29,7 +29,7 @@ echo ""
 # Compile the agent
 g++ -std=c++17 -O2 \
     agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
-    -o cybersentinel_agent.exe \
+    -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \
     -luiautomationcore -lpsapi -static
@@ -43,14 +43,14 @@ if [ $? -eq 0 ]; then
     echo ""
 
     # Show file size (pure shell - no bc dependency)
-    SIZE=$(stat -c%s cybersentinel_agent.exe 2>/dev/null || stat -f%z cybersentinel_agent.exe 2>/dev/null)
+    SIZE=$(stat -c%s cybersentineldlp_agent.exe 2>/dev/null || stat -f%z cybersentineldlp_agent.exe 2>/dev/null)
     if [ -n "$SIZE" ]; then
         SIZE_MB=$(( SIZE / 1024 / 1024 ))
         SIZE_KB_REM=$(( (SIZE / 1024) % 1024 ))
-        printf "Executable: cybersentinel_agent.exe\n"
+        printf "Executable: cybersentineldlp_agent.exe\n"
         printf "Size: %d.%02d MB (%d bytes)\n" "$SIZE_MB" "$(( SIZE_KB_REM * 100 / 1024 ))" "$SIZE"
     else
-        echo "Executable: cybersentinel_agent.exe"
+        echo "Executable: cybersentineldlp_agent.exe"
     fi
     echo ""
 
@@ -74,28 +74,28 @@ if [ $? -eq 0 ]; then
     echo "     Stop-ScheduledTask -TaskName \"CyberSentinel DLP Agent\""
     echo ""
     echo "  2. Kill any remaining agent process:"
-    echo "     Stop-Process -Name \"cybersentinel_agent\" -Force -ErrorAction SilentlyContinue"
+    echo "     Stop-Process -Name \"cybersentineldlp_agent\" -Force -ErrorAction SilentlyContinue"
     echo ""
     echo "  3. Verify no agent process is running:"
-    echo "     Get-Process -Name \"cybersentinel_agent\" -ErrorAction SilentlyContinue"
+    echo "     Get-Process -Name \"cybersentineldlp_agent\" -ErrorAction SilentlyContinue"
     echo "     (output should be empty)"
     echo ""
     echo "  4. Backup the current binary:"
-    echo "     Copy-Item \"C:\\Program Files\\CyberSentinel\\cybersentinel_agent.exe\" \`"
-    echo "               \"C:\\Program Files\\CyberSentinel\\cybersentinel_agent.exe.backup\" -Force"
+    echo "     Copy-Item \"C:\\Program Files\\CyberSentinelDLP\\cybersentineldlp_agent.exe\" \`"
+    echo "               \"C:\\Program Files\\CyberSentinelDLP\\cybersentineldlp_agent.exe.backup\" -Force"
     echo ""
     echo "  5. Copy the newly built binary into place:"
-    echo "     Copy-Item \"$(pwd)/cybersentinel_agent.exe\" \`"
-    echo "               \"C:\\Program Files\\CyberSentinel\\cybersentinel_agent.exe\" -Force"
+    echo "     Copy-Item \"$(pwd)/cybersentineldlp_agent.exe\" \`"
+    echo "               \"C:\\Program Files\\CyberSentinelDLP\\cybersentineldlp_agent.exe\" -Force"
     echo ""
     echo "  6. (Optional) Ensure heartbeat_interval is set to 3 in the config:"
-    echo "     notepad \"C:\\Program Files\\CyberSentinel\\agent_config.json\""
+    echo "     notepad \"C:\\Program Files\\CyberSentinelDLP\\agent_config.json\""
     echo ""
     echo "  7. Start the scheduled task:"
     echo "     Start-ScheduledTask -TaskName \"CyberSentinel DLP Agent\""
     echo ""
     echo "  8. Verify exactly ONE process is running:"
-    echo "     Get-Process -Name \"cybersentinel_agent\""
+    echo "     Get-Process -Name \"cybersentineldlp_agent\""
     echo ""
 else
     echo ""

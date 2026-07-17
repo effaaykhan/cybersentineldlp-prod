@@ -198,7 +198,7 @@ class SIEMConnector(ABC):
             "timestamp": event.get("timestamp", datetime.utcnow().isoformat()),
             "event_id": event.get("event_id"),
             "event_type": "dlp_incident",
-            "source": "cybersentinel_dlp",
+            "source": "cybersentineldlp",
             "severity": event.get("severity", "medium"),
 
             # Agent information

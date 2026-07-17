@@ -472,7 +472,7 @@ function CreateUserDialog({
               className="input"
               value={form.email}
               onChange={(e) => update('email', e.target.value)}
-              placeholder="user@cybersentinel.siem"
+              placeholder="user@cybersentineldlp.siem"
             />
           </Field>
           <Field label="Username (display alias)">

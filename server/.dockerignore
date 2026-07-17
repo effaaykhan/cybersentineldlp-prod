@@ -3,10 +3,19 @@
 .gitignore
 
 # Python
+# NOTE the **/ prefixes: .dockerignore patterns are matched against the path
+# relative to the build context root, so a bare "__pycache__/" only excluded the
+# top-level one and every nested app/**/__pycache__ was still copied into the
+# image — shipping stale bytecode (65 files, compiled by a different Python than
+# the image runs, so silently dead weight carrying outdated source strings).
 __pycache__/
+**/__pycache__/
 *.pyc
+**/*.pyc
 *.pyo
+**/*.pyo
 *.pyd
+**/*.pyd
 .Python
 env/
 venv/

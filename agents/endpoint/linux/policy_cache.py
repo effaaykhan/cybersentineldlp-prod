@@ -65,7 +65,7 @@ class PolicyCache:
     3. Offline event queue: events to send when backend is available
     """
 
-    def __init__(self, cache_dir: str = "/opt/cybersentinel/cache",
+    def __init__(self, cache_dir: str = "/opt/cybersentineldlp/cache",
                  max_decisions: int = 10000, max_offline_queue: int = 50000):
         self._cache_dir = Path(cache_dir)
         self._cache_dir.mkdir(parents=True, exist_ok=True)

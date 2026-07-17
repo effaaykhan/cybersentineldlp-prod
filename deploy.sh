@@ -168,7 +168,7 @@ start() {
     print_info "API documentation at: http://$HOST_IP:8000/api/v1/docs"
     echo ""
     print_info "Default credentials:"
-    echo "  Email: admin@cybersentinel.local"
+    echo "  Email: admin@cybersentineldlp.local"
     echo "  Password: ChangeMe123!"
     echo ""
     print_warning "Please change the default password after first login!"
@@ -228,7 +228,7 @@ backup() {
 
     BACKUP_DIR="backups"
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    BACKUP_FILE="$BACKUP_DIR/cybersentinel_backup_$TIMESTAMP.tar.gz"
+    BACKUP_FILE="$BACKUP_DIR/cybersentineldlp_backup_$TIMESTAMP.tar.gz"
 
     mkdir -p "$BACKUP_DIR"
 

@@ -26,7 +26,7 @@ The manager now generates a **random 20-character password, unique per
 deployment**, using `secrets` (CSPRNG). It is logged exactly once on first boot:
 
 ```bash
-docker logs cybersentinel-manager 2>&1 | grep generated_password
+docker logs cybersentineldlp-manager 2>&1 | grep generated_password
 ```
 
 The generator guarantees the app's own policy (upper + lower + digit + symbol,
@@ -98,7 +98,7 @@ data left the machine:
 ### Outage resilience (endpoint agent)
 
 - **Offline event spool** (`ba70719`) — events raised while the server is
-  unreachable are written to `cybersentinel_events.spool` (16 MB cap) and
+  unreachable are written to `cybersentineldlp_events.spool` (16 MB cap) and
   replayed on reconnect, so an enforcement action always leaves an audit record.
 - **Bounded HTTP timeouts** (`ba70719`) — added `WinHttpSetTimeouts` (connect 5 s,
   receive 60 s); previously a downed server stalled every USB copy for 60 s.
@@ -370,7 +370,7 @@ gained `tesseract-ocr`, `tesseract-ocr-eng`, `poppler-utils` (system) and
   - **Windows:** `scripts/install_windows_agent.ps1` clones the agent, builds a venv, templates config, and registers a SYSTEM AtStartup Scheduled Task with restart-on-failure. Docs include usage, args, and troubleshooting.
   - **Linux:** `scripts/install_linux_agent.sh` clones the agent, builds a venv, templates config, and installs a systemd service (boot autostart, restart on failure).
 - Docs: `scripts/README.md` updated with arguments, examples, and post-install commands.
-- Hardening: Linux installer skips empty configs, handles `--force` clean re-provisioning, and notes agent log location (`/root/cybersentinel_agent.log` by default).
+- Hardening: Linux installer skips empty configs, handles `--force` clean re-provisioning, and notes agent log location (`/root/cybersentineldlp_agent.log` by default).
 - Outcome: Both agents verified to auto-start after reboot; Linux logs surface 404 if manager is down (expected until registration).
 
 ### 16. India-Specific Detection & Clipboard Policy Alignment
@@ -645,12 +645,12 @@ gained `tesseract-ocr`, `tesseract-ocr-eng`, `poppler-utils` (system) and
   - All values configurable via `.env` file
 
 - **`agents/endpoint/linux/agent.py`**: Added environment variable support
-  - Checks `CYBERSENTINEL_SERVER_URL` environment variable first
+  - Checks `CYBERSENTINELDLP_SERVER_URL` environment variable first
   - Falls back to config file, then defaults to `http://localhost:55000/api/v1`
   - Environment variable takes precedence over config file
 
 - **`agents/endpoint/windows/agent.py`**: Added environment variable support
-  - Checks `CYBERSENTINEL_SERVER_URL` environment variable first
+  - Checks `CYBERSENTINELDLP_SERVER_URL` environment variable first
   - Falls back to config file, then defaults to `http://localhost:55000/api/v1`
   - Environment variable expansion for `%USERNAME%` in monitored paths (via `os.path.expandvars()`)
   - Environment variable takes precedence over config file
@@ -810,8 +810,8 @@ gained `tesseract-ocr`, `tesseract-ocr-eng`, `poppler-utils` (system) and
 - **`agents/endpoint/linux/agent.py`**: Multiple fixes
   - Updated default `server_url` to use correct port (55000) and path (`/api/v1`)
   - Changed `send_heartbeat` from `POST` to `PUT` to match server endpoint
-  - Fixed log file location to use `~/cybersentinel_agent.log` (user-writable)
-  - Improved config loading with fallback to local config if `/etc/cybersentinel` not writable
+  - Fixed log file location to use `~/cybersentineldlp_agent.log` (user-writable)
+  - Improved config loading with fallback to local config if `/etc/cybersentineldlp` not writable
   - Better error handling for directory creation
 
 - **`agents/endpoint/linux/agent_config.json`**: Updated configuration

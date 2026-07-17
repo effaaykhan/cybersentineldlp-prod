@@ -22,25 +22,25 @@ pip3 install -r requirements.txt -q
 
 # Create installation directory
 echo "[2/5] Creating installation directory..."
-mkdir -p /opt/cybersentinel
-mkdir -p /etc/cybersentinel
+mkdir -p /opt/cybersentineldlp
+mkdir -p /etc/cybersentineldlp
 mkdir -p /var/log
 
 # Copy files
 echo "[3/5] Installing agent..."
-cp agent.py /opt/cybersentinel/
-cp agent_config.json /etc/cybersentinel/
-chmod +x /opt/cybersentinel/agent.py
+cp agent.py /opt/cybersentineldlp/
+cp agent_config.json /etc/cybersentineldlp/
+chmod +x /opt/cybersentineldlp/agent.py
 
 # Install systemd service
 echo "[4/5] Installing systemd service..."
-cp cybersentinel-agent.service /etc/systemd/system/
+cp cybersentineldlp-agent.service /etc/systemd/system/
 systemctl daemon-reload
 
 # Enable and start service
 echo "[5/5] Starting agent..."
-systemctl enable cybersentinel-agent
-systemctl start cybersentinel-agent
+systemctl enable cybersentineldlp-agent
+systemctl start cybersentineldlp-agent
 
 echo ""
 echo "============================================"
@@ -48,14 +48,14 @@ echo "✓ Installation complete!"
 echo "============================================"
 echo ""
 echo "Agent Status:"
-systemctl status cybersentinel-agent --no-pager -l
+systemctl status cybersentineldlp-agent --no-pager -l
 echo ""
 echo "Useful Commands:"
-echo "  View logs:    journalctl -u cybersentinel-agent -f"
-echo "  Stop agent:   sudo systemctl stop cybersentinel-agent"
-echo "  Start agent:  sudo systemctl start cybersentinel-agent"
-echo "  Agent status: sudo systemctl status cybersentinel-agent"
+echo "  View logs:    journalctl -u cybersentineldlp-agent -f"
+echo "  Stop agent:   sudo systemctl stop cybersentineldlp-agent"
+echo "  Start agent:  sudo systemctl start cybersentineldlp-agent"
+echo "  Agent status: sudo systemctl status cybersentineldlp-agent"
 echo ""
-echo "Configuration: /etc/cybersentinel/agent_config.json"
-echo "Logs: /var/log/cybersentinel_agent.log"
+echo "Configuration: /etc/cybersentineldlp/agent_config.json"
+echo "Logs: /var/log/cybersentineldlp_agent.log"
 echo ""

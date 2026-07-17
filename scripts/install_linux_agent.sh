@@ -5,13 +5,13 @@ set -euo pipefail
 # Flow: clone -> venv -> deps -> config -> systemd service (boot autostart)
 
 MANAGER_URL="${MANAGER_URL:-http://localhost:55000/api/v1}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/cybersentinel/agent}"
-CONFIG_DIR="${CONFIG_DIR:-/etc/cybersentinel}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/cybersentineldlp/agent}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/cybersentineldlp}"
 VENV_DIR="${VENV_DIR:-}"
-REPO_URL="${REPO_URL:-https://github.com/cybersentinel-06/Data-Loss-Prevention.git}"
+REPO_URL="${REPO_URL:-https://github.com/cybersentineldlp-06/Data-Loss-Prevention.git}"
 BRANCH="${BRANCH:-main}"
 REF="${REF:-}"
-SERVICE_NAME="${SERVICE_NAME:-cybersentinel-agent}"
+SERVICE_NAME="${SERVICE_NAME:-cybersentineldlp-agent}"
 LOG_PATH="${LOG_PATH:-}"
 NO_START=0
 FORCE=0
@@ -20,14 +20,14 @@ usage() {
   cat <<'EOF'
 Usage: install_linux_agent.sh [options]
   --manager-url URL         Manager API base (default: http://localhost:55000/api/v1)
-  --install-dir PATH        Agent install dir (default: /opt/cybersentinel/agent)
-  --config-dir PATH         Config dir (default: /etc/cybersentinel)
+  --install-dir PATH        Agent install dir (default: /opt/cybersentineldlp/agent)
+  --config-dir PATH         Config dir (default: /etc/cybersentineldlp)
   --venv-dir PATH           Virtualenv dir (default: <install-dir>/.venv)
   --repo-url URL            Git repo URL (default: https://github.com/YOUR_ORG/Data-Loss-Prevention.git)
   --branch NAME             Git branch (default: main)
   --ref REF                 Optional commit/tag
-  --service-name NAME       Systemd service name (default: cybersentinel-agent)
-  --log-path PATH           Optional log path (default: <install-dir>/cybersentinel_agent.log)
+  --service-name NAME       Systemd service name (default: cybersentineldlp-agent)
+  --log-path PATH           Optional log path (default: <install-dir>/cybersentineldlp_agent.log)
   --no-start                Register service but do not start
   --force                   Re-clone and overwrite config/venv
   -h, --help                Show this help
@@ -56,12 +56,12 @@ if [[ -z "$VENV_DIR" ]]; then
   VENV_DIR="${INSTALL_DIR}/.venv"
 fi
 if [[ -z "$LOG_PATH" ]]; then
-  LOG_PATH="${INSTALL_DIR}/cybersentinel_agent.log"
+  LOG_PATH="${INSTALL_DIR}/cybersentineldlp_agent.log"
 fi
 
 # Prefer env-provided manager URL when caller did not override
-if [[ "$MANAGER_URL" == "http://localhost:55000/api/v1" && -n "${CYBERSENTINEL_SERVER_URL:-}" ]]; then
-  MANAGER_URL="$CYBERSENTINEL_SERVER_URL"
+if [[ "$MANAGER_URL" == "http://localhost:55000/api/v1" && -n "${CYBERSENTINELDLP_SERVER_URL:-}" ]]; then
+  MANAGER_URL="$CYBERSENTINELDLP_SERVER_URL"
 fi
 
 log() { echo "[INFO] $*"; }
@@ -204,7 +204,7 @@ Wants=network.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-Environment=CYBERSENTINEL_SERVER_URL=$MANAGER_URL
+Environment=CYBERSENTINELDLP_SERVER_URL=$MANAGER_URL
 ExecStart=$VENV_PY $INSTALL_DIR/agent.py
 Restart=on-failure
 RestartSec=5

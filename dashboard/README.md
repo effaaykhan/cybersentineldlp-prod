@@ -375,9 +375,9 @@ Proprietary — All rights reserved. See the [LICENSE](../LICENSE) file.
 
 ## Support
 
-- Documentation: [docs.cybersentinel.com](https://docs.cybersentinel.com)
-- Issues: [GitHub Issues](https://github.com/your-org/cybersentinel-dlp/issues)
-- Email: support@cybersentinel.com
+- Documentation: [docs.cybersentineldlp.com](https://docs.cybersentineldlp.com)
+- Issues: [GitHub Issues](https://github.com/your-org/cybersentineldlp-dlp/issues)
+- Email: support@cybersentineldlp.com
 
 ---
 

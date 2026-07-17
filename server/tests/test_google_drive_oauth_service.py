@@ -60,7 +60,7 @@ async def test_google_drive_oauth_flow(monkeypatch, db_session):
         hashed_password="hashed",
         full_name="Drive User",
         role=UserRole.ADMIN,
-        organization="CyberSentinel",
+        organization="CyberSentinelDLP",
     )
     db_session.add(user)
     await db_session.commit()

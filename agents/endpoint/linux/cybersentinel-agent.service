@@ -5,15 +5,15 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/cybersentinel
-ExecStart=/usr/bin/python3 /opt/cybersentinel/agent.py
+WorkingDirectory=/opt/cybersentineldlp
+ExecStart=/usr/bin/python3 /opt/cybersentineldlp/agent.py
 Restart=always
 RestartSec=10
 
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=cybersentinel-dlp
+SyslogIdentifier=cybersentineldlp-dlp
 
 [Install]
 WantedBy=multi-user.target

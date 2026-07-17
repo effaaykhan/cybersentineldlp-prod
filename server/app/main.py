@@ -192,7 +192,7 @@ async def _auto_init_schema_and_admin():
                     )
                 else:
                     # Logged once, on first boot only. Retrieve with:
-                    #   docker logs cybersentinel-manager 2>&1 | grep generated_password
+                    #   docker logs cybersentineldlp-manager 2>&1 | grep generated_password
                     logger.warning(
                         "DEFAULT ADMIN CREATED — record this password now and change it after "
                         "first login; it is shown only once",

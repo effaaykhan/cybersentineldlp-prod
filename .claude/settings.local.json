@@ -23,7 +23,7 @@
       "Bash(while ! docker compose ps manager)",
       "Bash(curl -s -X POST http://localhost:55000/api/v1/classification/classify -H \"Content-Type: application/json\" -d '{\"\"\"\"content\"\"\"\": \"\"\"\"test data 123-45-6789\"\"\"\"}' 2)",
       "Bash(1 -v)",
-      "Bash(__NEW_LINE_4fb85d48f7407826__ docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp -c \":*)",
+      "Bash(__NEW_LINE_4fb85d48f7407826__ docker compose exec postgres psql -U dlp_user -d cybersentineldlp -c \":*)",
       "Bash(wc:*)",
       "Bash(/tmp/dlp_server_analysis.txt:*)",
       "Read(//tmp/**)",

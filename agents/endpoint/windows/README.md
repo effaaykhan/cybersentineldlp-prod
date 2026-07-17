@@ -78,7 +78,7 @@ The script will:
 
 3. **Run the agent**:
    ```powershell
-   .\cybersentinel_agent.exe
+   .\cybersentineldlp_agent.exe
    ```
 
 ## 🏗️ Building from Source
@@ -97,7 +97,7 @@ pacman -S mingw-w64-x86_64-gcc
 ### 3. Compile the Agent
 
 ```bash
-g++ -std=c++23 -O2 agent.cpp -o cybersentinel_agent.exe \
+g++ -std=c++23 -O2 agent.cpp -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
     -lws2_32 -lsetupapi -ladvapi32 -static
 ```
@@ -129,17 +129,17 @@ see the "Re-install / update an existing endpoint" section of
 ## 🗑️ Uninstallation
 
 ```powershell
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "CyberSentinel DLP Agent" -Confirm:$false
-Remove-Item "C:\Program Files\CyberSentinel" -Recurse -Force
-Remove-Item "C:\ProgramData\CyberSentinel" -Recurse -Force
+Remove-Item "C:\Program Files\CyberSentinelDLP" -Recurse -Force
+Remove-Item "C:\ProgramData\CyberSentinelDLP" -Recurse -Force
 ```
 
 ## 📁 File Structure
 
 ```
-C:\Program Files\CyberSentinel\
-├── cybersentinel_agent.exe    # Main agent executable
+C:\Program Files\CyberSentinelDLP\
+├── cybersentineldlp_agent.exe    # Main agent executable
 ├── agent_config.json          # Configuration file
 ├── nssm.exe                   # Service manager
 ├── service.log                # Agent logs
@@ -183,12 +183,12 @@ Edit `agent_config.json` to configure the agent:
 
 1. Check if the executable exists:
    ```powershell
-   Test-Path "C:\Program Files\CyberSentinel\cybersentinel_agent.exe"
+   Test-Path "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe"
    ```
 
 2. Verify configuration file:
    ```powershell
-   Get-Content "C:\Program Files\CyberSentinel\agent_config.json"
+   Get-Content "C:\Program Files\CyberSentinelDLP\agent_config.json"
    ```
 
 

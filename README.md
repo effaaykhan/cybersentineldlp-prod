@@ -42,7 +42,7 @@ admin roles):
 ```bash
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
-docker exec cybersentinel-manager alembic upgrade head
+docker exec cybersentineldlp-manager alembic upgrade head
 ```
 
 #### Verify
@@ -114,7 +114,7 @@ done   # paste the output into .env
 mkdir -p certs
 openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
   -keyout certs/privkey.pem -out certs/fullchain.pem \
-  -subj "/CN=cybersentinel-dlp"
+  -subj "/CN=cybersentineldlp-dlp"
 
 # 4. Start the stack (pulls pre-built images from GHCR)
 docker compose -f docker-compose.prod.yml pull
@@ -124,7 +124,7 @@ docker compose -f docker-compose.prod.yml up -d
 #    full schema at startup, so DON'T run `alembic upgrade head` here — it errors
 #    with "type userrole already exists". Instead stamp the DB as current so
 #    future upgrades apply cleanly:
-docker exec cybersentinel-manager alembic stamp head
+docker exec cybersentineldlp-manager alembic stamp head
 ```
 
 > **Upgrading an existing install** is the opposite: run `alembic upgrade head`
@@ -134,7 +134,7 @@ docker exec cybersentinel-manager alembic stamp head
 ```bash
 # 6. Retrieve the admin password. On first boot the manager seeds user `admin`
 #    with a RANDOM password, unique to this deployment, logged exactly once:
-docker logs cybersentinel-manager 2>&1 | grep generated_password
+docker logs cybersentineldlp-manager 2>&1 | grep generated_password
 ```
 
 **First login:** username **`admin`**, with the password from step 6. Change it
@@ -159,7 +159,7 @@ curl -f http://localhost:55000/health             # -> {"status":"healthy"}
 
 Confirm OCR is active in the pulled image (used for scanned PDFs / images):
 ```bash
-docker exec cybersentinel-manager tesseract --version   # prints "tesseract 5.x"
+docker exec cybersentineldlp-manager tesseract --version   # prints "tesseract 5.x"
 ```
 If that command is **not found**, you are on an image built before OCR shipped —
 `docker compose -f docker-compose.prod.yml pull` again to get the current image.
@@ -204,7 +204,7 @@ Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 ```
 ```powershell
-Stop-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -ErrorAction SilentlyContinue
 ```
 
 ### Linux Agent
@@ -214,16 +214,16 @@ Stop-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
 ```bash
 cd agents/endpoint/linux
 pip install -r requirements.txt
-export CYBERSENTINEL_SERVER_URL=http://<SERVER_IP>:55000/api/v1
+export CYBERSENTINELDLP_SERVER_URL=http://<SERVER_IP>:55000/api/v1
 python agent.py
 ```
 
 Install as systemd service:
 
 ```bash
-sudo cp systemd/cybersentinel-agent.service /etc/systemd/system/
-sudo systemctl enable cybersentinel-agent
-sudo systemctl start cybersentinel-agent
+sudo cp systemd/cybersentineldlp-agent.service /etc/systemd/system/
+sudo systemctl enable cybersentineldlp-agent
+sudo systemctl start cybersentineldlp-agent
 ```
 
 ### Windows Agent Compilation (from source)
@@ -243,7 +243,7 @@ Or compile directly (equivalent to what `build.sh` runs):
 cd agents/endpoint/windows
 g++ -std=c++17 -O2 \
     agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
-    -o cybersentinel_agent.exe \
+    -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \
     -luiautomationcore -lpsapi -static

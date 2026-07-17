@@ -61,21 +61,21 @@ cd /c/path/to/Data-Loss-Prevention/agents/endpoint/windows
 
 ### Step 4: Compile
 ```bash
-x86_64-w64-mingw32-g++ -std=c++17 -O2 agent.cpp -o cybersentinel_agent.exe \
+x86_64-w64-mingw32-g++ -std=c++17 -O2 agent.cpp -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -static
 ```
 
 **Or using the simpler g++ command in MSYS2:**
 ```bash
-g++ -std=c++17 -O2 agent.cpp -o cybersentinel_agent.exe \
+g++ -std=c++17 -O2 agent.cpp -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -static
 ```
 
 ### Step 5: Verify Compilation
 ```bash
-ls -lh cybersentinel_agent.exe
+ls -lh cybersentineldlp_agent.exe
 ```
 
 The executable should be around 3-4 MB.
@@ -96,25 +96,25 @@ The executable should be around 3-4 MB.
 
 2. Kill any remaining agent process:
    ```powershell
-   Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+   Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
    ```
 
 3. Verify no agent process is still running:
    ```powershell
-   Get-Process -Name "cybersentinel_agent" -ErrorAction SilentlyContinue
+   Get-Process -Name "cybersentineldlp_agent" -ErrorAction SilentlyContinue
    # (output should be empty)
    ```
 
 4. Backup old executable:
    ```powershell
-   Copy-Item "C:\Program Files\CyberSentinel\cybersentinel_agent.exe" `
-             "C:\Program Files\CyberSentinel\cybersentinel_agent.exe.backup" -Force
+   Copy-Item "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe" `
+             "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe.backup" -Force
    ```
 
 5. Replace with new executable:
    ```powershell
-   Copy-Item "path\to\cybersentinel_agent.exe" `
-             "C:\Program Files\CyberSentinel\cybersentinel_agent.exe" -Force
+   Copy-Item "path\to\cybersentineldlp_agent.exe" `
+             "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe" -Force
    ```
 
 6. Start the scheduled task:
@@ -124,7 +124,7 @@ The executable should be around 3-4 MB.
 
 7. Verify exactly one agent process is running:
    ```powershell
-   Get-Process -Name "cybersentinel_agent"
+   Get-Process -Name "cybersentineldlp_agent"
    ```
 
 ### Option 2: re-run the canonical one-liner installer
@@ -208,7 +208,7 @@ full walkthrough.
 ### Runtime Errors
 - **API call fails**: Check that DLP server is running and accessible
 - **Agent crashes**: Check Windows Event Viewer → Application logs
-- **No classification logs**: Ensure `CYBERSENTINEL_LOG_DIR` environment variable is set or check current directory for `cybersentinel_agent.log`
+- **No classification logs**: Ensure `CYBERSENTINELDLP_LOG_DIR` environment variable is set or check current directory for `cybersentineldlp_agent.log`
 
 ## Verification
 
@@ -216,7 +216,7 @@ After deployment, verify the new functionality is working:
 
 1. Check agent log for real-time classification calls:
    ```powershell
-   Get-Content "C:\Program Files\CyberSentinel\cybersentinel_agent.log" -Tail 50 | Select-String "Classification"
+   Get-Content "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.log" -Tail 50 | Select-String "Classification"
    ```
 
 2. Check server logs for evaluation API calls:
@@ -239,8 +239,8 @@ If you need to rollback to the previous version:
 
 ```powershell
 Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
-Copy-Item "C:\Program Files\CyberSentinel\cybersentinel_agent.exe.backup" `
-          "C:\Program Files\CyberSentinel\cybersentinel_agent.exe" -Force
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
+Copy-Item "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe.backup" `
+          "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe" -Force
 Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 ```

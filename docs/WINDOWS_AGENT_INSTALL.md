@@ -22,13 +22,13 @@ You should see `{"status":"healthy",...}`.
 Option A -- Copy from this repository:
 
 ```
-agents/endpoint/windows/cybersentinel_agent.exe
+agents/endpoint/windows/cybersentineldlp_agent.exe
 ```
 
 Option B -- Download from the server (if hosted):
 
 ```powershell
-Invoke-WebRequest -Uri "http://<SERVER_IP>:55000/downloads/agent" -OutFile "cybersentinel_agent.exe"
+Invoke-WebRequest -Uri "http://<SERVER_IP>:55000/downloads/agent" -OutFile "cybersentineldlp_agent.exe"
 ```
 
 ## Step 3: Create installation directory
@@ -36,8 +36,8 @@ Invoke-WebRequest -Uri "http://<SERVER_IP>:55000/downloads/agent" -OutFile "cybe
 Open PowerShell as Administrator:
 
 ```powershell
-New-Item -ItemType Directory -Path "C:\Program Files\CyberSentinel" -Force
-Copy-Item cybersentinel_agent.exe "C:\Program Files\CyberSentinel\"
+New-Item -ItemType Directory -Path "C:\Program Files\CyberSentinelDLP" -Force
+Copy-Item cybersentineldlp_agent.exe "C:\Program Files\CyberSentinelDLP\"
 ```
 
 ## Step 4: Create agent configuration
@@ -62,11 +62,11 @@ Copy-Item cybersentinel_agent.exe "C:\Program Files\CyberSentinel\"
     ],
     "file_extensions": [".pdf", ".docx", ".xlsx", ".csv", ".txt", ".json", ".xml", ".sql", ".pem", ".key"]
   },
-  "quarantine_path": "C:\\ProgramData\\CyberSentinel\\quarantine",
-  "log_path": "C:\\ProgramData\\CyberSentinel\\logs",
-  "cache_path": "C:\\ProgramData\\CyberSentinel\\cache"
+  "quarantine_path": "C:\\ProgramData\\CyberSentinelDLP\\quarantine",
+  "log_path": "C:\\ProgramData\\CyberSentinelDLP\\logs",
+  "cache_path": "C:\\ProgramData\\CyberSentinelDLP\\cache"
 }
-"@ | Set-Content "C:\Program Files\CyberSentinel\agent_config.json"
+"@ | Set-Content "C:\Program Files\CyberSentinelDLP\agent_config.json"
 ```
 
 Replace `<SERVER_IP>` with your actual server address.
@@ -74,9 +74,9 @@ Replace `<SERVER_IP>` with your actual server address.
 ## Step 5: Create data directories
 
 ```powershell
-New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\quarantine" -Force
-New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\logs" -Force
-New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinel\cache" -Force
+New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinelDLP\quarantine" -Force
+New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinelDLP\logs" -Force
+New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinelDLP\cache" -Force
 ```
 
 ## Step 6: Register as a Scheduled Task (canonical method)
@@ -93,13 +93,13 @@ If you are registering manually, create a scheduled task named
 system startup with elevated privileges, and auto-restarts on crash.
 
 ```powershell
-$agentExe  = "C:\Program Files\CyberSentinel\cybersentinel_agent.exe"
-$launchVbs = "C:\Program Files\CyberSentinel\launch_agent.vbs"
+$agentExe  = "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe"
+$launchVbs = "C:\Program Files\CyberSentinelDLP\launch_agent.vbs"
 
 # VBScript launcher hides the console window
 @'
 Set objShell = CreateObject("WScript.Shell")
-objShell.Run """C:\Program Files\CyberSentinel\cybersentinel_agent.exe""", 0, False
+objShell.Run """C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe""", 0, False
 '@ | Out-File -FilePath $launchVbs -Encoding ASCII
 
 $action    = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$launchVbs`""
@@ -126,10 +126,10 @@ Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 Verify the process is running:
 
 ```powershell
-Get-Process -Name "cybersentinel_agent"
+Get-Process -Name "cybersentineldlp_agent"
 ```
 
-You should see **exactly one** `cybersentinel_agent` process.
+You should see **exactly one** `cybersentineldlp_agent` process.
 
 ## Step 8: Verify registration
 
@@ -184,35 +184,35 @@ fltmc load CyberSentinelFilter
 ```powershell
 # Stop the agent (must stop task first, then process)
 Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 
 # Start the agent
 Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 
 # Restart (stop + start)
 Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 
 # View status (should show exactly one process)
-Get-Process -Name "cybersentinel_agent"
+Get-Process -Name "cybersentineldlp_agent"
 
 # View task state
 Get-ScheduledTask -TaskName "CyberSentinel DLP Agent" | Get-ScheduledTaskInfo
 
 # Tail logs
-Get-Content "C:\Program Files\CyberSentinel\cybersentinel_agent.log" -Tail 50 -Wait
+Get-Content "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.log" -Tail 50 -Wait
 ```
 
 ## Uninstall
 
 ```powershell
 Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent" -ErrorAction SilentlyContinue
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "CyberSentinel DLP Agent" -Confirm:$false
-Remove-Item "C:\Program Files\CyberSentinel" -Recurse -Force
+Remove-Item "C:\Program Files\CyberSentinelDLP" -Recurse -Force
 # Optionally remove data:
-Remove-Item "C:\ProgramData\CyberSentinel" -Recurse -Force
+Remove-Item "C:\ProgramData\CyberSentinelDLP" -Recurse -Force
 ```
 
 ## Troubleshooting
@@ -221,8 +221,8 @@ Remove-Item "C:\ProgramData\CyberSentinel" -Recurse -Force
 |-------|----------|
 | Agent not registering | Check firewall allows outbound to port 55000 |
 | Agent crashes on start | Check `agent_config.json` is valid JSON, verify server URL |
-| Two `cybersentinel_agent` processes running | Zombie from previous run — `Stop-ScheduledTask` first, then `Stop-Process -Force`, verify empty, then `Start-ScheduledTask` |
+| Two `cybersentineldlp_agent` processes running | Zombie from previous run — `Stop-ScheduledTask` first, then `Stop-Process -Force`, verify empty, then `Start-ScheduledTask` |
 | USB events not detected | Ensure `usb_devices: true` in config, agent must run as SYSTEM |
-| No events in dashboard | Check agent logs in `C:\ProgramData\CyberSentinel\logs\` |
+| No events in dashboard | Check agent logs in `C:\ProgramData\CyberSentinelDLP\logs\` |
 | Policy sync failing | Verify server is reachable, check API key in agent logs |
 | High CPU usage | Reduce monitored paths, increase `policy_sync_interval` |

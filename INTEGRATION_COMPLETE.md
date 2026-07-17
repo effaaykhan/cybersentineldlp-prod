@@ -176,7 +176,7 @@ Expected:
 ### 2. Verify Rules in Database
 
 ```bash
-docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp -t -c "SELECT COUNT(*) FROM rules;"
+docker compose exec postgres psql -U dlp_user -d cybersentineldlp -t -c "SELECT COUNT(*) FROM rules;"
 ```
 
 Expected: `20` (default rules imported)
@@ -186,7 +186,7 @@ Expected: `20` (default rules imported)
 ### 3. Check Sample Rules
 
 ```bash
-docker compose exec postgres psql -U dlp_user -d cybersentinel_dlp -t -c "SELECT name, type, weight, enabled FROM rules LIMIT 5;"
+docker compose exec postgres psql -U dlp_user -d cybersentineldlp -t -c "SELECT name, type, weight, enabled FROM rules LIMIT 5;"
 ```
 
 Expected output:

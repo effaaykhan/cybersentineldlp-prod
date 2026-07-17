@@ -30,7 +30,7 @@
   },
   "quarantine": {
     "enabled": true,
-    "folder": "/opt/cybersentinel/quarantine"
+    "folder": "/opt/cybersentineldlp/quarantine"
   },
   "classification": {
     "enabled": true,

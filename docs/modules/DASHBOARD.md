@@ -108,14 +108,14 @@ npm start
 
 ```bash
 # Build image
-docker build -t cybersentinel-dashboard .
+docker build -t cybersentineldlp-dashboard .
 
 # Run container
 docker run -d \
   -p 3000:3000 \
   -e NEXT_PUBLIC_API_URL=http://<your-api-host>:8000/api/v1 \
-  --name cybersentinel-dashboard \
-  cybersentinel-dashboard
+  --name cybersentineldlp-dashboard \
+  cybersentineldlp-dashboard
 ```
 
 ## Configuration
@@ -162,7 +162,7 @@ ipconfig | findstr IPv4
 
 ## Default Credentials
 
-**Email**: `admin@cybersentinel.local`
+**Email**: `admin@cybersentineldlp.local`
 **Password**: `ChangeMe123!`
 
 **IMPORTANT**: Change the default password immediately after first login!
@@ -502,5 +502,5 @@ server {
 
 For issues or questions:
 - GitHub Issues: [Link]
-- Email: support@cybersentinel.local
+- Email: support@cybersentineldlp.local
 - Documentation: [MASTER_DOCUMENTATION.md](../../MASTER_DOCUMENTATION.md)

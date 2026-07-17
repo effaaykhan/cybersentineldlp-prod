@@ -115,7 +115,7 @@ async def discovery(request: Request, _: None = Depends(taxii_auth)):
     return _taxii({
         "title": "CyberSentinel DLP TAXII Server",
         "description": "TAXII 2.1 server publishing shared DLP threat indicators.",
-        "contact": "security@cybersentinel",
+        "contact": "security@cybersentineldlp",
         "default": api_root,
         "api_roots": [api_root],
     })

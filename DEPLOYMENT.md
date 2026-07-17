@@ -45,12 +45,12 @@ What this does, in order:
 
 1. Installs Docker (via `get.docker.com`) if it's not already there and
    enables/starts the daemon.
-2. Creates `/opt/cybersentinel/`. Override with
-   `INSTALL_DIR=/srv/cybersentinel` env var if you want a different path.
+2. Creates `/opt/cybersentineldlp/`. Override with
+   `INSTALL_DIR=/srv/cybersentineldlp` env var if you want a different path.
 3. Downloads `docker-compose.prod.yml` and `.env.example` from the
    repo via `raw.githubusercontent.com`. **No source tree, no `.git`,
    no Python files, no Dockerfiles are ever copied to the host.**
-4. Generates `/opt/cybersentinel/.env` (mode `600`, root-owned) with
+4. Generates `/opt/cybersentineldlp/.env` (mode `600`, root-owned) with
    cryptographically random values for:
    - `SECRET_KEY` (48-char URL-safe random)
    - `JWT_SECRET` (48-char)
@@ -60,7 +60,7 @@ What this does, in order:
    - `CORS_ORIGINS` and `ALLOWED_HOSTS` set to the host's first IP +
      `localhost` (no wildcard).
 5. Generates a self-signed RSA-4096 TLS certificate in
-   `/opt/cybersentinel/certs/` with proper Subject Alternative Names.
+   `/opt/cybersentineldlp/certs/` with proper Subject Alternative Names.
    This satisfies the dashboard nginx bind mount; replace with a real
    cert later if you front the deployment with a TLS-terminating proxy.
 6. `docker compose pull` — fetches all images from GHCR and Docker Hub.
@@ -72,7 +72,7 @@ What this does, in order:
 ### What's installed
 
 ```
-/opt/cybersentinel/
+/opt/cybersentineldlp/
 ├── docker-compose.prod.yml          # ~12 KB, fetched from repo
 ├── .env                              # mode 600, root-owned
 ├── .env.example                      # placeholders, harmless
@@ -86,19 +86,19 @@ Containers running after install:
 
 | Container | Image | Host port | Purpose |
 |---|---|---|---|
-| `cybersentinel-postgres` | `postgres:16-alpine` | _none_ | Users, RBAC, audit logs |
-| `cybersentinel-mongodb` | `mongo:7.0` | _none_ | DLP events, alerts, incidents |
-| `cybersentinel-redis` | `redis:7-alpine` | _none_ | Token blacklist, rate limit, cache |
-| `cybersentinel-opensearch` | `opensearchproject/opensearch:2.11.0` | _none_ | Event search index |
-| `cybersentinel-manager` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest` | **55000** | FastAPI API |
-| `cybersentinel-dashboard` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest` | **80** → 3000 | React SPA + nginx |
-| `cybersentinel-celery-worker` | (same manager image) | _none_ | Async event processing |
-| `cybersentinel-celery-beat` | (same manager image) | _none_ | Scheduled tasks |
+| `cybersentineldlp-postgres` | `postgres:16-alpine` | _none_ | Users, RBAC, audit logs |
+| `cybersentineldlp-mongodb` | `mongo:7.0` | _none_ | DLP events, alerts, incidents |
+| `cybersentineldlp-redis` | `redis:7-alpine` | _none_ | Token blacklist, rate limit, cache |
+| `cybersentineldlp-opensearch` | `opensearchproject/opensearch:2.11.0` | _none_ | Event search index |
+| `cybersentineldlp-manager` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest` | **55000** | FastAPI API |
+| `cybersentineldlp-dashboard` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest` | **80** → 3000 | React SPA + nginx |
+| `cybersentineldlp-celery-worker` | (same manager image) | _none_ | Async event processing |
+| `cybersentineldlp-celery-beat` | (same manager image) | _none_ | Scheduled tasks |
 
 > **Database tier is internal-only** since the security audit. Postgres,
 > Mongo, Redis, and OpenSearch are no longer published to `0.0.0.0`. For
 > ops use `docker compose exec` (e.g.
-> `docker compose -f /opt/cybersentinel/docker-compose.prod.yml exec postgres psql -U cybersentinel`).
+> `docker compose -f /opt/cybersentineldlp/docker-compose.prod.yml exec postgres psql -U cybersentineldlp`).
 
 ### First-time login
 
@@ -106,7 +106,7 @@ After the install script finishes, it prints the bootstrap admin
 password. If you missed it:
 
 ```bash
-docker logs cybersentinel-manager 2>&1 | grep generated_password
+docker logs cybersentineldlp-manager 2>&1 | grep generated_password
 ```
 
 Open the dashboard at `http://<server-ip>/`, log in as `admin` with
@@ -123,7 +123,7 @@ only way to rotate it.
 
 ## 2. Building the Windows agent
 
-The agent is a single C++ executable (`cybersentinel_agent.exe`) compiled
+The agent is a single C++ executable (`cybersentineldlp_agent.exe`) compiled
 on Windows with MSYS2 MinGW. It's checked into the repo as a binary,
 along with a SHA-256 sidecar so endpoint installs can verify integrity.
 
@@ -151,12 +151,12 @@ cd agents/endpoint/windows
 ```bash
 g++ -std=c++17 -O2 \
     agent.cpp screen_capture_monitor.cpp print_monitor.cpp \
-    -o cybersentinel_agent.exe \
+    -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool -static
 ```
 
-You should see `cybersentinel_agent.exe` (~4 MB) appear in the same
+You should see `cybersentineldlp_agent.exe` (~4 MB) appear in the same
 directory.
 
 ### Generate the SHA-256 sidecar
@@ -166,26 +166,26 @@ running it.
 
 ```bash
 # Same MSYS2 terminal
-sha256sum cybersentinel_agent.exe > cybersentinel_agent.exe.sha256
-cat cybersentinel_agent.exe.sha256
+sha256sum cybersentineldlp_agent.exe > cybersentineldlp_agent.exe.sha256
+cat cybersentineldlp_agent.exe.sha256
 ```
 
 You should see a line like:
 ```
-3a9f4e1c5b7d... *cybersentinel_agent.exe
+3a9f4e1c5b7d... *cybersentineldlp_agent.exe
 ```
 
 > Pure-PowerShell alternative if you don't want MSYS2:
 > ```powershell
 > cd C:\cybersentineldlp-prod\agents\endpoint\windows
-> (Get-FileHash -Algorithm SHA256 cybersentinel_agent.exe).Hash.ToLower() `
->   | Out-File -Encoding ASCII cybersentinel_agent.exe.sha256
+> (Get-FileHash -Algorithm SHA256 cybersentineldlp_agent.exe).Hash.ToLower() `
+>   | Out-File -Encoding ASCII cybersentineldlp_agent.exe.sha256
 > ```
 
 ### Commit + push
 
 ```bash
-git add cybersentinel_agent.exe cybersentinel_agent.exe.sha256
+git add cybersentineldlp_agent.exe cybersentineldlp_agent.exe.sha256
 git status   # confirm both are staged
 
 git commit -m "build: agent $(date +%Y-%m-%d) (commit $(git rev-parse --short HEAD))"
@@ -198,8 +198,8 @@ Use a more descriptive message if you prefer, e.g.
 ### Verify the upload landed
 
 ```bash
-curl -fsI https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentinel_agent.exe | head -1
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentinel_agent.exe.sha256
+curl -fsI https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe | head -1
+curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256
 ```
 
 Both should return successfully. The SHA-256 should match what you
@@ -231,21 +231,21 @@ What it does:
 2. **Step 2 — Cleanup.** Stops the existing scheduled task / process /
    service if present. Safe to re-run on an already-installed endpoint.
 3. **Step 3 — Directories.** Creates `C:\Program Files\CyberSentinel`
-   and `C:\ProgramData\CyberSentinel\{logs,quarantine,cache}`.
+   and `C:\ProgramData\CyberSentinelDLP\{logs,quarantine,cache}`.
 4. **Step 4 — OCR deps.** Installs Chocolatey + Tesseract if missing
    (used by the screen-capture classifier's Stage 4 OCR fallback).
 5. **Step 5 — Agent binary download with SHA-256 verification.**
-   - Pulls `cybersentinel_agent.exe` from `raw.githubusercontent.com`.
+   - Pulls `cybersentineldlp_agent.exe` from `raw.githubusercontent.com`.
    - Pulls the sidecar `.sha256` from the same location.
    - Computes the local SHA-256 with `Get-FileHash`.
    - **If the hashes don't match, deletes the binary and exits with
      code 2.** No tampered installs.
    - Optional `Get-AuthenticodeSignature` check (warn-only until an EV
      signing cert is provisioned).
-6. **Step 6 — Environment.** Sets `CYBERSENTINEL_SERVER_URL` for the
+6. **Step 6 — Environment.** Sets `CYBERSENTINELDLP_SERVER_URL` for the
    machine.
 7. **Step 7 — Config file.** Writes
-   `C:\Program Files\CyberSentinel\agent_config.json` with the
+   `C:\Program Files\CyberSentinelDLP\agent_config.json` with the
    monitored paths, file extensions, and intervals from step 1.
 8. **Step 8 — Hidden launcher.** Drops `launch_agent.vbs` so the agent
    runs without a CMD window.
@@ -257,13 +257,13 @@ What it does:
 ### What gets installed
 
 ```
-C:\Program Files\CyberSentinel\
-├── cybersentinel_agent.exe          # the binary, hash-verified
+C:\Program Files\CyberSentinelDLP\
+├── cybersentineldlp_agent.exe          # the binary, hash-verified
 ├── agent_config.json                # server URL, intervals, monitored paths
 ├── launch_agent.vbs                 # hidden-window launcher
-└── cybersentinel_agent.log          # written at runtime
+└── cybersentineldlp_agent.log          # written at runtime
 
-C:\ProgramData\CyberSentinel\
+C:\ProgramData\CyberSentinelDLP\
 ├── logs\
 ├── quarantine\
 └── cache\
@@ -276,10 +276,10 @@ Plus the scheduled task `CyberSentinel DLP Agent` (visible in
 
 ```powershell
 # Process running?
-Get-Process cybersentinel_agent | Select-Object Id, StartTime, Path
+Get-Process cybersentineldlp_agent | Select-Object Id, StartTime, Path
 
 # Tail the agent log
-Get-Content "C:\Program Files\CyberSentinel\cybersentinel_agent.log" -Tail 50
+Get-Content "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.log" -Tail 50
 
 # Confirm the dashboard sees the agent
 # (open http://<server>:80/ in a browser → Agents page)
@@ -293,16 +293,16 @@ Operators don't have to uninstall first.
 For just updating the binary without rerunning the full installer:
 
 ```powershell
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 Start-Sleep 2
 Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentinel_agent.exe" `
-    -OutFile "C:\Program Files\CyberSentinel\cybersentinel_agent.exe"
+    -Uri "https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe" `
+    -OutFile "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe"
 
 # Verify hash
 $expected = (Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentinel_agent.exe.sha256").Content.Trim().Split()[0].ToUpper()
-$actual = (Get-FileHash -Algorithm SHA256 "C:\Program Files\CyberSentinel\cybersentinel_agent.exe").Hash.ToUpper()
+    -Uri "https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256").Content.Trim().Split()[0].ToUpper()
+$actual = (Get-FileHash -Algorithm SHA256 "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe").Hash.ToUpper()
 if ($expected -ne $actual) {
     Write-Host "HASH MISMATCH — refusing to start" -ForegroundColor Red
     exit 2
@@ -314,10 +314,10 @@ Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 ### Uninstall
 
 ```powershell
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "CyberSentinel DLP Agent" -Confirm:$false
-Remove-Item "C:\Program Files\CyberSentinel" -Recurse -Force
-Remove-Item "C:\ProgramData\CyberSentinel" -Recurse -Force
+Remove-Item "C:\Program Files\CyberSentinelDLP" -Recurse -Force
+Remove-Item "C:\ProgramData\CyberSentinelDLP" -Recurse -Force
 ```
 
 ---
@@ -331,7 +331,7 @@ re-publishes both GHCR images on every push to `main`. To pull the new
 versions onto the running server:
 
 ```bash
-cd /opt/cybersentinel
+cd /opt/cybersentineldlp
 sudo docker compose -f docker-compose.prod.yml pull
 sudo docker compose -f docker-compose.prod.yml up -d
 sudo docker compose -f docker-compose.prod.yml ps
@@ -343,7 +343,7 @@ sudo docker compose -f docker-compose.prod.yml ps
 ### Server — full restart
 
 ```bash
-cd /opt/cybersentinel
+cd /opt/cybersentineldlp
 sudo docker compose -f docker-compose.prod.yml down
 sudo docker compose -f docker-compose.prod.yml up -d
 ```
@@ -352,22 +352,22 @@ sudo docker compose -f docker-compose.prod.yml up -d
 
 ```bash
 # Postgres (users, RBAC, audit log)
-sudo docker compose -f /opt/cybersentinel/docker-compose.prod.yml exec -T postgres \
-    pg_dump -U cybersentinel cybersentinel | gzip > postgres-$(date +%F).sql.gz
+sudo docker compose -f /opt/cybersentineldlp/docker-compose.prod.yml exec -T postgres \
+    pg_dump -U cybersentineldlp cybersentineldlp | gzip > postgres-$(date +%F).sql.gz
 
 # MongoDB (events, alerts, incidents)
-sudo docker compose -f /opt/cybersentinel/docker-compose.prod.yml exec -T mongodb \
-    mongodump --uri "mongodb://admin:$(grep ^MONGODB_PASSWORD /opt/cybersentinel/.env | cut -d= -f2)@localhost:27017/?authSource=admin" \
+sudo docker compose -f /opt/cybersentineldlp/docker-compose.prod.yml exec -T mongodb \
+    mongodump --uri "mongodb://admin:$(grep ^MONGODB_PASSWORD /opt/cybersentineldlp/.env | cut -d= -f2)@localhost:27017/?authSource=admin" \
     --archive --gzip > mongo-$(date +%F).archive.gz
 ```
 
-Don't forget to back up `/opt/cybersentinel/.env` (offline, encrypted)
+Don't forget to back up `/opt/cybersentineldlp/.env` (offline, encrypted)
 — it's the one thing you can't recover.
 
 ### Server — view logs
 
 ```bash
-cd /opt/cybersentinel
+cd /opt/cybersentineldlp
 
 # All services
 sudo docker compose -f docker-compose.prod.yml logs --tail=100 -f
@@ -381,14 +381,14 @@ sudo docker compose -f docker-compose.prod.yml logs --tail=100 -f celery-worker
 ### Endpoint — view agent logs
 
 ```powershell
-Get-Content "C:\Program Files\CyberSentinel\cybersentinel_agent.log" -Tail 100 -Wait
+Get-Content "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.log" -Tail 100 -Wait
 ```
 
 ### Endpoint — stop / start the agent
 
 ```powershell
 # Stop
-Stop-Process -Name "cybersentinel_agent" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 
 # Start
 Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
@@ -407,11 +407,11 @@ Enable-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 | `denied: denied` on `docker pull ghcr.io/effaaykhan/...` | Stale `~/.docker/config.json` from previous account | `docker logout ghcr.io && rm /root/.docker/config.json` |
 | `denied` even after logout | GHCR packages are still private | `https://github.com/effaaykhan?tab=packages` → Package settings → Change visibility → Public |
 | `TLS handshake timeout` on Docker Hub | Transient or proxy/firewall | Re-run `docker compose pull`. Persistent → set up a registry mirror. |
-| Manager unhealthy on first boot | OpenSearch still initialising | Wait 90s, check `docker logs cybersentinel-opensearch`. |
+| Manager unhealthy on first boot | OpenSearch still initialising | Wait 90s, check `docker logs cybersentineldlp-opensearch`. |
 | Manager 500s on `/auth/login` | `SECRET_KEY` not set / changed | Check `.env`. Restart manager. |
 | Endpoint installer: `CRITICAL: SHA-256 mismatch` | Repo binary doesn't match its sidecar | Rebuild + regenerate sidecar (Section 2). |
 | Endpoint can't reach manager | Firewall on port 55000 | `Test-NetConnection -ComputerName <server> -Port 55000` |
-| Dashboard shows 0 agents | Agent not sending heartbeat | Tail `cybersentinel_agent.log` for HTTP errors. |
+| Dashboard shows 0 agents | Agent not sending heartbeat | Tail `cybersentineldlp_agent.log` for HTTP errors. |
 
 ### Verification commands (all the security fixes from the audit)
 

@@ -21,8 +21,8 @@ export default function Footer() {
                 aria-hidden="true"
               />
               <img
-                src="/cybersentinel-logo.png"
-                alt="CyberSentinel"
+                src="/cybersentineldlp-logo.png"
+                alt="CyberSentinelDLP"
                 className="relative h-8 w-8 object-contain"
                 onError={() => setCsLogoFailed(true)}
               />

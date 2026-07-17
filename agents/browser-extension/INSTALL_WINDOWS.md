@@ -26,18 +26,18 @@ The extension lives on the DLP server at:
 ```
 /home/soc/Data-Loss-Prevention/agents/browser-extension/
 ```
-and is packaged at `/home/soc/Data-Loss-Prevention/cybersentinel-cloud-guard.zip`.
+and is packaged at `/home/soc/Data-Loss-Prevention/cybersentineldlp-cloud-guard.zip`.
 
 Copy it over (any one):
-- **SCP/WinSCP** the zip from the server and unzip to `C:\CyberSentinel\browser-extension\`, **or**
+- **SCP/WinSCP** the zip from the server and unzip to `C:\CyberSentinelDLP\browser-extension\`, **or**
 - On the PC, if it has the repo: `git pull`, then use `agents\browser-extension\`.
 
 You should end up with a folder that contains `manifest.json` — e.g.:
 ```
-C:\CyberSentinel\browser-extension\
+C:\CyberSentinelDLP\browser-extension\
   manifest.json
   src\  (inject.js, content.js, background.js)
-  native-host\  (csdlp_host.py, com.cybersentinel.dlp.json, install.ps1)
+  native-host\  (csdlp_host.py, com.cybersentineldlp.dlp.json, install.ps1)
   README.md
 ```
 
@@ -47,7 +47,7 @@ C:\CyberSentinel\browser-extension\
 1. Open `chrome://extensions` (or `edge://extensions`).
 2. Turn on **Developer mode** (top-right).
 3. Click **Load unpacked** and select the folder that contains `manifest.json`
-   (`C:\CyberSentinel\browser-extension\`).
+   (`C:\CyberSentinelDLP\browser-extension\`).
 4. The extension appears as **“CyberSentinel DLP — Cloud Upload Guard.”**
    **Copy its ID** (a 32-character string under the name). You need it in Step 4.
 
@@ -62,21 +62,21 @@ Pick ONE.
 **Option A — build a standalone .exe (recommended, most reliable):**
 ```powershell
 pip install pyinstaller requests
-cd C:\CyberSentinel\browser-extension\native-host
+cd C:\CyberSentinelDLP\browser-extension\native-host
 pyinstaller --onefile csdlp_host.py
 # → produces dist\csdlp_host.exe
-mkdir "C:\Program Files\CyberSentinel" -Force
-copy dist\csdlp_host.exe "C:\Program Files\CyberSentinel\csdlp_host.exe"
+mkdir "C:\Program Files\CyberSentinelDLP" -Force
+copy dist\csdlp_host.exe "C:\Program Files\CyberSentinelDLP\csdlp_host.exe"
 ```
-Host command = `C:\Program Files\CyberSentinel\csdlp_host.exe`
+Host command = `C:\Program Files\CyberSentinelDLP\csdlp_host.exe`
 
 **Option B — quick .bat launcher (no build; needs Python + requests on PATH):**
-Create `C:\Program Files\CyberSentinel\csdlp_host.bat` containing:
+Create `C:\Program Files\CyberSentinelDLP\csdlp_host.bat` containing:
 ```bat
 @echo off
-python "C:\CyberSentinel\browser-extension\native-host\csdlp_host.py" %*
+python "C:\CyberSentinelDLP\browser-extension\native-host\csdlp_host.py" %*
 ```
-Host command = `C:\Program Files\CyberSentinel\csdlp_host.bat`
+Host command = `C:\Program Files\CyberSentinelDLP\csdlp_host.bat`
 (If native messaging misbehaves with the .bat, use Option A.)
 
 ---
@@ -84,16 +84,16 @@ Host command = `C:\Program Files\CyberSentinel\csdlp_host.bat`
 ## 4. Register the host (manifest + registry + server config)
 From the `native-host` folder, in an **elevated PowerShell** (Run as admin):
 ```powershell
-cd C:\CyberSentinel\browser-extension\native-host
+cd C:\CyberSentinelDLP\browser-extension\native-host
 .\install.ps1 `
   -ExtensionId  <PASTE_EXTENSION_ID_FROM_STEP_2> `
   -ServerUrl    https://<your-dlp-server>/api/v1 `
   -AgentId      <this PC's agent id> `
   -AgentKey     <this PC's agent API key> `
-  -HostCommand  "C:\Program Files\CyberSentinel\csdlp_host.exe"   # or the .bat
+  -HostCommand  "C:\Program Files\CyberSentinelDLP\csdlp_host.exe"   # or the .bat
 ```
-This writes `C:\ProgramData\CyberSentinel\com.cybersentinel.dlp.json`, the
-Chrome/Edge registry keys, and `C:\ProgramData\CyberSentinel\dlp-host.json`.
+This writes `C:\ProgramData\CyberSentinelDLP\com.cybersentineldlp.dlp.json`, the
+Chrome/Edge registry keys, and `C:\ProgramData\CyberSentinelDLP\dlp-host.json`.
 
 ---
 
@@ -113,7 +113,7 @@ whole chain without any upload.
 1. `chrome://extensions` → the extension → click **"service worker"** → **Console**.
 2. Look for:
    - ✅ `native host reachable (pong)` → the extension ↔ host bridge works. A
-     fresh `C:\ProgramData\CyberSentinel\dlp-host.log` will contain
+     fresh `C:\ProgramData\CyberSentinelDLP\dlp-host.log` will contain
      `host started` and `ping received`.
    - ❌ `COULD NOT CONNECT to native host …` → the host registration is wrong
      (manifest path, registry key, or `allowed_origins` extension-id). Re-run
@@ -128,7 +128,7 @@ whole chain without any upload.
    numbers) → **blocked**: a red banner appears, and `cloud_upload_attempt` +
    `cloud_upload_prevented` events show in the dashboard.
 
-**Host log (for troubleshooting):** `C:\ProgramData\CyberSentinel\dlp-host.log`
+**Host log (for troubleshooting):** `C:\ProgramData\CyberSentinelDLP\dlp-host.log`
 
 ---
 

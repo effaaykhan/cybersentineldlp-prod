@@ -10,7 +10,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo bash
 #
 # Or to a custom directory:
-#   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo INSTALL_DIR=/srv/cybersentinel bash
+#   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo INSTALL_DIR=/srv/cybersentineldlp bash
 #
 set -euo pipefail
 
@@ -18,7 +18,7 @@ set -euo pipefail
 GITHUB_REPO="effaaykhan/cybersentineldlp-prod"
 GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/cybersentinel}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/cybersentineldlp}"
 COMPOSE_FILE="docker-compose.prod.yml"
 ENV_FILE=".env"
 ENV_EXAMPLE=".env.example"
@@ -152,13 +152,13 @@ if [ ! -f "${INSTALL_DIR}/certs/fullchain.pem" ] || [ ! -f "${INSTALL_DIR}/certs
         # Stronger key (RSA 4096), explicit SAN entries so modern
         # browsers don't reject the cert outright, and the operator's
         # hostname baked in if we can resolve it.
-        HOSTNAME_CN="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo cybersentinel.local)"
+        HOSTNAME_CN="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo cybersentineldlp.local)"
         HOST_IP_SAN="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 127.0.0.1)"
         openssl req -x509 -nodes -newkey rsa:4096 -days 825 \
             -keyout "${INSTALL_DIR}/certs/privkey.pem" \
             -out    "${INSTALL_DIR}/certs/fullchain.pem" \
             -subj "/CN=${HOSTNAME_CN}/O=CyberSentinel DLP/OU=self-signed" \
-            -addext "subjectAltName=DNS:${HOSTNAME_CN},DNS:cybersentinel.local,DNS:localhost,IP:127.0.0.1,IP:${HOST_IP_SAN}" \
+            -addext "subjectAltName=DNS:${HOSTNAME_CN},DNS:cybersentineldlp.local,DNS:localhost,IP:127.0.0.1,IP:${HOST_IP_SAN}" \
             -addext "keyUsage=digitalSignature,keyEncipherment" \
             -addext "extendedKeyUsage=serverAuth" \
             >/dev/null 2>&1
@@ -260,14 +260,14 @@ fi
 # and its INFO chatter on stderr, so non-empty stdout == already stamped. Don't
 # pattern-match the revision id: this project names them "022_ioc_threat_intel",
 # not hex hashes, so a /[0-9a-f]{6,}/ test silently never matches.
-if [ -n "$(docker exec cybersentinel-manager alembic current 2>/dev/null | tr -d '[:space:]')" ]; then
+if [ -n "$(docker exec cybersentineldlp-manager alembic current 2>/dev/null | tr -d '[:space:]')" ]; then
     say "Alembic revision already stamped — leaving migration state untouched"
-    c_yellow "  (upgrading an existing install? run: docker exec cybersentinel-manager alembic upgrade head)"
+    c_yellow "  (upgrading an existing install? run: docker exec cybersentineldlp-manager alembic upgrade head)"
 else
     say "Stamping database at the latest Alembic revision (fresh install)"
-    docker exec cybersentinel-manager alembic stamp head >/dev/null 2>&1 \
+    docker exec cybersentineldlp-manager alembic stamp head >/dev/null 2>&1 \
         && say "Migration state stamped" \
-        || c_yellow "[!] Could not stamp Alembic revision — run it manually: docker exec cybersentinel-manager alembic stamp head"
+        || c_yellow "[!] Could not stamp Alembic revision — run it manually: docker exec cybersentineldlp-manager alembic stamp head"
 fi
 
 # ─── 9. Print connection details ──────────────────────────────────────
@@ -318,12 +318,12 @@ if [ -n "${ADMIN_PASS}" ]; then
     c_yellow "    Record it now, then change it after first login"
     c_yellow "    (Settings → Profile → Change Password)."
     c_yellow "    To retrieve it again:"
-    c_yellow "      docker logs cybersentinel-manager 2>&1 | grep generated_password"
+    c_yellow "      docker logs cybersentineldlp-manager 2>&1 | grep generated_password"
 else
     echo "  Password : (set by you via DLP_ADMIN_PASSWORD in ${ENV_FILE})"
     c_yellow "  → If you did NOT set DLP_ADMIN_PASSWORD, the admin may already have"
     c_yellow "    existed. Retrieve the first-boot password with:"
-    c_yellow "      docker logs cybersentinel-manager 2>&1 | grep generated_password"
+    c_yellow "      docker logs cybersentineldlp-manager 2>&1 | grep generated_password"
 fi
 echo
 c_blue "Database tier (internal-only — no host port binding):"

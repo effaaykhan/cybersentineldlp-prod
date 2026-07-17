@@ -1,0 +1,40 @@
+[Unit]
+Description=CyberSentinel DLP Server (FastAPI)
+Documentation=https://github.com/your-org/cybersentineldlp-dlp
+After=network.target postgresql.service mongodb.service redis.service
+Wants=postgresql.service mongodb.service redis.service
+
+[Service]
+Type=notify
+User=dlp
+Group=dlp
+WorkingDirectory=/opt/cybersentineldlp-dlp/server
+Environment="PATH=/opt/cybersentineldlp-dlp/server/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/opt/cybersentineldlp-dlp/server"
+EnvironmentFile=/opt/cybersentineldlp-dlp/.env
+ExecStart=/opt/cybersentineldlp-dlp/server/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+# Performance tuning
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/cybersentineldlp-dlp/server /var/log/cybersentineldlp /var/quarantine/dlp
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cybersentineldlp-server
+
+[Install]
+WantedBy=multi-user.target

@@ -465,6 +465,52 @@ async def _seed_default_policies():
         logger.warning("Default policies seed encountered an error", error=str(e))
 
 
+
+# Postgres advisory-lock key guarding first-boot initialisation. Arbitrary but
+# must be identical in every worker.
+_FIRST_BOOT_LOCK_KEY = 4815162342
+
+
+async def _first_boot_init():
+    """Create the schema and seed defaults exactly ONCE across all workers.
+
+    uvicorn runs WORKERS processes and each executes this lifespan concurrently,
+    so without serialisation they race:
+      * several workers call create_all at once; the losers raise on the
+        duplicate-object collision, abort _auto_init_schema_and_admin BEFORE it
+        seeds the admin, and log "Auto-init encountered an error";
+      * those workers then reach the rule/policy seeders, find no admin to use
+        for created_by, and log "No admin user found, skipping ... seed".
+    The winner still did the work, so the result LOOKED fine — the seed depended
+    on one worker winning a race, which is not something to rely on.
+
+    A session-level advisory lock makes exactly one worker perform first-boot
+    init while the others block. By the time they proceed, the tables, admin and
+    seed rows exist, so each step sees its work already done and skips cleanly —
+    no races, no misleading warnings. The lock lives on its own connection and is
+    released in `finally`; if the holder dies, closing the connection frees it.
+    """
+    from sqlalchemy import text
+
+    conn = await _db.postgres_engine.connect()
+    try:
+        await conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _FIRST_BOOT_LOCK_KEY})
+        await conn.commit()
+
+        await _auto_init_schema_and_admin()
+        await _seed_default_roles()
+        await _seed_default_labels()
+        await _seed_default_rules()
+        await _seed_default_policies()
+    finally:
+        try:
+            await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _FIRST_BOOT_LOCK_KEY})
+            await conn.commit()
+        except Exception as e:  # noqa: BLE001 — never mask a startup error
+            logger.warning("Could not release first-boot lock (connection close will)", error=str(e))
+        await conn.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """
@@ -478,20 +524,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await init_databases()
         logger.info("Databases initialized successfully")
 
-        # Auto-create tables and seed default admin user on first boot
-        await _auto_init_schema_and_admin()
-
-        # Seed default RBAC roles on first boot
-        await _seed_default_roles()
-
-        # Seed default data labels on first boot
-        await _seed_default_labels()
-
-        # Seed default classification rules on first boot
-        await _seed_default_rules()
-
-        # Seed default blocking policies on first boot
-        await _seed_default_policies()
+        # Create tables, seed the admin, roles, labels, rules and policies.
+        # Serialised across workers — see _first_boot_init.
+        await _first_boot_init()
 
         # Initialize cache
         await init_cache()

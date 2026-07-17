@@ -280,9 +280,9 @@
   },
   {
     "name": "Database Connection String",
-    "description": "Detects database connection strings",
+    "description": "Detects database/broker connection strings that carry embedded credentials (scheme://user:password@host). Credential-less URLs are config, not secrets, and are deliberately not matched.",
     "type": "regex",
-    "pattern": "(jdbc:(mysql|postgresql|oracle|sqlserver)://|mongodb://|mongodb\\+srv://|redis://|rediss://)",
+    "pattern": "\\b(?:jdbc:)?(?:mysql|postgresql|postgres|mariadb|oracle|sqlserver|mongodb(?:\\+srv)?|rediss?|amqps?)://[^\\s:@/]+:[^\\s:@/]+@[^\\s/]+",
     "regex_flags": [
       "IGNORECASE"
     ],

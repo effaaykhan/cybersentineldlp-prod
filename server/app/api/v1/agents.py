@@ -966,6 +966,12 @@ async def sync_agent_policies(
     )
 
 
+# Extraction kinds that mean "there is no text in this file to leak" — a photo
+# OCR confirmed is wordless, a video, an installer, a disk image. These are NOT
+# the same as failing to read a document, and must not be blocked as such.
+_NO_TEXT_KINDS = frozenset({"image_no_text", "binary", "empty"})
+
+
 class PolicyEvaluationRequest(BaseModel):
     """Request model for real-time policy evaluation"""
     file_name: str = Field(..., description="Name of the file being transferred")
@@ -1083,15 +1089,32 @@ async def evaluate_policy_realtime(
             extract_kind = extracted.kind
             extraction_reason = extracted.reason
             if not extracted.ok:
-                # Unreadable (encrypted archive / scanned image / legacy .doc /
-                # opaque binary) or simply bigger than we'll parse. Kept as two
-                # distinct states so operators can treat them differently — an
-                # encrypted archive is suspicious, a 400MB video usually isn't.
-                extraction_status = "too_large" if extracted.kind == "too_large" else "unreadable"
+                # We got no text. WHY matters, because policy blocks on this.
+                #
+                #   no_text_content — the file simply isn't text-bearing: a photo
+                #     OCR confirmed has no writing, a video, an installer, a disk
+                #     image. There is nothing here to leak, so blocking it is a
+                #     pure false positive. Measured: treating these as
+                #     "unreadable" blocked every holiday photo, mp4, exe and iso
+                #     copied to a USB stick — unusable on a real endpoint.
+                #
+                #   unreadable — a document we SHOULD have been able to read and
+                #     couldn't: encrypted archive, corrupt/renamed office file,
+                #     legacy .doc, an image we couldn't OCR. That's the evasion
+                #     shape, and policy blocks it.
+                #
+                #   too_large — inspection skipped entirely; policy decides.
+                if extracted.kind == "too_large":
+                    extraction_status = "too_large"
+                elif extracted.kind in _NO_TEXT_KINDS:
+                    extraction_status = "no_text_content"
+                else:
+                    extraction_status = "unreadable"
                 logger.info(
                     "Content not extractable",
                     agent_id=agent_id, file_name=request.file_name,
                     kind=extracted.kind, reason=extracted.reason,
+                    extraction_status=extraction_status,
                 )
             elif extracted.truncated:
                 # We read it, but not all of it: it outran the scan budget, or an

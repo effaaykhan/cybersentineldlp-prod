@@ -78,7 +78,18 @@ OCR_PAGE_TIMEOUT = int(os.getenv("DLP_OCR_PAGE_TIMEOUT", "30"))  # seconds per p
 
 class Extracted(NamedTuple):
     text: str
-    kind: str      # pdf | pdf_ocr | image_ocr | docx | xlsx | pptx | text | image | unsupported | error | too_large | empty
+    # kind tells the caller WHY there is (or isn't) text, which is what lets
+    # policy separate "suspicious" from "simply not a document":
+    #   readable  : pdf, pdf_ocr, image_ocr, docx, xlsx, pptx, text, archive
+    #   SUSPICIOUS (a document we should have read but could not):
+    #             archive (encrypted/opaque), error (parser failed), unsupported
+    #             (legacy .doc/.xls/.ppt), image (OCR unavailable), pdf (no text
+    #             even after OCR)
+    #   BENIGN (there is no text here to leak — must NOT be blocked):
+    #             image_no_text (OCR ran, it's a photo), binary (video/installer/
+    #             disk image), empty
+    #   too_large : over the cap / truncated — inspection was skipped
+    kind: str
     ok: bool       # True when we produced text we trust for classification
     reason: str = ""
     # True when we read only PART of the content (hit MAX_TEXT_CHARS, or an
@@ -484,9 +495,12 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
             return Extracted(clipped, "image_ocr", True, "image read via OCR", wc)
         # Distinguish "OCR ran, found nothing" from "no OCR available" so the
         # reason is honest, but both are unreadable to policy.
-        reason = "no text found in image (OCR)" if _ocr_available() else \
-                 "image not inspectable (OCR unavailable)"
-        return Extracted("", "image", False, reason)
+        # Distinguish "OCR ran and this image genuinely has no text" (a photo —
+        # benign, must NOT be blocked) from "we could not OCR it" (unknown —
+        # policy must decide). Collapsing these blocked every holiday photo.
+        if _ocr_available():
+            return Extracted("", "image_no_text", False, "no text found in image (OCR)")
+        return Extracted("", "image", False, "image not inspectable (OCR unavailable)")
 
     if ext in TEXT_EXTS:
         clipped, was_clipped = _clip(_decode(data))
@@ -505,4 +519,7 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
                          f"text clipped at {MAX_TEXT_CHARS} chars" if was_clipped else "",
                          was_clipped)
 
-    return Extracted("", "unsupported", False, f"binary/unknown format {ext or '(none)'}")
+    # Not a text-bearing format at all (video, installer, disk image, opaque
+    # binary). There is no text here to leak, so this is NOT the same as failing
+    # to read a document — see the `kind` docs on Extracted.
+    return Extracted("", "binary", False, f"binary/non-text format {ext or '(none)'}")

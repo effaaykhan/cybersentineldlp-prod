@@ -47,7 +47,10 @@
         {
           "field": "classification_level",
           "operator": "in",
-          "value": ["Confidential", "Restricted"]
+          "value": [
+            "Confidential",
+            "Restricted"
+          ]
         },
         {
           "field": "destination_type",
@@ -96,7 +99,7 @@
   },
   {
     "name": "Block High-Confidence Sensitive USB Transfers",
-    "description": "Blocks any USB transfer where classification confidence score exceeds 50%",
+    "description": "Blocks USB transfers of content classified Confidential/Restricted with high confidence. REQUIRES a blocking classification_level, not just a score: score alone fires on ordinary documents (a contact sheet of 3 emails once scored 0.84 while correctly classifying Internal). The level is the decision; the score only grades our confidence in it.",
     "enabled": true,
     "priority": 80,
     "type": "usb_file_transfer_monitoring",
@@ -108,9 +111,17 @@
       "match": "all",
       "rules": [
         {
+          "field": "classification_level",
+          "operator": "in",
+          "value": [
+            "Confidential",
+            "Restricted"
+          ]
+        },
+        {
           "field": "confidence_score",
           "operator": ">=",
-          "value": 0.5
+          "value": 0.8
         },
         {
           "field": "destination_type",
@@ -123,6 +134,218 @@
       "block": {},
       "alert": {
         "severity": "high"
+      }
+    }
+  },
+  {
+    "name": "Cloud Upload — Block Sensitive",
+    "description": "Blocks uploads to cloud storage when the content classifies Confidential or Restricted.",
+    "enabled": true,
+    "priority": 10,
+    "type": "cloud_upload_prevention",
+    "severity": "critical",
+    "config": {
+      "description": "Block sensitive data leaving via cloud upload"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "equals",
+          "value": "cloud_upload"
+        },
+        {
+          "field": "classification_level",
+          "operator": "in",
+          "value": [
+            "Confidential",
+            "Restricted"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "critical",
+        "message": "Sensitive data upload to cloud blocked"
+      }
+    }
+  },
+  {
+    "name": "Email Send — Block Sensitive Attachments",
+    "description": "Rejects outbound mail (550 at DATA) whose body or attachments classify Confidential or Restricted.",
+    "enabled": true,
+    "priority": 10,
+    "type": "email_send_prevention",
+    "severity": "critical",
+    "config": {
+      "description": "Block sensitive data leaving via email"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "equals",
+          "value": "email_send"
+        },
+        {
+          "field": "classification_level",
+          "operator": "in",
+          "value": [
+            "Confidential",
+            "Restricted"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "critical",
+        "message": "Sensitive data blocked in email"
+      }
+    }
+  },
+  {
+    "name": "Cloud Upload — Alert Internal",
+    "description": "Alerts (does not block) when Internal-classified data is uploaded to cloud storage.",
+    "enabled": true,
+    "priority": 20,
+    "type": "cloud_upload_prevention",
+    "severity": "medium",
+    "config": {
+      "description": "Visibility over Internal data going to cloud"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "equals",
+          "value": "cloud_upload"
+        },
+        {
+          "field": "classification_level",
+          "operator": "equals",
+          "value": "Internal"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "medium",
+        "message": "Internal data uploaded to cloud"
+      }
+    }
+  },
+  {
+    "name": "Email Send — Alert Internal",
+    "description": "Alerts (does not block) when Internal-classified data is emailed out.",
+    "enabled": true,
+    "priority": 20,
+    "type": "email_send_prevention",
+    "severity": "medium",
+    "config": {
+      "description": "Visibility over Internal data going out by email"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "equals",
+          "value": "email_send"
+        },
+        {
+          "field": "classification_level",
+          "operator": "equals",
+          "value": "Internal"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "medium",
+        "message": "Internal data sent via email"
+      }
+    }
+  },
+  {
+    "name": "Block Uninspectable Content (all channels)",
+    "description": "Blocks content that SHOULD have been readable but wasn't: encrypted or opaque archives, corrupt/renamed office files, legacy .doc/.xls/.ppt, images that could not be OCR'd. 'We couldn't inspect it' must never mean 'it's clean', or encrypting a file becomes a one-step bypass. Deliberately does NOT fire on files that simply contain no text (photos, video, installers, disk images) — those report no_text_content and are left alone, because blocking them is a pure false positive.",
+    "enabled": true,
+    "priority": 5,
+    "type": "classification_aware_policy",
+    "severity": "high",
+    "config": {
+      "description": "Refuse documents that could not be inspected"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "usb_file_transfer",
+            "file_transfer",
+            "email_send",
+            "cloud_upload"
+          ]
+        },
+        {
+          "field": "extraction_status",
+          "operator": "equals",
+          "value": "unreadable"
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "high",
+        "message": "Uninspectable file blocked"
+      }
+    }
+  },
+  {
+    "name": "Block Oversized Uninspected Files",
+    "description": "Blocks files too large to inspect (over the agent's 25MB cap, or whose text outran the scan budget). This closes the padding bypass: without it, padding a secret past the cap makes it skip inspection entirely and pass. TRADE-OFF: this also blocks large legitimate files such as videos and disk images, which are genuinely uninspectable. If big-file workflows matter more than that bypass, change this policy's action from block to alert — it is intentionally separate from 'Block Uninspectable Content' so you can tune the two independently.",
+    "enabled": true,
+    "priority": 6,
+    "type": "classification_aware_policy",
+    "severity": "high",
+    "config": {
+      "description": "Refuse files that were never inspected because they were too large"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "usb_file_transfer",
+            "file_transfer",
+            "email_send",
+            "cloud_upload"
+          ]
+        },
+        {
+          "field": "extraction_status",
+          "operator": "equals",
+          "value": "too_large"
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "high",
+        "message": "Oversized uninspected file blocked"
       }
     }
   }

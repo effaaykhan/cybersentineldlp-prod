@@ -159,6 +159,18 @@ class ClassificationEngine:
     """
 
     # Content size limits to prevent DoS
+    # A rule this heavy is, on its own, proof of a secret (SSN, credit card,
+    # AWS/API key, private key, PAN, Aadhaar, bank account, DB connection
+    # string). Only these may push content to a level the channel policies
+    # block on — see _determine_classification.
+    STRONG_RULE_WEIGHT = 0.8
+    # Ceiling on the logarithmic match-count multiplier, so one chatty rule
+    # can't dominate the score on volume alone.
+    MAX_COUNT_SCALE = 3.0
+    # Ceiling on the reported confidence when nothing definitive matched, so the
+    # score can never imply a level we refused to assign (0.6 = Confidential).
+    NO_STRONG_SIGNAL_SCORE_CEILING = 0.59
+
     MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10 MB — the ONE bound on rule work.
     # There is deliberately no second, smaller regex window. A 1M-char cap here
     # used to hide everything past it: filler in front of a secret produced zero
@@ -250,6 +262,7 @@ class ClassificationEngine:
         total_weight = 0.0
         total_matches = 0
         data_types: List[str] = []
+        has_strong_signal = False
 
         for rule in rules:
             # Context-aware filtering: skip rules that don't apply to this file type
@@ -265,10 +278,26 @@ class ClassificationEngine:
                 rule_result = self._build_rule_result(rule, validated_count)
                 matched_rules.append(rule_result)
 
-                # Confidence contribution: scale with match count above threshold
-                # but cap at 2x weight for very high match counts
-                if rule.threshold > 0:
-                    scale = min(2.0, validated_count / rule.threshold)
+                # Did something definitive match? See _determine_classification.
+                if rule.weight >= self.STRONG_RULE_WEIGHT:
+                    has_strong_signal = True
+
+                # Confidence contribution scales with how many times the rule
+                # matched, but LOGARITHMICALLY.
+                #
+                # This was `min(2.0, count / threshold)`, so with the usual
+                # threshold of 1 just TWO matches already doubled the weight —
+                # two phone numbers scored 0.4*2 = 0.8 = Restricted, two
+                # financial words 0.5*2 = 1.0 = Restricted. Ordinary documents
+                # were "definitely secret" on their second match.
+                #
+                # A second occurrence should nudge confidence; a thousandth
+                # should mean much more than the second. log10 gives that:
+                # 1 match = 1.0x, 10 = 2.0x, 100 = 3.0x, capped so no single
+                # rule can run away with the score.
+                if rule.threshold > 0 and validated_count > rule.threshold:
+                    scale = 1.0 + math.log10(validated_count / rule.threshold)
+                    scale = min(self.MAX_COUNT_SCALE, scale)
                 else:
                     scale = 1.0
                 contribution = rule.weight * scale
@@ -301,7 +330,20 @@ class ClassificationEngine:
             entropy_bonus = 0.05
 
         confidence_score = min(1.0, adjusted_weight + entropy_bonus)
-        classification = self._determine_classification(confidence_score)
+
+        # Keep the SCORE consistent with the LEVEL.
+        #
+        # Without this they diverge: weak identifiers can pile up to a 0.84 score
+        # while the level is correctly held at Internal. Any policy written
+        # against confidence_score then fires on content the level says is fine —
+        # observed live, a 3-email contact sheet scored 0.84 and was blocked by a
+        # "confidence_score >= 0.6" rule despite classifying Internal. A score is
+        # only meaningful as confidence IN the level we assigned, so cap it into
+        # the band the level actually occupies.
+        if not has_strong_signal:
+            confidence_score = min(confidence_score, self.NO_STRONG_SIGNAL_SCORE_CEILING)
+
+        classification = self._determine_classification(confidence_score, has_strong_signal)
 
         return ClassificationResult(
             classification=classification,
@@ -735,8 +777,30 @@ class ClassificationEngine:
             result["label"] = None
         return result
 
-    def _determine_classification(self, confidence_score: float) -> str:
-        """Map confidence score to classification level."""
+    def _determine_classification(self, confidence_score: float,
+                                 has_strong_signal: bool = True) -> str:
+        """Map confidence score to classification level.
+
+        `has_strong_signal` is True when at least one rule heavy enough to be
+        definitive on its own (weight >= STRONG_RULE_WEIGHT — SSN, credit card,
+        AWS/API key, private key, PAN, Aadhaar, bank account, DB connection
+        string) actually matched.
+
+        Without one, we refuse to go above Internal. Confidential and Restricted
+        are the levels the channel policies BLOCK on, so letting weak
+        identifiers accumulate into them made the product block ordinary work:
+        measured on real content, a 3-email contact sheet, a 5-IP server
+        inventory, a support ticket and an invoice template all reached
+        Confidential/Restricted and would have been blocked. Emails, IP
+        addresses, phone numbers and business vocabulary are evidence of a
+        document being *about* people or money — not of it containing a secret.
+        They still surface as Internal, which alerts and logs.
+
+        Defaults to True so any future caller keeps the plain score-based
+        behaviour unless it opts in.
+        """
+        if not has_strong_signal:
+            return "Internal" if confidence_score >= 0.3 else "Public"
         if confidence_score >= 0.8:
             return "Restricted"
         elif confidence_score >= 0.6:

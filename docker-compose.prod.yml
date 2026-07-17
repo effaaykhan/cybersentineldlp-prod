@@ -1,7 +1,12 @@
 services:
   # OpenSearch for event storage
   opensearch:
-    image: opensearchproject/opensearch:2.11.0
+    # 2.19.x, NOT 2.11: OPENSEARCH_INITIAL_ADMIN_PASSWORD is only honoured from
+    # 2.12 onward. On 2.11 it was silently ignored, so OpenSearch kept its
+    # built-in admin/admin while the manager authenticated with the password from
+    # .env — every prod deploy got 401 and logged "continuing without it",
+    # running with no event indexing/search while still looking healthy.
+    image: opensearchproject/opensearch:2.19.0
     container_name: cybersentinel-opensearch
     environment:
       - cluster.name=cybersentinel-cluster
@@ -35,7 +40,10 @@ services:
         reservations:
           memory: 2G
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u admin:${OPENSEARCH_PASSWORD:?Set this password in .env file} https://localhost:9200/_cluster/health || exit 1"]
+      # -f is REQUIRED: without it curl exits 0 on an HTTP 401, so a cluster
+      # rejecting our credentials still reported "healthy". -f makes auth
+      # failures show up as unhealthy instead of hiding behind a green tick.
+      test: ["CMD-SHELL", "curl -f -k -u admin:${OPENSEARCH_PASSWORD:?Set this password in .env file} https://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

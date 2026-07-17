@@ -75,7 +75,37 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
  class DLPAgent;
  
  // ==================== Utilities ====================
- 
+
+ // Directory containing THIS executable — the anchor for every file the agent
+ // owns (config, log, event spool, policy cache).
+ //
+ // These were all resolved relative to the CURRENT WORKING DIRECTORY, which the
+ // agent does not control: the scheduled task decides it, and it is System32 by
+ // default. When the CWD wasn't the install directory the agent silently failed
+ // to find agent_config.json, fell back to defaults — localhost server, a fresh
+ // random agent_id — and wrote a NEW config wherever it happened to be running.
+ // That is what made the endpoint re-register as a phantom agent and lose its
+ // identity, and it hid the log/spool/cache in unexpected directories. Anchoring
+ // to the exe's own location makes the agent behave identically whether it is
+ // launched by the task, by a VBScript, or by hand from any prompt.
+ std::string GetExeDir() {
+     char buf[MAX_PATH];
+     DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
+     if (n == 0 || n >= MAX_PATH) {
+         return "";  // callers fall back to a bare relative name
+     }
+     std::string full(buf, n);
+     size_t slash = full.find_last_of("\\/");
+     return (slash == std::string::npos) ? "" : full.substr(0, slash);
+ }
+
+ // Resolve a file the agent owns, next to the exe. Falls back to the bare name
+ // (CWD-relative) only if the exe path can't be determined.
+ std::string ExeRelativePath(const std::string& filename) {
+     const std::string dir = GetExeDir();
+     return dir.empty() ? filename : (dir + "\\" + filename);
+ }
+
  std::string GenerateUUID() {
      GUID guid;
      CoCreateGuid(&guid);
@@ -456,8 +486,9 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
                 // Use custom log directory
                 logFilePath = logDir + "\\" + filename;
             } else {
-                // Default to current directory
-                logFilePath = filename;
+                // Next to the exe — NOT the CWD, which the scheduled task sets
+                // to System32 and which silently scattered logs.
+                logFilePath = ExeRelativePath(filename);
             }
             
             OpenLogFile();
@@ -3228,7 +3259,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          // Same placement rule as the log and the event spool.
          const char* envLogDir = std::getenv("CYBERSENTINELDLP_LOG_DIR");
          std::string dir = envLogDir ? envLogDir : "";
-         return dir.empty() ? std::string("cybersentineldlp_policies.cache")
+         return dir.empty() ? ExeRelativePath("cybersentineldlp_policies.cache")
                             : dir + "\\cybersentineldlp_policies.cache";
      }
 
@@ -6242,7 +6273,7 @@ if (shouldMonitor) {
          // lives together (see Logger).
          const char* envLogDir = std::getenv("CYBERSENTINELDLP_LOG_DIR");
          std::string dir = envLogDir ? envLogDir : "";
-         return dir.empty() ? std::string("cybersentineldlp_events.spool")
+         return dir.empty() ? ExeRelativePath("cybersentineldlp_events.spool")
                             : dir + "\\cybersentineldlp_events.spool";
      }
 
@@ -8008,7 +8039,7 @@ int main(int argc, char* argv[]) {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     
     try {
-        DLPAgent agent("agent_config.json");
+        DLPAgent agent(ExeRelativePath("agent_config.json"));
         g_agent = &agent;
         
         SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);

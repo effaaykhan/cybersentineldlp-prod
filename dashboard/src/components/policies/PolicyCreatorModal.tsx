@@ -148,9 +148,37 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
   }
 }
 
-export default function PolicyCreatorModal({ 
-  isOpen, 
-  onClose, 
+// Merge a stored config over the type's defaults so every key the forms expect
+// is present.
+//
+// The forms dereference their config directly — e.g. USBTransferPolicyForm does
+// `config.monitoredPaths.length` — so a policy whose stored config omits a key
+// threw "Cannot read properties of undefined" and React unmounted the tree,
+// which the user sees as a BLANK SCREEN on edit. Policies created via the API or
+// SQL (rather than through this wizard) routinely carry only a partial config,
+// so this is not a rare edge case. Guarding here fixes every form at once
+// instead of scattering `?.` through five components.
+//
+// The second pass fills nested object defaults (patterns{}, events{}) — a shallow
+// spread would leave `config.patterns.custom` undefined and crash exactly the
+// same way. Arrays are values, not containers to merge, so they're left alone.
+const withConfigDefaults = (type: PolicyType | null, stored: any) => {
+  const defaults: any = getDefaultConfig(type ?? 'clipboard_monitoring')
+  const isPlainObject = (v: any) => v && typeof v === 'object' && !Array.isArray(v)
+  if (!isPlainObject(stored)) return defaults
+
+  const merged: any = { ...defaults, ...stored }
+  for (const key of Object.keys(defaults)) {
+    if (isPlainObject(defaults[key])) {
+      merged[key] = { ...defaults[key], ...(isPlainObject(stored[key]) ? stored[key] : {}) }
+    }
+  }
+  return merged
+}
+
+export default function PolicyCreatorModal({
+  isOpen,
+  onClose,
   onSave, 
   editingPolicy 
 }: PolicyCreatorModalProps) {
@@ -172,7 +200,10 @@ export default function PolicyCreatorModal({
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
   const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig>(
-    editingPolicy?.config || (policyType ? getDefaultConfig(policyType) : getDefaultConfig('clipboard_monitoring'))
+    withConfigDefaults(
+      editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
+      editingPolicy?.config
+    )
   )
   const [classificationPolicy, setClassificationPolicy] = useState<ClassificationPolicy>(() => {
     // DEFENSIVE: even after transformApiPolicyToFrontend there's no
@@ -210,9 +241,17 @@ export default function PolicyCreatorModal({
         setPriority(editingPolicy.priority ?? 100)
         setEnabled(editingPolicy.enabled ?? true)
         setAgentId(editingPolicy.agentIds?.[0] || '')
-        if (editingPolicy.config) {
-          setConfig(editingPolicy.config)
-        }
+        // Always merge over the type's defaults — do NOT gate on
+        // `if (editingPolicy.config)`. A partial config is truthy, so that
+        // check happily handed the forms an object missing the keys they
+        // dereference, blanking the screen. Merging also covers the
+        // config-absent case, which the old guard silently skipped.
+        setConfig(
+          withConfigDefaults(
+            editingPolicy.type || 'classification_aware_policy',
+            editingPolicy.config
+          )
+        )
         // Same defensive coercion as the initial useState — never
         // trust that `conditions` is {match,rules} or that `actions`
         // is an object, because the API serializer may send a list.

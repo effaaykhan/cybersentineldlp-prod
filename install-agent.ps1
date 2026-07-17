@@ -528,6 +528,25 @@ Write-Host "  View Logs:       Get-Content '$INSTALL_DIR\cybersentineldlp_agent.
 Write-Host "  Disable Auto:    Disable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host "  Enable Auto:     Enable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host ""
+
+# Leftovers from the pre-rename layout. We intentionally do NOT delete these
+# automatically: the old directory holds the agent_config.json we just recovered
+# the identity from, and it is the operator's rollback if this install misbehaves.
+# Point at it instead so it doesn't linger forever with a stale agent binary.
+$legacyDirs = @("C:\Program Files\CyberSentinel", "C:\ProgramData\CyberSentinel") |
+              Where-Object { Test-Path $_ }
+if ($legacyDirs) {
+    Write-Host "Legacy install detected (pre-rename):" -ForegroundColor Yellow
+    foreach ($d in $legacyDirs) { Write-Host "  $d" }
+    if ($existingAgentId) {
+        Write-Host "  Agent identity $existingAgentId was carried over from it." -ForegroundColor Yellow
+    }
+    Write-Host "  Kept as your rollback. Once you've confirmed this agent is"
+    Write-Host "  healthy (heartbeats + a test block), remove them with:"
+    foreach ($d in $legacyDirs) { Write-Host "    Remove-Item '$d' -Recurse -Force" }
+    Write-Host ""
+}
+
 Write-Host "Uninstall:" -ForegroundColor Yellow
 Write-Host "  Unregister-ScheduledTask -TaskName '$TASK_NAME' -Confirm:`$false"
 Write-Host "  Stop-Process -Name 'cybersentineldlp_agent' -Force"

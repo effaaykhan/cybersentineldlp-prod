@@ -4,6 +4,9 @@ Enterprise-grade Data Loss Prevention Platform
 """
 
 import logging
+import os
+import secrets
+import string
 import sys
 import asyncio
 from contextlib import asynccontextmanager
@@ -32,6 +35,32 @@ from app.api.v1 import api_router
 # Setup structured logging
 setup_logging()
 logger = structlog.get_logger()
+
+
+def _generate_admin_password(length: int = 20) -> str:
+    """Generate a random admin password that satisfies the app's own policy.
+
+    validate_password_strength() requires >= PASSWORD_MIN_LENGTH characters with
+    at least one upper, lower, digit and special. We guarantee one of each rather
+    than generating randomly and hoping, then fill the rest from the full
+    alphabet and shuffle so the mandatory characters aren't in fixed positions.
+    Uses `secrets` (CSPRNG), never `random`.
+    """
+    specials = "!@#$%^&*()-_=+[]{}"
+    alphabet = string.ascii_letters + string.digits + specials
+    required = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        secrets.choice(specials),
+    ]
+    filler = [secrets.choice(alphabet) for _ in range(max(0, length - len(required)))]
+    chars = required + filler
+    # Fisher-Yates via secrets so position isn't predictable.
+    for i in range(len(chars) - 1, 0, -1):
+        j = secrets.randbelow(i + 1)
+        chars[i], chars[j] = chars[j], chars[i]
+    return "".join(chars)
 
 
 async def _auto_init_schema_and_admin():
@@ -123,10 +152,26 @@ async def _auto_init_schema_and_admin():
             )
             user_count = result.scalar()
             if user_count == 0:
-                # Fixed default password. Operators are expected to change it
-                # after first login via Settings -> Profile -> Change Password.
-                # Must meet the app's password policy (>=8 chars, letters+digits+symbol).
-                admin_password = "Admin@1234"
+                # Seed the first admin with a RANDOM password, unique per
+                # deployment.
+                #
+                # SECURITY: this used to be a hardcoded "Admin@1234". This repo is
+                # source-available, so that shipped known credentials to every
+                # install — anyone who can read the code (or this file on GitHub)
+                # knew the admin password of every deployment until an operator
+                # happened to change it. Classic default-credentials exposure.
+                #
+                # The generated password is logged ONCE below so the operator can
+                # retrieve it with `docker logs`. Set DLP_ADMIN_PASSWORD to pin it
+                # from your own secrets manager instead (useful for automated /
+                # repeatable deployments).
+                #
+                # NOTE: we deliberately do NOT set must_change_password=TRUE.
+                # login() rejects such users with 403 and no token, while
+                # /auth/change-password requires a valid JWT — so the flag would
+                # lock the only admin out permanently. Fix that deadlock before
+                # ever enabling it.
+                admin_password = os.getenv("DLP_ADMIN_PASSWORD") or _generate_admin_password()
                 hashed = get_password_hash(admin_password)
                 await session.execute(
                     text(
@@ -139,12 +184,21 @@ async def _auto_init_schema_and_admin():
                     {"pw": hashed},
                 )
                 await session.commit()
-                logger.warning(
-                    "DEFAULT ADMIN CREATED — change this password after first login",
-                    username="admin",
-                    default_password=admin_password,
-                    must_change_password=False,
-                )
+                if os.getenv("DLP_ADMIN_PASSWORD"):
+                    # Operator supplied it — don't echo a secret they already hold.
+                    logger.warning(
+                        "DEFAULT ADMIN CREATED — password taken from DLP_ADMIN_PASSWORD",
+                        username="admin",
+                    )
+                else:
+                    # Logged once, on first boot only. Retrieve with:
+                    #   docker logs cybersentinel-manager 2>&1 | grep generated_password
+                    logger.warning(
+                        "DEFAULT ADMIN CREATED — record this password now and change it after "
+                        "first login; it is shown only once",
+                        username="admin",
+                        generated_password=admin_password,
+                    )
             else:
                 logger.info("Users table already populated, skipping admin seed")
     except Exception as e:

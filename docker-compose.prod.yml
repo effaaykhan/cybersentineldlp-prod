@@ -135,7 +135,7 @@ services:
       # Server
       - PORT=55000
       - WORKERS=4
-      - VERSION=2.1.0
+      - VERSION=2.1.1
       # Run in production mode by default. Without this the app fell back to its
       # "development" default, which skips production-only hardening — wildcard
       # CORS rejection and fail-closed auth when Redis is unavailable. Override
@@ -185,6 +185,12 @@ services:
 
       # SSO shared secret for SIEM integration (empty = SSO disabled)
       - DLP_SSO_SECRET=${DLP_SSO_SECRET:-}
+
+      # Initial admin password, used ONLY when seeding the first admin on a
+      # brand-new database. Leave empty and the manager generates a random one
+      # and logs it once (grep generated_password). Set it from your secrets
+      # manager for automated/repeatable deployments.
+      - DLP_ADMIN_PASSWORD=${DLP_ADMIN_PASSWORD:-}
 
       # OneDrive OAuth (optional)
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID:-}

@@ -131,9 +131,21 @@ docker exec cybersentinel-manager alembic stamp head
 > (see [Install updates](#install-updates)) so new columns/roles land on the
 > already-populated database.
 
-**First login:** the manager seeds a default admin on first boot —
-username **`admin`**, password **`Admin@1234`**. Change it immediately after
-logging in (Settings → Profile → Change Password).
+```bash
+# 6. Retrieve the admin password. On first boot the manager seeds user `admin`
+#    with a RANDOM password, unique to this deployment, logged exactly once:
+docker logs cybersentinel-manager 2>&1 | grep generated_password
+```
+
+**First login:** username **`admin`**, with the password from step 6. Change it
+after logging in (Settings → Profile → Change Password).
+
+> Prefer to set it yourself (e.g. from a secrets manager, for automated
+> deployments)? Put `DLP_ADMIN_PASSWORD=<your-password>` in `.env` **before** the
+> first start and that is used instead — nothing is written to the logs. It must
+> meet the password policy: 7+ chars with upper, lower, digit and a symbol.
+> This only applies when seeding a brand-new database; it never changes an
+> existing admin's password.
 
 - Dashboard: `http://<server-ip>:3023`  (override with `DASHBOARD_HOST_PORT` in `.env`)
 - API docs: `http://<server-ip>:55000/api/v1/docs`

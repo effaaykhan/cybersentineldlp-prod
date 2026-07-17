@@ -8,6 +8,52 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔐 v2.1.1 — Random per-deployment admin password (July 17, 2026)
+
+### Summary
+
+Removes hardcoded default admin credentials. Found while validating the v2.1.0
+GHCR images with a clean-room deploy.
+
+### Default-credentials exposure (fixed)
+
+The first admin was seeded with a **fixed** password, `Admin@1234`, written in
+`server/app/main.py`. This repository is source-available, so every deployment
+shipped with publicly-known admin credentials until an operator happened to
+change them.
+
+The manager now generates a **random 20-character password, unique per
+deployment**, using `secrets` (CSPRNG). It is logged exactly once on first boot:
+
+```bash
+docker logs cybersentinel-manager 2>&1 | grep generated_password
+```
+
+The generator guarantees the app's own policy (upper + lower + digit + symbol,
+verified against `validate_password_strength`, 1000/1000 samples valid and
+unique). Set `DLP_ADMIN_PASSWORD` in `.env` to pin it from a secrets manager
+instead (automated deployments) — then nothing is logged. Either path applies
+**only** when seeding a brand-new database; it never rotates an existing admin.
+
+### Why `must_change_password` was NOT enabled
+
+Forcing a change on first login looks like the obvious companion fix, but the
+two endpoints deadlock: `login()` rejects such users with **403 and no token**
+(`auth.py:215`), while `/auth/change-password` **requires a valid JWT**
+(`auth.py:319`). Enabling the flag would lock the only admin out permanently.
+Left `FALSE` deliberately; the deadlock must be fixed before it can be used.
+
+### Verified (clean-room, fresh database)
+
+- Fresh install seeds a random password; `Admin@1234` appears **0** times.
+- Login with the generated password → **200** + access token.
+- Login with the old `Admin@1234` → **401**.
+- Manager healthy, `environment=production`, `debug=false`, version 2.1.1.
+
+Images: `dlp-manager` / `dlp-dashboard` at `:latest` and `:2.1.1`.
+
+---
+
 ## 🛡️ Content-Inspection Hardening, Outage Resilience & OCR (July 15–16, 2026)
 
 ### Summary

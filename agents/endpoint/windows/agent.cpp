@@ -2732,50 +2732,105 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  return (sum % 10) == 0;
              };
 
+             // OCR of a browser/PDF window is noisy: it turns hyphens into
+             // spaces/dots and confuses digits with letters (1<->l/I, 0<->O,
+             // 5<->S, 8<->B). Notepad is read exactly via WM_GETTEXT and matched
+             // fine, but Edge/Chrome render to a GPU surface that returns nothing
+             // to WM_GETTEXT, so their content only ever reaches the classifier
+             // through OCR — where the strict patterns silently missed it (2000+
+             // OCR chars, zero matches, screenshot allowed). This repairs the
+             // lookalikes, but ONLY inside tokens that are already mostly digits,
+             // so ordinary words are untouched. The result is scanned IN ADDITION
+             // to the raw text, never instead of it.
+             auto normalizeOcrDigits = [](const std::string& in) -> std::string {
+                 std::string out = in;
+                 auto isSep = [](char c){ return c==' '||c=='\t'||c=='-'||c=='.'||c=='_'; };
+                 size_t i = 0, n = out.size();
+                 while (i < n) {
+                     if (isSep(out[i])) { i++; continue; }
+                     size_t j = i; int digits=0, look=0, other=0;
+                     while (j < n && !isSep(out[j])) {
+                         char c = out[j];
+                         if (c>='0'&&c<='9') digits++;
+                         else if (c=='l'||c=='I'||c=='|'||c=='O'||c=='o'||c=='S'||
+                                  c=='B'||c=='b'||c=='Z'||c=='G'||c=='g') look++;
+                         else other++;
+                         j++;
+                     }
+                     if (digits>=2 && look>0 && other<=1 && (digits+look)>=3) {
+                         for (size_t k=i;k<j;k++) switch(out[k]) {
+                             case 'l': case 'I': case '|': out[k]='1'; break;
+                             case 'O': case 'o':          out[k]='0'; break;
+                             case 'S':                    out[k]='5'; break;
+                             case 'B': case 'b':          out[k]='8'; break;
+                             case 'Z':                    out[k]='2'; break;
+                             case 'G': case 'g':          out[k]='6'; break;
+                         }
+                     }
+                     i = j;
+                 }
+                 return out;
+             };
+
              // Shared: classify any text using regex patterns.
              // Logs every matched pattern name + the actual matched text so
              // we can tell at a glance why a file was flagged.
-             auto classifyText = [this, luhnValid](const std::string& content, const std::string& source) -> std::string {
+             auto classifyText = [this, luhnValid, normalizeOcrDigits](const std::string& content, const std::string& source) -> std::string {
                  if (content.empty()) return "Public";
+                 // Separator classes are [\s._-]: OCR renders a hyphen as a
+                 // space or a dot about as often as a hyphen, so requiring a
+                 // literal '-' (as the SSN pattern used to) is what let an OCR'd
+                 // SSN slip through. Credit cards stay gated by Luhn below, which
+                 // kills the "any 16 digits" false positive that looser
+                 // separators would otherwise invite.
                  static const std::vector<std::pair<std::string, std::regex>> patterns = {
-                     {"AADHAAR",     std::regex(R"(\b\d{4}[\s-]\d{4}[\s-]\d{4}\b)")},
+                     {"AADHAAR",     std::regex(R"(\b\d{4}[\s._-]\d{4}[\s._-]\d{4}\b)")},
                      {"PAN",         std::regex(R"(\b[A-Z]{5}\d{4}[A-Z]\b)")},
-                     {"CREDIT_CARD", std::regex(R"(\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b)")},
-                     {"SSN",         std::regex(R"(\b\d{3}-\d{2}-\d{4}\b)")},
+                     {"CREDIT_CARD", std::regex(R"(\b\d{4}[\s._-]?\d{4}[\s._-]?\d{4}[\s._-]?\d{4}\b)")},
+                     {"SSN",         std::regex(R"(\b\d{3}[\s._-]\d{2}[\s._-]\d{4}\b)")},
                      {"PRIVATE_KEY", std::regex(R"(-----BEGIN\s+(RSA\s+)?PRIVATE KEY-----)")},
                      {"AWS_KEY",     std::regex(R"(AKIA[0-9A-Z]{16})")},
                      {"IFSC",        std::regex(R"(\b[A-Z]{4}0[A-Z0-9]{6}\b)")},
                  };
+
+                 // For OCR-sourced text, ALSO scan a digit-normalized copy so
+                 // "l23-45-678O" is caught like "123-45-6789". Exact-text sources
+                 // (WM_GETTEXT, file-from-disk) are matched as-is — no need to
+                 // second-guess text we read precisely.
+                 std::vector<std::string> scanTexts = { content };
+                 if (source.find("ocr") != std::string::npos) {
+                     std::string norm = normalizeOcrDigits(content);
+                     if (norm != content) scanTexts.push_back(norm);
+                 }
+
                  float score = 0.0f;
                  std::vector<std::string> matchedNames;
                  for (const auto& [name, pattern] : patterns) {
-                     try {
-                         auto it  = std::sregex_iterator(content.begin(), content.end(), pattern);
-                         auto end = std::sregex_iterator();
-                         bool fired = false;
-                         std::string sample;
-                         for (; it != end; ++it) {
-                             std::string m = it->str();
-                             // CREDIT_CARD: drop matches that don't pass Luhn.
-                             // This kills the most common false positive
-                             // (any 16 digits in a row).
-                             if (name == "CREDIT_CARD" && !luhnValid(m)) {
-                                 continue;
+                     bool fired = false;
+                     std::string sample;
+                     for (const auto& text : scanTexts) {
+                         try {
+                             auto it  = std::sregex_iterator(text.begin(), text.end(), pattern);
+                             auto end = std::sregex_iterator();
+                             for (; it != end; ++it) {
+                                 std::string m = it->str();
+                                 if (name == "CREDIT_CARD" && !luhnValid(m)) continue;
+                                 fired = true;
+                                 sample = m;
+                                 if (sample.size() > 60) sample.resize(60);
+                                 break;
                              }
-                             fired = true;
-                             sample = m;
-                             if (sample.size() > 60) sample.resize(60);
-                             break;
-                         }
-                         if (fired) {
-                             logger.Warning("CLASSIFIER_MATCH [" + source + "] pattern=" + name +
-                                            " matched=\"" + sample + "\"");
-                             matchedNames.push_back(name);
-                             if (name == "CREDIT_CARD" || name == "SSN" || name == "AADHAAR" ||
-                                 name == "PRIVATE_KEY" || name == "AWS_KEY") score += 0.9f;
-                             else if (name == "PAN" || name == "IFSC") score += 0.7f;
-                         }
-                     } catch (...) {}
+                         } catch (...) {}
+                         if (fired) break;   // count each pattern once, raw or normalized
+                     }
+                     if (fired) {
+                         logger.Warning("CLASSIFIER_MATCH [" + source + "] pattern=" + name +
+                                        " matched=\"" + sample + "\"");
+                         matchedNames.push_back(name);
+                         if (name == "CREDIT_CARD" || name == "SSN" || name == "AADHAAR" ||
+                             name == "PRIVATE_KEY" || name == "AWS_KEY") score += 0.9f;
+                         else if (name == "PAN" || name == "IFSC") score += 0.7f;
+                     }
                  }
                  std::string result;
                  if (score >= 0.8f)      result = "Restricted";

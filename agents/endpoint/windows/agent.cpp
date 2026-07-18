@@ -2914,6 +2914,27 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  }
              }
 
+             // ── Stage 2b: UI Automation — EXACT text from browsers/PDF/UWP ──
+             // Chromium/Edge/Electron render to a GPU surface and return nothing
+             // to WM_GETTEXT, so Stage 2 misses them and they used to fall all
+             // the way to OCR (fragile). UIA reads their accessibility tree — the
+             // same exact text a screen reader sees — so a sensitive PDF in Edge
+             // is caught as reliably as a file in Notepad, with no OCR noise.
+             // Runs BEFORE the expensive OCR stage; if it convicts, we skip OCR.
+             if (fgWnd) {
+                 try {
+                     std::string uiaText = NetworkExfilMonitor::ReadWindowTextViaUIA((void*)fgWnd);
+                     if (uiaText.length() > 10) {
+                         logger.Debug("UIA text extracted: " + std::to_string(uiaText.length()) +
+                                      " chars from window");
+                         std::string result = classifyText(uiaText, "stage2b-uia:" + windowTitle);
+                         if (result != "Public") return result;
+                     }
+                 } catch (...) {
+                     logger.Debug("UIA text extraction failed for foreground window");
+                 }
+             }
+
              // ── Stage 3: File content from disk ──
              auto dashPos = windowTitle.find(" - ");
              if (dashPos != std::string::npos) {

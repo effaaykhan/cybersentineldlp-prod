@@ -84,4 +84,21 @@ bool IsRunning();
 // -----------------------------------------------------------------------------
 ClassifyResult ClassifyNetworkContent(const std::string& content);
 
+// -----------------------------------------------------------------------------
+// Read the visible/accessible text of a window via UI Automation.
+//
+// This is the reliable way to read content from apps that return nothing to
+// WM_GETTEXT — Chromium/Edge/Electron/UWP render to a GPU surface and only
+// expose their text through the accessibility tree. The screen-capture monitor
+// uses this to catch sensitive data in a browser or PDF viewer exactly (no OCR
+// guesswork), the same way it already reads Notepad via WM_GETTEXT.
+//
+// Returns UTF-8 text (bounded), or empty on failure / no accessible text.
+// `hwnd` is passed as void* so this header stays free of <windows.h>, keeping
+// agent.cpp buildable in environments without the full Win32 headers. The
+// implementation lives in network_exfil_monitor.cpp, which already links UI
+// Automation. Manages COM init on the calling thread itself.
+// -----------------------------------------------------------------------------
+std::string ReadWindowTextViaUIA(void* hwnd);
+
 } // namespace NetworkExfilMonitor

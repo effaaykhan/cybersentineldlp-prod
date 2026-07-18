@@ -1755,4 +1755,99 @@ ClassifyResult ClassifyNetworkContent(const std::string& content) {
     return out;
 }
 
+// -----------------------------------------------------------------------------
+// UI Automation window-text reader (see header).
+//
+// External linkage so the screen-capture monitor (agent.cpp) can call it. Uses
+// the same UIA machinery this file already relies on: the extern "C" GUIDs
+// defined at the top, ElementFromHandle, FindAll + get_CurrentName, and the
+// Value pattern — mirroring FindFileNameFromDialog above.
+// -----------------------------------------------------------------------------
+std::string ReadWindowTextViaUIA(void* hwndRaw) {
+    HWND hwnd = (HWND)hwndRaw;
+    if (!hwnd) return {};
+
+    // Self-contained BSTR -> UTF-8 (avoids depending on the anon-namespace
+    // helper and keeps this function movable).
+    auto w2u = [](BSTR b) -> std::string {
+        if (!b) return {};
+        int len = (int)SysStringLen(b);
+        if (len <= 0) return {};
+        int need = WideCharToMultiByte(CP_UTF8, 0, b, len, nullptr, 0, nullptr, nullptr);
+        if (need <= 0) return {};
+        std::string s((size_t)need, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, b, len, &s[0], need, nullptr, nullptr);
+        return s;
+    };
+
+    // UIA needs COM on THIS thread. The screen-scan thread doesn't initialise it,
+    // so we do — balanced only when we were the initialiser. RPC_E_CHANGED_MODE
+    // means COM is already up in another apartment model; still usable, and we
+    // must NOT uninitialise it.
+    HRESULT hrInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool needUninit = SUCCEEDED(hrInit);
+
+    std::string out;
+    IUIAutomation* uia = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+                                   IID_IUIAutomation, (void**)&uia)) && uia) {
+        IUIAutomationElement* root = nullptr;
+        if (SUCCEEDED(uia->ElementFromHandle(hwnd, &root)) && root) {
+            IUIAutomationCondition* trueCond = nullptr;
+            uia->CreateTrueCondition(&trueCond);
+            if (trueCond) {
+                IUIAutomationElementArray* arr = nullptr;
+                root->FindAll(TreeScope_Descendants, trueCond, &arr);
+                if (arr) {
+                    int count = 0; arr->get_Length(&count);
+                    // Bound the work: a browser page can expose thousands of
+                    // nodes. Cap both the element count and the total text so a
+                    // once-per-second scan stays cheap.
+                    const int    MAX_ELEMENTS = 4000;
+                    const size_t MAX_CHARS    = 65536;
+                    if (count > MAX_ELEMENTS) count = MAX_ELEMENTS;
+                    for (int i = 0; i < count && out.size() < MAX_CHARS; ++i) {
+                        IUIAutomationElement* el = nullptr;
+                        arr->GetElement(i, &el);
+                        if (!el) continue;
+
+                        // Name carries most rendered text (page/PDF text nodes).
+                        BSTR name = nullptr;
+                        if (SUCCEEDED(el->get_CurrentName(&name)) && name) {
+                            std::string n = w2u(name);
+                            SysFreeString(name);
+                            if (!n.empty()) { out += n; out += "\n"; }
+                        }
+                        // Value pattern carries edit/textbox content that Name omits.
+                        IUnknown* pat = nullptr;
+                        if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &pat)) && pat) {
+                            IUIAutomationValuePattern* vp = nullptr;
+                            pat->QueryInterface(IID_IUIAutomationValuePattern, (void**)&vp);
+                            pat->Release();
+                            if (vp) {
+                                BSTR val = nullptr;
+                                if (SUCCEEDED(vp->get_CurrentValue(&val)) && val) {
+                                    std::string s = w2u(val);
+                                    SysFreeString(val);
+                                    if (!s.empty()) { out += s; out += "\n"; }
+                                }
+                                vp->Release();
+                            }
+                        }
+                        el->Release();
+                    }
+                    arr->Release();
+                }
+                trueCond->Release();
+            }
+            root->Release();
+        }
+        uia->Release();
+    }
+
+    if (needUninit) CoUninitialize();
+    if (out.size() > 65536) out.resize(65536);
+    return out;
+}
+
 } // namespace NetworkExfilMonitor

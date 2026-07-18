@@ -64,7 +64,11 @@ services:
 
   # OpenSearch (Event Storage & Search)
   opensearch:
-    image: opensearchproject/opensearch:2.11.0
+    # Aligned with docker-compose.prod.yml (2.19.0). Security stays disabled on
+    # the dev stack (DISABLE_SECURITY_PLUGIN=true below), so unlike prod there is
+    # no initial-admin-password interaction — the bump is a plain image swap over
+    # the existing volume.
+    image: opensearchproject/opensearch:2.19.0
     container_name: cybersentinel-opensearch
     networks:
       - cybersentinel-net
@@ -103,6 +107,10 @@ services:
     environment:
       - ENVIRONMENT=production
       - DEBUG=False
+      # Keep in step with docker-compose.prod.yml so the dev stack reports the
+      # same version the About card and /health show — otherwise dev reads the
+      # app's 2.0.0 default and looks stale next to prod.
+      - VERSION=2.1.6
       - SECRET_KEY=${SECRET_KEY}
       - PORT=55000
       - POSTGRES_HOST=postgres

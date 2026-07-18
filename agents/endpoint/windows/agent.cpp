@@ -2803,11 +2803,36 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      if (norm != content) scanTexts.push_back(norm);
                  }
 
+                 // A checksum-less fixed-length digit pattern (AADHAAR 12, SSN 9)
+                 // will happily match a SLICE of a longer separated digit run:
+                 // AADHAAR's 12 digits are exactly the first three groups of a
+                 // "4111 1111 1111 1111" card, and \b is satisfied by the space
+                 // that follows. That mislabels a card as an Aadhaar. \b only
+                 // rejects a *word-char* neighbour, never a "<sep><digit>"
+                 // continuation. So for AADHAAR/SSN, drop any match that is flanked
+                 // by <digit><sep> before it or <sep><digit> after it — i.e. one
+                 // that is really part of a longer number. CREDIT_CARD is left to
+                 // Luhn (below): a slice of a longer run almost never validates, and
+                 // the guard could otherwise suppress a real card abutting a number.
+                 auto isSep = [](char c) {
+                     return c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+                            c == '.' || c == '_' || c == '-';
+                 };
+                 auto isDig = [](char c) { return c >= '0' && c <= '9'; };
+                 auto partOfLongerNumber = [&](const std::string& text, size_t pos, size_t len) -> bool {
+                     size_t end = pos + len;
+                     if (end + 1 < text.size() && isSep(text[end]) && isDig(text[end + 1])) return true;
+                     if (pos >= 2 && isSep(text[pos - 1]) && isDig(text[pos - 2])) return true;
+                     return false;
+                 };
+
                  float score = 0.0f;
                  std::vector<std::string> matchedNames;
                  for (const auto& [name, pattern] : patterns) {
                      bool fired = false;
                      std::string sample;
+                     const bool numericGroup =
+                         (name == "AADHAAR" || name == "SSN");
                      for (const auto& text : scanTexts) {
                          try {
                              auto it  = std::sregex_iterator(text.begin(), text.end(), pattern);
@@ -2815,6 +2840,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                              for (; it != end; ++it) {
                                  std::string m = it->str();
                                  if (name == "CREDIT_CARD" && !luhnValid(m)) continue;
+                                 if (numericGroup &&
+                                     partOfLongerNumber(text, (size_t)it->position(), m.size())) continue;
                                  fired = true;
                                  sample = m;
                                  if (sample.size() > 60) sample.resize(60);

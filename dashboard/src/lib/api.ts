@@ -788,6 +788,17 @@ export const getRetentionConfig = async (): Promise<RetentionConfig> => {
   const { data } = await apiClient.get('/system/retention')
   return data
 }
+
+export interface AboutInfo {
+  version: string
+  service: string
+  backend: string
+  opensearch: string
+}
+export const getAbout = async (): Promise<AboutInfo> => {
+  const { data } = await apiClient.get('/system/about')
+  return data
+}
 export const updateRetentionConfig = async (
   body: { event_retention_days: number; opensearch_retention_days: number },
 ): Promise<RetentionConfig> => {

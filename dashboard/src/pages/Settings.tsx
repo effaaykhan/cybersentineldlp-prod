@@ -4,6 +4,7 @@ import toast from 'react-hot-toast'
 import {
   changePassword,
   getRetentionConfig, updateRetentionConfig, type RetentionConfig,
+  getAbout, type AboutInfo,
 } from '@/lib/api'
 import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
@@ -21,9 +22,17 @@ export default function Settings() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [changingPassword, setChangingPassword] = useState(false)
 
+  const [about, setAbout] = useState<AboutInfo | null>(null)
   const [retention, setRetention] = useState<RetentionConfig | null>(null)
   const [retForm, setRetForm] = useState({ event_retention_days: 180, opensearch_retention_days: 90 })
   const [savingRetention, setSavingRetention] = useState(false)
+
+  // Real component versions for the About card. No super-admin gate: any
+  // logged-in user can see the platform version. Failure leaves `about` null and
+  // the card falls back to static text.
+  useEffect(() => {
+    getAbout().then(setAbout).catch(() => { /* non-fatal; card shows fallbacks */ })
+  }, [])
 
   useEffect(() => {
     if (!isSuperAdmin) return
@@ -358,15 +367,15 @@ export default function Settings() {
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-cs-ink-2">Version</span>
-              <span className="num font-medium text-cs-ink">2.0.0</span>
+              <span className="num font-medium text-cs-ink">{about?.version ?? '—'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-cs-ink-2">Backend API</span>
-              <span className="num font-medium text-cs-ink">FastAPI 0.109.0</span>
+              <span className="num font-medium text-cs-ink">{about?.backend ?? 'FastAPI'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-cs-ink-2">OpenSearch</span>
-              <span className="num font-medium text-cs-ink">2.11.0</span>
+              <span className="num font-medium text-cs-ink">{about?.opensearch ?? '—'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-cs-ink-2">License</span>

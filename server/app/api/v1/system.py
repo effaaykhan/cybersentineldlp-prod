@@ -21,6 +21,36 @@ from app.services.audit_service import audit_log
 router = APIRouter()
 
 
+@router.get("/about")
+async def get_about() -> Dict[str, Any]:
+    """Real component versions for the dashboard's About card.
+
+    The card used to hard-code "2.0.0" and "OpenSearch 2.11.0", which drifted from
+    reality on every release and every OpenSearch bump — a client-facing page that
+    lied about what it was running. These are now reported live: `version` is the
+    deployed app version, `opensearch` is queried from the actual cluster (so it
+    reflects the real 2.19 rather than a stale literal). No auth: version strings
+    are not sensitive and the card renders before the user hits a protected route.
+    """
+    opensearch_version = "unavailable"
+    try:
+        from app.core import opensearch as _os_mod
+        client = getattr(_os_mod, "opensearch_client", None)
+        if client is not None:
+            info = await client.info()
+            opensearch_version = (info or {}).get("version", {}).get("number", "unknown")
+    except Exception:
+        # OpenSearch being down must never break the About card.
+        opensearch_version = "unavailable"
+
+    return {
+        "version": settings.VERSION,
+        "service": settings.PROJECT_NAME,
+        "backend": "FastAPI",
+        "opensearch": opensearch_version,
+    }
+
+
 def _uid(user):
     return getattr(user, "id", None) if not isinstance(user, dict) else user.get("sub")
 

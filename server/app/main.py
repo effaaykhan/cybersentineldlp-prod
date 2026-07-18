@@ -382,9 +382,20 @@ async def _seed_default_policies():
             result = await session.execute(text("SELECT COUNT(*) FROM policies"))
             policy_count = result.scalar()
 
+            # Do NOT early-return when the table is non-empty. This used to skip
+            # entirely, which meant a seed file that GAINED new default policies
+            # (e.g. adding clipboard / usb_device / file_system coverage so the
+            # endpoint agent actually enables those channels) never reached an
+            # already-seeded deployment — it stayed on whatever it first seeded
+            # and the agent logged "NO ACTIVE POLICIES". We now always run the
+            # INSERT ... ON CONFLICT (name) DO NOTHING loop below, which tops up
+            # ONLY the missing policies by name and never touches operator edits
+            # to existing rows. It's a dozen idempotent upserts — cheap on boot.
             if policy_count > 0:
-                logger.info("Policies table already populated, skipping default policies seed", count=policy_count)
-                return
+                logger.info(
+                    "Policies table already populated — topping up any missing default policies",
+                    count=policy_count,
+                )
 
             policies_file = Path(__file__).parent.parent / "data" / "default_policies.json"
             if not policies_file.exists():
@@ -400,8 +411,9 @@ async def _seed_default_policies():
                 return
             admin_id = admin_row[0]
 
+            inserted = 0
             for policy in policies_data:
-                await session.execute(
+                _res = await session.execute(
                     text(
                         # `status` MUST be listed explicitly. Policy.status is
                         # NOT NULL and its "active" default is a SQLAlchemy ORM
@@ -457,9 +469,15 @@ async def _seed_default_policies():
                         "created_by": admin_id,
                     },
                 )
+                inserted += _res.rowcount or 0
 
             await session.commit()
-            logger.info("Default blocking policies seeded", count=len(policies_data))
+            logger.info(
+                "Default policies seed complete",
+                already_present=policy_count,
+                newly_inserted=inserted,
+                total_in_file=len(policies_data),
+            )
 
     except Exception as e:
         logger.warning("Default policies seed encountered an error", error=str(e))

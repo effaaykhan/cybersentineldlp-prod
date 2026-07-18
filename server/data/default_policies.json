@@ -348,5 +348,135 @@
         "message": "Oversized uninspected file blocked"
       }
     }
+  },
+  {
+    "name": "Monitor USB Device Connections",
+    "description": "Records USB storage connect/disconnect events for visibility. This is what makes USB device activity appear on the dashboard — without a usb_device_monitoring policy the agent leaves that channel off (hasUsbDevicePolicies=false) and connect/disconnect events are never sent.",
+    "enabled": true,
+    "priority": 30,
+    "type": "usb_device_monitoring",
+    "severity": "medium",
+    "config": {
+      "events": {
+        "connect": true,
+        "disconnect": true,
+        "fileTransfer": false
+      },
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "any",
+      "rules": [
+        {
+          "field": "usb_event_type",
+          "operator": "in",
+          "value": [
+            "connect",
+            "disconnect"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "medium"
+      }
+    }
+  },
+  {
+    "name": "Alert on Sensitive Clipboard Copy",
+    "description": "Alerts when clipboard content classifies as sensitive (cards, SSN, Aadhaar, PAN, keys, DB connection strings). Enables the agent's clipboard channel (hasClipboardPolicies=true); action is alert, not block, so it never interferes with normal copy/paste.",
+    "enabled": true,
+    "priority": 80,
+    "type": "clipboard_monitoring",
+    "severity": "high",
+    "config": {
+      "monitoredEvents": [
+        "clipboard_copy"
+      ],
+      "contentTypes": [
+        "text"
+      ],
+      "dataTypes": [
+        "CREDIT_CARD",
+        "SSN",
+        "AADHAAR",
+        "PAN_CARD",
+        "EMAIL",
+        "PHONE",
+        "API_KEY",
+        "PRIVATE_KEY",
+        "AWS_KEY",
+        "DATABASE_CONNECTION"
+      ],
+      "minMatchCount": 1,
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": []
+    },
+    "actions": {
+      "alert": {
+        "severity": "high"
+      }
+    }
+  },
+  {
+    "name": "Monitor Sensitive Files (customize paths)",
+    "description": "Watches a folder for sensitive files being created/modified and alerts. Enables the agent's file_system channel (hasFilePolicies=true). NOTE: the monitoredPaths below is a safe, universal Windows default — EDIT it to the folders your users actually stage data in (e.g. their Desktop/Downloads) for real coverage. Action is alert, not block.",
+    "enabled": true,
+    "priority": 40,
+    "type": "file_system_monitoring",
+    "severity": "medium",
+    "config": {
+      "monitoredPaths": [
+        "C:\\Users\\Public\\Documents"
+      ],
+      "events": {
+        "create": true,
+        "modify": true,
+        "delete": false,
+        "move": true
+      },
+      "patterns": {
+        "predefined": [
+          "credit_card",
+          "ssn",
+          "aadhaar",
+          "pan",
+          "api_key",
+          "private_key",
+          "aws_key",
+          "database_connection_string"
+        ],
+        "custom": []
+      },
+      "action": "alert",
+      "fileExtensions": [
+        ".txt",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".csv"
+      ]
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "file_path",
+          "operator": "starts_with",
+          "value": "C:\\Users\\Public\\Documents"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "medium"
+      }
+    }
   }
 ]

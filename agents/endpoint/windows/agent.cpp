@@ -1782,6 +1782,15 @@ static ClassificationResult Classify(const std::string& content,
     std::mutex usbTransferMutex;
     std::atomic<bool> usbBlockingActive{false};  // Track if USB blocking is currently active
 
+    // Screen-capture classification detail. classifyText (run on the content-scan
+    // thread) stashes the most recent SENSITIVE screen verdict's score + matched
+    // data-type labels here; the screen_capture event callback reads them back so
+    // the emitted event carries classification_score / labels / rules_matched, not
+    // just the bare level. Guarded — writer and reader are on different threads.
+    std::mutex screenDetailMutex;
+    double screenLastScore = 0.0;
+    std::vector<std::string> screenLastLabels;
+
      static DLPAgent* s_instance;
     
      static LRESULT CALLBACK UsbWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -2714,6 +2723,17 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          //   3) File content from disk (if editor with filename in title)
          auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName) -> std::string {
 
+             // Reset the per-pass detail stash up front. Each classification pass
+             // reflects ONE foreground window; clearing here means a Stage-1
+             // title-keyword match (which never reaches classifyText) reports no
+             // stale data-type labels from a previously-scanned window, and a
+             // classifyText hit below refills it for the window actually on screen.
+             {
+                 std::lock_guard<std::mutex> lock(screenDetailMutex);
+                 screenLastScore = 0.0;
+                 screenLastLabels.clear();
+             }
+
              // Luhn checksum — eliminates random 16-digit sequences (IMEIs,
              // serial numbers, GSTIN suffixes) from being mis-classified as
              // credit cards. Real PANs always pass Luhn.
@@ -2873,6 +2893,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      logger.Info("CLASSIFIER_VERDICT [" + source + "] score=" +
                                  std::to_string(score) + " patterns=[" + joined +
                                  "] => " + result);
+                 }
+                 // Stash a SENSITIVE verdict's detail so the screen_capture event
+                 // can report WHAT was detected (data types + score), not just the
+                 // level. Only on non-Public, so a later Public stage/scan can't
+                 // wipe the labels while a block is active.
+                 if (result != "Public") {
+                     std::lock_guard<std::mutex> lock(screenDetailMutex);
+                     screenLastScore  = score;
+                     screenLastLabels = matchedNames;
                  }
                  return result;
              };
@@ -3109,6 +3138,34 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("severity", event.containsSensitiveData ? "high" : "low");
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.classification);
+                 // Report WHAT was detected, not just the level. The content-scan
+                 // thread stashed the matched data-type labels + score for the most
+                 // recent sensitive verdict; attach them so the dashboard shows the
+                 // data types (CREDIT_CARD, SSN, …) and score for this block.
+                 if (event.containsSensitiveData) {
+                     double lastScore = 0.0;
+                     std::vector<std::string> lastLabels;
+                     {
+                         std::lock_guard<std::mutex> lock(screenDetailMutex);
+                         lastScore  = screenLastScore;
+                         lastLabels = screenLastLabels;
+                     }
+                     json.AddDouble("classification_score", lastScore);
+                     json.AddArray("classification_labels", lastLabels);
+                     json.AddArray("classification_rules_matched", lastLabels);
+                     // Redacted summary only — NEVER the raw matched values, or we'd
+                     // ship the very secret we just blocked back over the wire.
+                     if (!lastLabels.empty()) {
+                         std::string joined;
+                         for (size_t i = 0; i < lastLabels.size(); ++i) {
+                             if (i) joined += ", ";
+                             joined += lastLabels[i];
+                         }
+                         json.AddString("detected_content",
+                             std::to_string(lastLabels.size()) +
+                             " sensitive data type(s) detected: " + joined);
+                     }
+                 }
                  json.AddBool("blocked", event.actionTaken == "Block");
                  json.AddString("timestamp", GetCurrentTimestampISO());
                  SendEvent(json.Build());

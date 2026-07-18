@@ -195,6 +195,11 @@ final_test.ps1
 manual_*.ps1
 *.sh
 !docker-entrypoint.sh
+# Deployment scripts are shipped, not local scratch — keep them tracked.
+!install.sh
+!uninstall.sh
+!deploy.sh
+!deploy-ubuntu.sh
 
 # Ignore analysis and status files
 *_ANALYSIS.md

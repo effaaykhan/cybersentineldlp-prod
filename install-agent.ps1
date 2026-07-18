@@ -151,20 +151,94 @@ if ($confirm -ne "Y" -and $confirm -ne "y") {
 
 Write-Host ""
 
-# Step 2: Remove old installations
-Write-ColorOutput "Step 2: Removing previous installations..." -Type "Info"
+# Step 2: Detect and COMPLETELY remove any previous agent (old or new)
+#
+# Fleet migration: endpoints in the field run the pre-rename agent —
+# cybersentinel_agent.exe from C:\Program Files\CyberSentinel, sometimes under an
+# older task/service name. This step finds and removes it whether it is active or
+# stopped, so the new agent never coexists with or races the old one. It recovers
+# the old agent_id FIRST, so a migrated endpoint keeps its dashboard identity
+# instead of re-registering as a phantom.
+Write-ColorOutput "Step 2: Removing previous agent installations..." -Type "Info"
 
-Stop-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
-Stop-ScheduledTask -TaskName "CyberSentinelAgent" -ErrorAction SilentlyContinue
-Unregister-ScheduledTask -TaskName "CyberSentinelAgent" -Confirm:$false -ErrorAction SilentlyContinue
-$svc = Get-Service -Name "CyberSentinelAgent" -ErrorAction SilentlyContinue
-if ($svc) {
-    Stop-Service "CyberSentinelAgent" -Force -ErrorAction SilentlyContinue
-    sc.exe delete "CyberSentinelAgent" 2>$null
+$LEGACY_INSTALL = "C:\Program Files\CyberSentinel"     # pre-rename install dir
+$LEGACY_DATA    = "C:\ProgramData\CyberSentinel"
+
+# 2a. Recover an existing identity BEFORE deleting anything (current dir first,
+#     then the legacy dir). Held in script scope for Step 7 to reuse.
+$script:RecoveredAgentId = $null
+foreach ($cfg in @((Join-Path $INSTALL_DIR $CONFIG_NAME), (Join-Path $LEGACY_INSTALL $CONFIG_NAME))) {
+    if ((Test-Path $cfg) -and -not $script:RecoveredAgentId) {
+        try {
+            $id = (Get-Content $cfg -Raw -ErrorAction Stop | ConvertFrom-Json).agent_id
+            if ($id) {
+                $script:RecoveredAgentId = $id
+                Write-ColorOutput "Found existing agent identity: $id" -Type "Info"
+            }
+        } catch { }
+    }
 }
-Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
-Write-ColorOutput "Previous installations cleaned" -Type "Success"
+
+# 2b. Stop every agent process — old and new. Exact names, so `cybersentinel_agent`
+#     never matches `cybersentineldlp_agent` and vice versa.
+$found = $false
+foreach ($proc in @("cybersentinel_agent", "cybersentineldlp_agent")) {
+    Get-Process -Name $proc -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-ColorOutput "Stopping running agent: $($_.Name) (PID $($_.Id))" -Type "Info"
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        $found = $true
+    }
+}
+
+# 2c. Remove scheduled tasks by known name AND by the path they launch. The path
+#     match requires a backslash right after "CyberSentinel", so it matches the
+#     legacy "...\CyberSentinel\..." path but NEVER the new "...\CyberSentinelDLP\...".
+$removedTasks = @{}
+foreach ($n in @($TASK_NAME, "CyberSentinelAgent", "CyberSentinel Agent")) {
+    if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
+        $removedTasks[$n] = $true; $found = $true
+    }
+}
+Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+    (($_.Actions.Arguments -join ' ') -match '\\CyberSentinel\\') -or
+    (($_.Actions.Execute   -join ' ') -match '\\CyberSentinel\\')
+} | ForEach-Object {
+    if (-not $removedTasks[$_.TaskName]) {
+        Write-ColorOutput "Removing legacy scheduled task: $($_.TaskName)" -Type "Info"
+        Stop-ScheduledTask -TaskName $_.TaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        $found = $true
+    }
+}
+
+# 2d. Remove any legacy Windows service (very old installs used one, not a task).
+foreach ($svcName in @("CyberSentinelAgent", "CyberSentinelDLPAgent")) {
+    if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+        Stop-Service $svcName -Force -ErrorAction SilentlyContinue
+        sc.exe delete $svcName 2>$null | Out-Null
+        $found = $true
+    }
+}
+
+# 2e. Delete the legacy install/data directories (identity already recovered).
+#     Exact paths — the CyberSentinelDLP siblings are not touched.
+foreach ($d in @($LEGACY_INSTALL, $LEGACY_DATA)) {
+    if (Test-Path $d) {
+        Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
+        Write-ColorOutput "Removed legacy directory: $d" -Type "Info"
+        $found = $true
+    }
+}
+
+if ($script:RecoveredAgentId) {
+    Write-ColorOutput "Previous agent removed; identity $($script:RecoveredAgentId) will be carried over" -Type "Success"
+} elseif ($found) {
+    Write-ColorOutput "Previous agent removed (no stored identity found)" -Type "Success"
+} else {
+    Write-ColorOutput "No previous agent found — clean install" -Type "Success"
+}
 Write-Host ""
 
 # Step 3: Create directories
@@ -358,28 +432,22 @@ $configPath = Join-Path $INSTALL_DIR $CONFIG_NAME
 
 # Carry over an existing agent identity.
 #
-# Without this, re-running the installer writes a config with no agent_id, the
-# agent mints a fresh random one on next start, and this endpoint re-registers
-# as a brand-new "phantom" agent — orphaning all of its dashboard history and
-# leaving stale agents behind. We look in the current install dir first, then in
-# the legacy "CyberSentinel" directory so identity survives the rename to
-# "CyberSentinelDLP". If neither has one, the agent generates and persists its
-# own on first start, which is the correct behaviour for a genuinely new box.
-$existingAgentId = $null
-$legacyConfig = "C:\Program Files\CyberSentinel\$CONFIG_NAME"
-foreach ($candidate in @($configPath, $legacyConfig)) {
-    if (Test-Path $candidate) {
-        try {
-            $previous = Get-Content $candidate -Raw -ErrorAction Stop | ConvertFrom-Json
-            if ($previous.agent_id) {
-                $existingAgentId = $previous.agent_id
-                Write-ColorOutput "Preserving existing agent identity: $existingAgentId (from $candidate)" -Type "Info"
-                break
-            }
-        } catch {
-            Write-ColorOutput "Could not read $candidate — ignoring it" -Type "Warning"
-        }
-    }
+# Step 2 already recovered it (from the current or legacy install) into
+# $script:RecoveredAgentId, before deleting the old directory. Reuse that. As a
+# fallback for any path where Step 2 didn't set it, read the current config dir.
+# If nothing is found, the agent generates and persists its own id on first
+# start — correct for a genuinely new endpoint. Without this, a re-run would
+# write a config with no agent_id and the endpoint would re-register as a
+# brand-new "phantom" agent, orphaning its dashboard history.
+$existingAgentId = $script:RecoveredAgentId
+if (-not $existingAgentId -and (Test-Path $configPath)) {
+    try {
+        $prev = Get-Content $configPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($prev.agent_id) { $existingAgentId = $prev.agent_id }
+    } catch { }
+}
+if ($existingAgentId) {
+    Write-ColorOutput "Preserving existing agent identity: $existingAgentId" -Type "Info"
 }
 
 $config = @{
@@ -529,29 +597,14 @@ Write-Host "  Disable Auto:    Disable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host "  Enable Auto:     Enable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host ""
 
-# Leftovers from the pre-rename layout. We intentionally do NOT delete these
-# automatically: the old directory holds the agent_config.json we just recovered
-# the identity from, and it is the operator's rollback if this install misbehaves.
-# Point at it instead so it doesn't linger forever with a stale agent binary.
-$legacyDirs = @("C:\Program Files\CyberSentinel", "C:\ProgramData\CyberSentinel") |
-              Where-Object { Test-Path $_ }
-if ($legacyDirs) {
-    Write-Host "Legacy install detected (pre-rename):" -ForegroundColor Yellow
-    foreach ($d in $legacyDirs) { Write-Host "  $d" }
-    if ($existingAgentId) {
-        Write-Host "  Agent identity $existingAgentId was carried over from it." -ForegroundColor Yellow
-    }
-    Write-Host "  Kept as your rollback. Once you've confirmed this agent is"
-    Write-Host "  healthy (heartbeats + a test block), remove them with:"
-    foreach ($d in $legacyDirs) { Write-Host "    Remove-Item '$d' -Recurse -Force" }
+if ($script:RecoveredAgentId) {
+    Write-Host "Migrated from a previous agent — identity $($script:RecoveredAgentId)" -ForegroundColor Yellow
+    Write-Host "  carried over; the old install was removed in Step 2." -ForegroundColor Yellow
     Write-Host ""
 }
 
-Write-Host "Uninstall:" -ForegroundColor Yellow
-Write-Host "  Unregister-ScheduledTask -TaskName '$TASK_NAME' -Confirm:`$false"
-Write-Host "  Stop-Process -Name 'cybersentineldlp_agent' -Force"
-Write-Host "  Remove-Item '$INSTALL_DIR' -Recurse -Force"
-Write-Host "  Remove-Item '$DATA_DIR' -Recurse -Force"
+Write-Host "Uninstall (removes the agent completely):" -ForegroundColor Yellow
+Write-Host "  irm $RAW_BASE/uninstall-agent.ps1 | iex"
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host ""

@@ -204,6 +204,21 @@ admin roles — **Threat Admin**, **Data Protection Admin**, or **Access Control
 Admin** — so each only sees and manages the policies and reporting in their
 domain. The super admin retains visibility across all domains.
 
+#### Uninstall the server
+
+```bash
+# Stop and remove the stack; KEEP data volumes (safe — you can reinstall over it)
+curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash
+
+# Or wipe everything — containers, data volumes AND the install dir (IRREVERSIBLE)
+curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash -s -- --purge
+```
+
+Default keeps your Postgres/Mongo/OpenSearch/Redis data so a later reinstall
+resumes where it left off. `--purge` deletes the volumes (events, agents,
+policies, users) and `/opt/cybersentineldlp`, and prompts for a typed `DELETE`
+confirmation first (add `--yes` to skip the prompt in automation).
+
 ### Windows Agent (one-liner)
 
 **Requirements:** Windows 10/11 64-bit, PowerShell as Administrator
@@ -214,6 +229,15 @@ powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.c
 
 This downloads the agent binary, creates configuration, registers a scheduled task (runs as current user for clipboard/screen access), and starts monitoring.
 
+**Upgrading / fleet migration:** the installer first **detects and completely
+removes any previous agent** — old or new — before installing. It stops the
+running process, unregisters the scheduled task (matched by the path it launches,
+so it finds the old one regardless of its name), removes any legacy service, and
+deletes the old `C:\Program Files\CyberSentinel` layout. It **preserves the
+endpoint's `agent_id`** across the change, so a migrated machine keeps its
+dashboard history instead of re-registering as a new agent. Just run the one-liner
+above on every endpoint — no manual cleanup of the old agent is needed.
+
 #### To start the agent:
 ```powershell
 Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
@@ -222,10 +246,17 @@ Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 #### To Stop the agent:
 ```powershell
 Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 ```
+
+#### To uninstall the agent (removes it completely):
 ```powershell
-Stop-Process -Name "cybersentineldlp_agent" -ErrorAction SilentlyContinue
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall-agent.ps1 | iex"
 ```
+Stops the agent, removes its task/service, and deletes the install and data
+folders — both the current `CyberSentinelDLP` and legacy `CyberSentinel` layouts.
+The agent then shows as **disconnected** on the dashboard; delete it there to
+drop it from the fleet list.
 
 ### Linux Agent
 

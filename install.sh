@@ -222,6 +222,64 @@ if [ -n "${OS_VOL}" ]; then
     say "Existing OpenSearch volume accepts the configured password"
 fi
 
+# ─── 6c. Guard against a stale Postgres volume ────────────────────────
+# Postgres bakes POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB into its data
+# directory ONLY the first time it initialises an EMPTY volume. If a
+# postgres_data volume survives from an earlier run, a changed POSTGRES_PASSWORD
+# in .env is silently ignored — the role keeps its original password. The
+# manager then can't authenticate (cross-container connections hit the
+# scram-sha-256 rule in pg_hba, which enforces the password), the postgres
+# healthcheck/manager dependency fails, and the install dies 3 minutes later
+# behind a confusing "dependency failed to start".
+#
+# We probe exactly the way the manager connects — over the network to the
+# `postgres` service hostname (NOT 127.0.0.1, which pg_hba trusts) using the
+# container's OWN configured creds, so this works regardless of whether the
+# user is dlp_user (dev) or cybersentineldlp (prod). A wrong-password volume
+# can't be fixed in place, so detect it and tell the operator what to run.
+PG_VOL="$(docker volume ls -q 2>/dev/null | grep -E '(^|_)postgres_data$' | head -1 || true)"
+if [ -n "${PG_VOL}" ]; then
+    say "Existing Postgres volume detected (${PG_VOL}) — verifying its password still matches ${ENV_FILE}"
+    docker compose -f "${COMPOSE_FILE}" up -d postgres >/dev/null 2>&1 || true
+    PG_OK=0
+    PG_AUTHFAIL=0
+    for _ in $(seq 1 30); do
+        PG_OUT="$(docker compose -f "${COMPOSE_FILE}" exec -T postgres \
+            sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1"' 2>&1 || true)"
+        case "${PG_OUT}" in
+            *1*) if printf '%s' "${PG_OUT}" | grep -q '^1$'; then PG_OK=1; break; fi ;;
+        esac
+        # A wrong password won't heal by waiting — stop the retry loop early.
+        case "${PG_OUT}" in
+            *"password authentication failed"*) PG_AUTHFAIL=1; break ;;
+        esac
+        sleep 5
+    done
+    if [ "${PG_OK}" -ne 1 ]; then
+        echo
+        if [ "${PG_AUTHFAIL}" -eq 1 ]; then
+            c_red "[FATAL] The existing Postgres volume rejects the password in ${ENV_FILE}."
+        else
+            c_red "[FATAL] Could not verify the existing Postgres volume's password (postgres never became reachable)."
+        fi
+        c_red ""
+        c_red "Postgres applies POSTGRES_PASSWORD only the first time it initialises an"
+        c_red "EMPTY data volume. This volume was created by an earlier run with a"
+        c_red "different password, so the role keeps the old one and the manager can"
+        c_red "never authenticate — this cannot be fixed by editing .env."
+        c_red ""
+        c_red "If this box holds no data you need (a failed/first install), reset and re-run:"
+        c_red "  cd ${INSTALL_DIR}"
+        c_red "  docker compose -f ${COMPOSE_FILE} down -v      # deletes ALL volumes"
+        c_red "  curl -fsSL ${RAW_BASE}/install.sh | sudo bash"
+        c_red ""
+        c_red "If you DO have data to keep, restore the original POSTGRES_PASSWORD into"
+        c_red "${ENV_FILE} instead — that value is the only one this volume will accept."
+        exit 1
+    fi
+    say "Existing Postgres volume accepts the configured password"
+fi
+
 # ─── 7. Pull pre-built images and start ───────────────────────────────
 say "Pulling pre-built images from ghcr.io/${GITHUB_REPO} ..."
 docker compose -f "${COMPOSE_FILE}" pull

@@ -153,34 +153,100 @@
   /* ── Buttons ──────────────────────────────────────────────────────
      Primary = solid indigo. Secondary = quiet outline (not a gray fill).
      Focus is a visible indigo ring for keyboard users. */
+  /* Tactile 3D push buttons: a raised face over a darker bottom "edge",
+     a hairline top sheen, and a soft cast shadow. Hover lifts the button;
+     :active presses it down onto its edge for a physical click. Keyboard
+     focus uses an outline (not box-shadow) so it never overwrites the
+     depth shadow. Motion is dropped under prefers-reduced-motion. */
   .btn {
-    @apply px-3.5 py-2 text-sm font-medium transition-colors duration-150
-           inline-flex items-center justify-center gap-2;
+    @apply px-3.5 py-2 text-sm font-semibold inline-flex items-center justify-center gap-2;
     border-radius: var(--cs-r-sm);
+    transform: translateY(0);
+    transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
   }
   .btn:focus-visible {
-    outline: none;
-    box-shadow: var(--cs-focus);
+    outline: 2px solid var(--cs-indigo);
+    outline-offset: 2px;
   }
 
   .btn-primary {
-    background: var(--cs-indigo);
+    background: linear-gradient(180deg, #5b52ea 0%, var(--cs-indigo) 100%);
     color: #fff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      0 3px 0 var(--cs-indigo-d),
+      0 6px 14px rgba(79, 70, 229, 0.28);
   }
-  .btn-primary:hover { background: var(--cs-indigo-d); }
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      0 4px 0 var(--cs-indigo-d),
+      0 10px 20px rgba(79, 70, 229, 0.34);
+  }
+  .btn-primary:active {
+    transform: translateY(2px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 1px 0 var(--cs-indigo-d),
+      0 2px 6px rgba(79, 70, 229, 0.25);
+  }
 
   .btn-secondary {
-    background: var(--cs-panel);
+    background: linear-gradient(180deg, #ffffff 0%, #f2f3f6 100%);
     color: var(--cs-ink-2);
     border: 1px solid var(--cs-hair);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.9),
+      0 2px 0 var(--cs-hair),
+      0 4px 10px rgba(15, 23, 42, 0.06);
   }
-  .btn-secondary:hover { background: var(--cs-hair-2); border-color: var(--cs-muted-2); }
+  .btn-secondary:hover {
+    transform: translateY(-1px);
+    border-color: var(--cs-muted-2);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      0 3px 0 var(--cs-hair),
+      0 8px 16px rgba(15, 23, 42, 0.10);
+  }
+  .btn-secondary:active {
+    transform: translateY(2px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.6),
+      0 1px 0 var(--cs-hair),
+      0 2px 5px rgba(15, 23, 42, 0.06);
+  }
 
   .btn-danger {
-    background: var(--cs-crit);
+    background: linear-gradient(180deg, #e5484d 0%, var(--cs-crit) 100%);
     color: #fff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.20),
+      0 3px 0 #a41c1c,
+      0 6px 14px rgba(220, 38, 38, 0.28);
   }
-  .btn-danger:hover { filter: brightness(0.94); }
+  .btn-danger:hover {
+    transform: translateY(-1px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.26),
+      0 4px 0 #a41c1c,
+      0 10px 20px rgba(220, 38, 38, 0.34);
+  }
+  .btn-danger:active {
+    transform: translateY(2px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 1px 0 #a41c1c,
+      0 2px 6px rgba(220, 38, 38, 0.25);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn { transition: box-shadow 120ms ease, background 120ms ease; }
+    .btn-primary:hover, .btn-secondary:hover, .btn-danger:hover,
+    .btn-primary:active, .btn-secondary:active, .btn-danger:active {
+      transform: none;
+    }
+  }
 
   /* ── Badges — soft tinted chips (token color-mix tints) ───────────── */
   .badge {
@@ -247,15 +313,15 @@
   }
 
   /* ── Footer brand strip ───────────────────────────────────────────
-     Preserved from the retired dark-theme stylesheet so the branded
-     footer keeps its look. The footer is a deliberately dark strip
-     (like the sidebar) that anchors the light app. */
+     A light surface that matches the app canvas (panel → bg gradient)
+     with the indigo accent kept, so the footer reads as part of the
+     light dashboard rather than a dark band pinned to the bottom. */
   .brand-footer-bg {
-    background-image: linear-gradient(90deg, #15171a 0%, #1c1f23 50%, #15171a 100%);
-    background-color: #15171a;
+    background-image: linear-gradient(180deg, var(--cs-panel) 0%, var(--cs-bg) 100%);
+    background-color: var(--cs-panel);
   }
   .brand-gradient-text {
-    background-image: linear-gradient(90deg, #ffffff 0%, #c7d2fe 50%, #ffffff 100%);
+    background-image: linear-gradient(90deg, var(--cs-ink) 0%, var(--cs-indigo) 55%, var(--cs-ink) 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;

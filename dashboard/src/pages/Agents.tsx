@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Server, RefreshCw, Trash2, X, Eraser } from 'lucide-react'
+import { Server, RefreshCw, Trash2, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -9,7 +9,6 @@ import { Dot } from '@/components/ui/Dot'
 import {
   getAllAgents,
   deleteAgent,
-  cleanupStaleAgents,
   type Agent,
 } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/utils'
@@ -53,26 +52,9 @@ interface ConfirmState {
   agent: Agent
 }
 
-interface CleanupCandidate {
-  agent_id: string
-  name?: string
-  agent_code?: number
-  last_seen?: string | null
-}
-
-interface CleanupPreview {
-  cutoff: string
-  older_than_days: number
-  would_remove_count: number
-  candidates: CleanupCandidate[]
-}
-
 export default function Agents() {
   const [filter, setFilter] = useState<FilterType>('all')
   const [confirm, setConfirm] = useState<ConfirmState | null>(null)
-  const [cleanupOpen, setCleanupOpen] = useState(false)
-  const [cleanupDays, setCleanupDays] = useState(30)
-  const [cleanupPreview, setCleanupPreview] = useState<CleanupPreview | null>(null)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -99,37 +81,6 @@ export default function Agents() {
     },
     onError: () => {
       toast.error('Failed to remove agent')
-    },
-  })
-
-  // Two-step cleanup flow: dry-run preview first so the admin sees the
-  // affected set, then a second click with dry_run=false actually applies.
-  const cleanupPreviewMutation = useMutation({
-    mutationFn: (days: number) => cleanupStaleAgents(days, true),
-    onSuccess: (data) => {
-      setCleanupPreview(data)
-    },
-    onError: () => {
-      toast.error('Failed to fetch cleanup preview')
-    },
-  })
-
-  const cleanupApplyMutation = useMutation({
-    mutationFn: (days: number) => cleanupStaleAgents(days, false),
-    onSuccess: (data) => {
-      const removed = data?.removed_count ?? 0
-      toast.success(
-        removed === 0
-          ? 'No stale agents found'
-          : `Removed ${removed} stale agent${removed === 1 ? '' : 's'}`,
-      )
-      queryClient.invalidateQueries({ queryKey: ['allAgents'] })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      setCleanupOpen(false)
-      setCleanupPreview(null)
-    },
-    onError: () => {
-      toast.error('Failed to apply cleanup')
     },
   })
 
@@ -186,19 +137,8 @@ export default function Agents() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => {
-              setCleanupOpen(true)
-              setCleanupPreview(null)
-            }}
-            className="btn-secondary"
-            title="Soft-delete agents that have been silent for N days"
-          >
-            <Eraser className="h-4 w-4" />
-            Cleanup Stale
-          </button>
-          <button
             onClick={() => refetch()}
-            className="btn-secondary"
+            className="btn btn-secondary"
             disabled={isLoading}
           >
             <RefreshCw className="h-4 w-4" />
@@ -364,123 +304,6 @@ export default function Agents() {
           </table>
         </div>
       </div>
-
-      {/* Cleanup-stale modal — admin sweeps agents not seen for >N days */}
-      {cleanupOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50"
-            onClick={() => {
-              if (cleanupApplyMutation.isPending) return
-              setCleanupOpen(false)
-              setCleanupPreview(null)
-            }}
-          />
-          <div className="relative bg-cs-panel rounded-cs-card border border-cs-hair shadow-card max-w-lg w-full mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-cs-hair">
-              <h2 className="text-lg font-semibold text-cs-ink">Cleanup Stale Agents</h2>
-              <button
-                onClick={() => {
-                  if (cleanupApplyMutation.isPending) return
-                  setCleanupOpen(false)
-                  setCleanupPreview(null)
-                }}
-                className="p-1 hover:bg-cs-hair-2 rounded-cs-sm transition-colors"
-                disabled={cleanupApplyMutation.isPending}
-              >
-                <X className="h-4 w-4 text-cs-muted" />
-              </button>
-            </div>
-            <div className="px-6 py-4 space-y-4 text-sm">
-              <p className="text-cs-ink-2">
-                Soft-deletes agents whose last heartbeat is older than the
-                threshold below. Event history is preserved.
-              </p>
-              <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-cs-ink-2">
-                  Older than
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  value={cleanupDays}
-                  onChange={(e) => {
-                    const next = Number(e.target.value)
-                    setCleanupDays(Number.isFinite(next) && next > 0 ? next : 1)
-                    setCleanupPreview(null)
-                  }}
-                  className="w-24 px-2 py-1 num bg-cs-panel border border-cs-hair rounded-cs-sm text-sm focus-visible:outline-none focus-visible:shadow-focus focus:border-cs-indigo"
-                  disabled={cleanupApplyMutation.isPending}
-                />
-                <span className="text-sm text-cs-ink-2">days</span>
-                <button
-                  onClick={() => cleanupPreviewMutation.mutate(cleanupDays)}
-                  className="btn-secondary ml-auto disabled:opacity-50"
-                  disabled={cleanupPreviewMutation.isPending || cleanupApplyMutation.isPending}
-                >
-                  {cleanupPreviewMutation.isPending ? 'Previewing…' : 'Preview'}
-                </button>
-              </div>
-              {cleanupPreview && (
-                <div className="border border-cs-hair rounded-cs-sm p-3 bg-cs-hair-2 max-h-60 overflow-y-auto">
-                  <p className="font-medium text-cs-ink mb-2">
-                    {cleanupPreview.would_remove_count === 0
-                      ? 'No agents match — nothing to remove.'
-                      : `${cleanupPreview.would_remove_count} agent${cleanupPreview.would_remove_count === 1 ? '' : 's'} would be soft-deleted:`}
-                  </p>
-                  {cleanupPreview.candidates.length > 0 && (
-                    <ul className="space-y-1 text-xs">
-                      {cleanupPreview.candidates.map((c) => (
-                        <li key={c.agent_id} className="flex items-center gap-2">
-                          {typeof c.agent_code === 'number' && (
-                            <span className="num text-cs-muted">
-                              {String(c.agent_code).padStart(3, '0')}
-                            </span>
-                          )}
-                          <span className="font-medium">{c.name || c.agent_id}</span>
-                          <span className="num text-cs-muted ml-auto">
-                            {c.last_seen ? formatRelativeTime(c.last_seen) : 'Never'}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="px-6 py-3 border-t border-cs-hair flex justify-end gap-2">
-              <button
-                onClick={() => {
-                  setCleanupOpen(false)
-                  setCleanupPreview(null)
-                }}
-                className="px-3 py-1.5 rounded-cs-sm text-sm font-medium text-cs-ink-2 hover:bg-cs-hair-2"
-                disabled={cleanupApplyMutation.isPending}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => cleanupApplyMutation.mutate(cleanupDays)}
-                className="btn-danger disabled:opacity-50"
-                disabled={
-                  !cleanupPreview ||
-                  cleanupPreview.would_remove_count === 0 ||
-                  cleanupApplyMutation.isPending
-                }
-                title={
-                  !cleanupPreview
-                    ? 'Run a preview first'
-                    : cleanupPreview.would_remove_count === 0
-                      ? 'Nothing to remove'
-                      : 'Soft-delete the listed agents'
-                }
-              >
-                {cleanupApplyMutation.isPending ? 'Removing…' : 'Apply Cleanup'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Confirmation modal — shared for both Remove and Decommission actions */}
       {confirm && (

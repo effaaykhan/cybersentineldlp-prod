@@ -159,7 +159,14 @@
      :active presses the pill down onto its edge for a physical click.
      Keyboard focus uses an outline (not box-shadow) so it never overwrites
      the depth. Motion is dropped under prefers-reduced-motion. */
-  .btn {
+  /* The shape (pill radius, padding, flex) is applied to the variant classes
+     too, not just .btn — many buttons in the app are tagged with only
+     `btn-primary` / `btn-secondary` / `btn-danger`, and without this they'd
+     miss the rounding and stay rectangular. */
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
     @apply px-4 py-2 text-sm font-semibold inline-flex items-center justify-center gap-2;
     position: relative;
     border-radius: 9999px;                 /* curved / pill ends */
@@ -203,15 +210,15 @@
       0 3px 8px rgba(79, 70, 229, 0.30);
   }
 
-  /* Frosted clear glass */
+  /* Solid white (opaque, not glass) */
   .btn-secondary {
     color: var(--cs-ink-2);
-    border: 1px solid rgba(255, 255, 255, 0.7);
-    background: linear-gradient(180deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.45) 100%);
-    -webkit-backdrop-filter: blur(10px) saturate(1.15);
-    backdrop-filter: blur(10px) saturate(1.15);
+    border: 1px solid var(--cs-hair);
+    background: #ffffff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9),
       0 3px 0 var(--cs-hair),
       0 6px 14px rgba(15, 23, 42, 0.08);
   }

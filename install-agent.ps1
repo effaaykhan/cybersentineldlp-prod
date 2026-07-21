@@ -455,6 +455,15 @@ $config = @{
     agent_name = $agentName
     heartbeat_interval = $heartbeatInterval
     policy_sync_interval = $policySyncInterval
+    # Ransomware early-warning (detection/alert only — the agent cannot kill an
+    # encryptor). Written explicitly so the knobs are discoverable in the file.
+    # Raise ransomware_burst_threshold on hosts with bursty legitimate file
+    # activity (build servers, sync clients): at 15 in a 10s window, sustained
+    # write rates above ~1.5 files/sec will alert.
+    ransomware_detection_enabled = $true
+    ransomware_burst_threshold = 15
+    ransomware_window_seconds = 10
+    ransomware_cooldown_seconds = 60
     monitoring = @{
         file_system = $true
         clipboard = $true

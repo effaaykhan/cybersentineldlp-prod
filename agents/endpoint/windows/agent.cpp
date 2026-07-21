@@ -648,6 +648,21 @@ void Log(const std::string& level, const std::string& message) {
         // RELAY_BLOCK_ON_DLP_ERROR so every channel is configured the same way.
         bool blockOnDlpError = true;
 
+        // ── Ransomware early-warning tunables ─────────────────────────────
+        // Detection/alert only (the agent cannot attribute a file change to a
+        // PID, so it cannot kill an encryptor). Every value is optional in
+        // agent_config.json: a config written before this feature existed
+        // keeps these defaults. Tune per site — a fileserver-backed share or a
+        // dev box that compiles a lot may need a higher burst threshold.
+        //   ransomware_detection_enabled : master switch
+        //   ransomware_burst_threshold   : file changes needed to trip
+        //   ransomware_window_seconds    : ...within this sliding window
+        //   ransomware_cooldown_seconds  : min gap between alerts (anti-flood)
+        bool ransomwareDetectionEnabled = true;
+        int  ransomwareBurstThreshold   = 15;
+        int  ransomwareWindowSeconds    = 10;
+        int  ransomwareCooldownSeconds  = 60;
+
         AgentConfig(const std::string& configPath = "agent_config.json") {
             // Try to load from file first
             if (!LoadFromFile(configPath)) {
@@ -781,6 +796,19 @@ void Log(const std::string& level, const std::string& message) {
                 // option existed must still fail closed.
                 blockOnDlpError = ExtractJsonBool(content, "block_on_dlp_error", true);
 
+                // Ransomware early-warning tunables. All optional — a config
+                // predating the feature keeps the defaults above. Values are
+                // clamped so a typo can't silently disable detection or turn
+                // it into an alert flood.
+                ransomwareDetectionEnabled =
+                    ExtractJsonBool(content, "ransomware_detection_enabled", true);
+                ransomwareBurstThreshold =
+                    ExtractJsonIntClamped(content, "ransomware_burst_threshold", 15, 2, 100000);
+                ransomwareWindowSeconds =
+                    ExtractJsonIntClamped(content, "ransomware_window_seconds", 10, 1, 3600);
+                ransomwareCooldownSeconds =
+                    ExtractJsonIntClamped(content, "ransomware_cooldown_seconds", 60, 0, 86400);
+
                 // Load other configs with defaults
                 monitoring.fileSystem = true;
                 monitoring.clipboard = true;
@@ -824,6 +852,24 @@ void Log(const std::string& level, const std::string& message) {
         // decided by that ambiguity, so parse booleans explicitly and return an
         // explicit default when the key is missing or unparseable. Accepts both
         // true and "true".
+        // Read an integer key, falling back to `defaultValue` when the key is
+        // absent or unparseable, then clamp into [minValue, maxValue]. The clamp
+        // matters for the ransomware tunables: a fat-fingered 0 threshold would
+        // otherwise alert on every single file change.
+        int ExtractJsonIntClamped(const std::string& json, const std::string& key,
+                                  int defaultValue, int minValue, int maxValue) {
+            int v = defaultValue;
+            try {
+                const std::string raw = ExtractJsonValue(json, key);
+                if (!raw.empty()) v = std::stoi(raw);
+            } catch (...) {
+                v = defaultValue;
+            }
+            if (v < minValue) v = minValue;
+            if (v > maxValue) v = maxValue;
+            return v;
+        }
+
         bool ExtractJsonBool(const std::string& json, const std::string& key, bool defaultValue) {
             size_t keyPos = json.find("\"" + key + "\"");
             if (keyPos == std::string::npos) return defaultValue;
@@ -888,7 +934,11 @@ void Log(const std::string& level, const std::string& message) {
             file << "  \"agent_name\": \"" << agentName << "\",\n";
             file << "  \"heartbeat_interval\": " << heartbeatInterval << ",\n";
             file << "  \"policy_sync_interval\": " << policySyncInterval << ",\n";
-            file << "  \"block_on_dlp_error\": " << (blockOnDlpError ? "true" : "false") << "\n";
+            file << "  \"block_on_dlp_error\": " << (blockOnDlpError ? "true" : "false") << ",\n";
+            file << "  \"ransomware_detection_enabled\": " << (ransomwareDetectionEnabled ? "true" : "false") << ",\n";
+            file << "  \"ransomware_burst_threshold\": " << ransomwareBurstThreshold << ",\n";
+            file << "  \"ransomware_window_seconds\": " << ransomwareWindowSeconds << ",\n";
+            file << "  \"ransomware_cooldown_seconds\": " << ransomwareCooldownSeconds << "\n";
             file << "}\n";
             
             file.close();
@@ -1793,12 +1843,10 @@ static ClassificationResult Classify(const std::string& content,
     std::vector<std::string> screenLastLabels;
 
     // ── Ransomware early-warning state ────────────────────────────────────
-    // Tunables for the burst detector. 25 changes in 10s is far above normal
-    // interactive editing but well below an encryptor's rate, and the cooldown
-    // keeps one incident from flooding the dashboard.
-    static constexpr long long  RANSOM_WINDOW_MS         = 10000;
-    static constexpr size_t     RANSOM_BURST_THRESHOLD   = 25;
-    static constexpr long long  RANSOM_ALERT_COOLDOWN_MS = 60000;
+    // The burst thresholds live in agent_config.json (ransomware_* keys) so a
+    // site can tune them without a recompile — see AgentConfig. Defaults: 15
+    // changes in 10s, 60s cooldown. That is far above normal interactive
+    // editing but well below an encryptor's rate.
     // Leading '!' so the decoy sorts to the top of a directory listing —
     // encryptors commonly walk files in name order, so it gets hit early.
     static constexpr const char* CANARY_FILENAME =
@@ -5207,6 +5255,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
      // casually edit it (that would be a false positive), but deliberately NOT
      // read-only — a read-only file may simply be skipped by an encryptor.
      void PlantCanaryFile(const std::string& directoryPath) {
+         if (!config.ransomwareDetectionEnabled) return;
          try {
              const std::string path = CanaryPathFor(directoryPath);
              {
@@ -5240,13 +5289,14 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
      // touches it. Fires immediately, once per file per cooldown (an encryptor
      // can emit several notifications for the same file).
      void ReportCanaryTripped(const std::string& fullPath, const std::string& action) {
+         const long long cooldownMs = (long long)config.ransomwareCooldownSeconds * 1000;
          {
              std::lock_guard<std::mutex> lock(ransomMutex);
              const long long now = NowMsEpoch();
              const std::string key = ToLower(fullPath);
              auto it = canaryLastAlertMs.find(key);
              if (it != canaryLastAlertMs.end() &&
-                 now - it->second < RANSOM_ALERT_COOLDOWN_MS) return;
+                 now - it->second < cooldownMs) return;
              canaryLastAlertMs[key] = now;
          }
          logger.Warning("============================================================");
@@ -5278,27 +5328,30 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
      // encryptor rewrites whatever it finds, not just the extensions a DLP
      // policy happens to watch.
      void NoteFileChangeForRansomware(const std::string& fullPath) {
+         const long long windowMs   = (long long)config.ransomwareWindowSeconds * 1000;
+         const long long cooldownMs = (long long)config.ransomwareCooldownSeconds * 1000;
+         const size_t    threshold  = (size_t)config.ransomwareBurstThreshold;
          size_t burst = 0;
          {
              std::lock_guard<std::mutex> lock(ransomMutex);
              const long long now = NowMsEpoch();
              recentChanges.push_back(now);
              while (!recentChanges.empty() &&
-                    now - recentChanges.front() > RANSOM_WINDOW_MS) {
+                    now - recentChanges.front() > windowMs) {
                  recentChanges.pop_front();
              }
-             if (recentChanges.size() < RANSOM_BURST_THRESHOLD) return;
+             if (recentChanges.size() < threshold) return;
              // lastMassAlertMs == 0 means "never alerted yet". Test explicitly
              // rather than relying on `now` being a large epoch value, or the
              // cooldown silently swallows the FIRST detection — the one that
              // matters most.
              if (lastMassAlertMs != 0 &&
-                 now - lastMassAlertMs < RANSOM_ALERT_COOLDOWN_MS) return;
+                 now - lastMassAlertMs < cooldownMs) return;
              lastMassAlertMs = now;
              burst = recentChanges.size();
              recentChanges.clear();          // start a fresh window after alerting
          }
-         const std::string secs = std::to_string(RANSOM_WINDOW_MS / 1000);
+         const std::string secs = std::to_string(config.ransomwareWindowSeconds);
          logger.Warning("============================================================");
          logger.Warning("  SUSPECTED RANSOMWARE: mass file modification");
          logger.Warning("  " + std::to_string(burst) + " file changes in " + secs + "s");
@@ -5414,13 +5467,15 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                      pNotify->Action == FILE_ACTION_RENAMED_OLD_NAME ||
                      pNotify->Action == FILE_ACTION_RENAMED_NEW_NAME;
                  const bool isCanary = IsCanaryPath(fullPath);
-                 if (isCanary) {
-                     // Ignore our own creation of the decoy; anything else is a trip.
-                     if (pNotify->Action != FILE_ACTION_ADDED) {
-                         ReportCanaryTripped(fullPath, action);
+                 if (config.ransomwareDetectionEnabled) {
+                     if (isCanary) {
+                         // Ignore our own creation of the decoy; anything else is a trip.
+                         if (pNotify->Action != FILE_ACTION_ADDED) {
+                             ReportCanaryTripped(fullPath, action);
+                         }
+                     } else if (isChange) {
+                         NoteFileChangeForRansomware(fullPath);
                      }
-                 } else if (isChange) {
-                     NoteFileChangeForRansomware(fullPath);
                  }
 
 // Check if file should be monitored based on policies

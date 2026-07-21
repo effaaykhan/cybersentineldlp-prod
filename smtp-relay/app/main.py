@@ -22,6 +22,27 @@ log = logging.getLogger("csdlp.relay")
 
 
 def main() -> None:
+    # Refuse to run without agent credentials.
+    #
+    # Without a key every evaluate() call fails, and with the default
+    # RELAY_BLOCK_ON_DLP_ERROR=false that failure resolves to "allow" — so the
+    # relay would sit in the mail path forwarding EVERY message untouched while
+    # looking like it enforces email DLP. A control that silently passes what it
+    # never inspected is worse than no control, because it is trusted. Fail here,
+    # loudly, instead of at the first sensitive attachment.
+    if not config.DLP_AGENT_KEY:
+        log.error("=" * 62)
+        log.error("  REFUSING TO START: no DLP agent key configured.")
+        log.error("  Without RELAY_AGENT_KEY this relay cannot authenticate to")
+        log.error("  the DLP server, so it would forward every message WITHOUT")
+        log.error("  inspecting it while appearing to enforce email DLP.")
+        log.error("")
+        log.error("  Fix: register an agent on the manager, then set in .env:")
+        log.error("    RELAY_AGENT_ID=<agent_id>")
+        log.error("    RELAY_AGENT_KEY=<that agent's api_key>")
+        log.error("=" * 62)
+        raise SystemExit(1)
+
     controller = Controller(
         DLPHandler(),
         hostname=config.LISTEN_HOST,

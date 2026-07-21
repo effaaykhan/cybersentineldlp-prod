@@ -49,6 +49,11 @@ POLICY_TYPE_DOMAIN = {
     "google_drive_cloud_monitoring": PolicyDomain.DATA_PROTECTION,
     "onedrive_cloud_monitoring": PolicyDomain.DATA_PROTECTION,
     "classification_aware_policy": PolicyDomain.DATA_PROTECTION,
+    # Egress channels enforced server-side (SMTP relay / cloud connector).
+    # These ship in the default seed, so without them every email and cloud
+    # policy fell back to GENERAL and dropped out of domain-scoped reporting.
+    "email_send_prevention": PolicyDomain.DATA_PROTECTION,
+    "cloud_upload_prevention": PolicyDomain.DATA_PROTECTION,
     # Access Control — device authorization (future-facing types)
     "usb_device_authorization": PolicyDomain.ACCESS_CONTROL,
     "device_access": PolicyDomain.ACCESS_CONTROL,
@@ -69,6 +74,10 @@ EVENT_TYPE_DOMAIN = {
     "clipboard": PolicyDomain.DATA_PROTECTION,
     "file": PolicyDomain.DATA_PROTECTION,
     "file_transfer": PolicyDomain.DATA_PROTECTION,
+    # Outbound email inspected by the SMTP relay (email_send_allowed /
+    # _attempt / _prevented all carry event_type "email").
+    "email": PolicyDomain.DATA_PROTECTION,
+    "cloud_upload": PolicyDomain.DATA_PROTECTION,
     "google_drive": PolicyDomain.DATA_PROTECTION,
     "onedrive": PolicyDomain.DATA_PROTECTION,
     "classification": PolicyDomain.DATA_PROTECTION,

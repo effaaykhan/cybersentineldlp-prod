@@ -429,6 +429,67 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # ─── Email DLP — outbound SMTP relay ────────────────────────────────────
+  # Inspects every outbound message (body + attachments) and rejects with a
+  # 550 at DATA when it carries Confidential/Restricted content, so the
+  # sending MTA never gets a 250 and the mail is genuinely not delivered.
+  # Holds no classification logic — it calls the same
+  # /agents/{id}/policy/evaluate endpoint every other channel uses.
+  #
+  # OPT-IN: this service sits behind the "email-dlp" compose profile, so it does
+  # NOT start (and opens no SMTP port) unless you ask for it:
+  #   docker compose -f docker-compose.prod.yml --profile email-dlp up -d
+  # The vars below use defaults rather than required (:?) guards on purpose — a
+  # required guard makes the WHOLE compose file unparseable on any deployment
+  # that hasn't set them, which would break `pull`/`down` for every other
+  # service. Getting this wrong once already broke an upgrade path.
+  #
+  # REQUIRED before this enforces anything:
+  #   RELAY_AGENT_ID / RELAY_AGENT_KEY — register an agent and paste its
+  #   api_key. Without a key the relay cannot authenticate; it refuses to start
+  #   rather than silently passing mail it never inspected.
+  # With no RELAY_NEXT_HOP_HOST the relay ACCEPTS but does NOT deliver clean
+  # mail — correct for testing, wrong for production. See smtp-relay/README.md
+  # for the Google Workspace outbound-gateway routing step.
+  smtp-relay:
+    image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-smtp-relay:latest
+    container_name: cybersentineldlp-smtp-relay
+    profiles: ["email-dlp"]
+    networks:
+      - cybersentineldlp
+    environment:
+      - DLP_SERVER_URL=http://manager:55000/api/v1
+      - DLP_AGENT_ID=${RELAY_AGENT_ID:-smtp-relay}
+      - DLP_AGENT_KEY=${RELAY_AGENT_KEY:-}
+      - RELAY_LISTEN_HOST=0.0.0.0
+      - RELAY_LISTEN_PORT=10025
+      - RELAY_NEXT_HOP_HOST=${RELAY_NEXT_HOP_HOST:-}
+      - RELAY_NEXT_HOP_PORT=${RELAY_NEXT_HOP_PORT:-587}
+      - RELAY_NEXT_HOP_USER=${RELAY_NEXT_HOP_USER:-}
+      - RELAY_NEXT_HOP_PASS=${RELAY_NEXT_HOP_PASS:-}
+      - RELAY_NEXT_HOP_STARTTLS=${RELAY_NEXT_HOP_STARTTLS:-true}
+      # Opt-in hardening: reject mail whose attachments cannot be read
+      # (encrypted archives, scanned-image PDFs, legacy .doc). "Uninspectable"
+      # must not silently mean "clean" — but this does bounce some legit mail.
+      - RELAY_BLOCK_UNEXTRACTABLE=${RELAY_BLOCK_UNEXTRACTABLE:-false}
+      # false = a DLP outage must not stop company mail. Set true to fail closed.
+      - RELAY_BLOCK_ON_DLP_ERROR=${RELAY_BLOCK_ON_DLP_ERROR:-false}
+    ports:
+      - "${RELAY_HOST_PORT:-10025}:10025"
+    depends_on:
+      manager:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+        reservations:
+          memory: 128M
+    restart: unless-stopped
+
 networks:
   cybersentineldlp:
     driver: bridge

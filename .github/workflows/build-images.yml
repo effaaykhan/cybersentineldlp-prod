@@ -35,6 +35,9 @@ jobs:
           - service: dashboard
             dockerfile: ./dashboard/Dockerfile
             context: ./dashboard
+          - service: smtp-relay
+            dockerfile: ./smtp-relay/Dockerfile
+            context: ./smtp-relay
 
     steps:
       - name: Checkout code

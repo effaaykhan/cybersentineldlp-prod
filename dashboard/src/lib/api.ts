@@ -107,18 +107,6 @@ export const deleteAgent = async (agentId: string) => {
   return data
 }
 
-export const cleanupStaleAgents = async (
-  olderThanDays: number,
-  dryRun: boolean = true,
-) => {
-  const { data } = await apiClient.post(
-    `/agents/cleanup-stale`,
-    null,
-    { params: { older_than_days: olderThanDays, dry_run: dryRun } },
-  )
-  return data
-}
-
 // Additional exports for direct imports
 export const getAlerts = async () => {
   const { data } = await apiClient.get('/alerts/')

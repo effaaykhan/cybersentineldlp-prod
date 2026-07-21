@@ -305,7 +305,7 @@ export default function Agents() {
         </div>
       </div>
 
-      {/* Confirmation modal — shared for both Remove and Decommission actions */}
+      {/* Confirmation modal for removing an agent */}
       {confirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div

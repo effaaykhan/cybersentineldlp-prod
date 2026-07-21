@@ -30,6 +30,7 @@
  #include <vector>
  #include <map>
  #include <set>
+ #include <deque>
  #include <memory>
  #include <algorithm>
  #include <thread>
@@ -1790,6 +1791,23 @@ static ClassificationResult Classify(const std::string& content,
     std::mutex screenDetailMutex;
     double screenLastScore = 0.0;
     std::vector<std::string> screenLastLabels;
+
+    // ── Ransomware early-warning state ────────────────────────────────────
+    // Tunables for the burst detector. 25 changes in 10s is far above normal
+    // interactive editing but well below an encryptor's rate, and the cooldown
+    // keeps one incident from flooding the dashboard.
+    static constexpr long long  RANSOM_WINDOW_MS         = 10000;
+    static constexpr size_t     RANSOM_BURST_THRESHOLD   = 25;
+    static constexpr long long  RANSOM_ALERT_COOLDOWN_MS = 60000;
+    // Leading '!' so the decoy sorts to the top of a directory listing —
+    // encryptors commonly walk files in name order, so it gets hit early.
+    static constexpr const char* CANARY_FILENAME =
+        "!!!CyberSentinelDLP-CANARY-DO-NOT-DELETE.docx";
+    std::mutex ransomMutex;
+    std::deque<long long> recentChanges;              // ms epoch, sliding window
+    long long lastMassAlertMs = 0;
+    std::set<std::string> canaryPaths;                // lowercased full paths
+    std::map<std::string, long long> canaryLastAlertMs;
 
      static DLPAgent* s_instance;
     
@@ -5147,6 +5165,9 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                      try {
                          if (fs::exists(path)) {
                              watchedPaths.insert(path);
+                             // Drop the ransomware tripwire before the watcher
+                             // starts, so the decoy exists for the whole session.
+                             PlantCanaryFile(path);
                              logger.Info("Started monitoring directory from policy: " + path);
                              
                              // Start watching this directory in a separate thread
@@ -5164,6 +5185,146 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          }
      }
      
+     // ── Ransomware early-warning (DETECTION / ALERT ONLY) ──────────────
+     //
+     // These are two high-signal heuristics, NOT an anti-ransomware engine.
+     // ReadDirectoryChangesW carries no PID, so the agent cannot attribute a
+     // change to the process that made it and therefore cannot kill the
+     // encryptor — it raises a critical alert fast so a responder can isolate
+     // the host. Recovery still depends on EDR + offline backups. Do not sell
+     // this as ransomware prevention.
+
+     static long long NowMsEpoch() {
+         return std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+     }
+
+     std::string CanaryPathFor(const std::string& directoryPath) const {
+         return directoryPath + "\\" + CANARY_FILENAME;
+     }
+
+     // Plant a decoy file in a monitored directory. Hidden so a user won't
+     // casually edit it (that would be a false positive), but deliberately NOT
+     // read-only — a read-only file may simply be skipped by an encryptor.
+     void PlantCanaryFile(const std::string& directoryPath) {
+         try {
+             const std::string path = CanaryPathFor(directoryPath);
+             {
+                 std::lock_guard<std::mutex> lock(ransomMutex);
+                 canaryPaths.insert(ToLower(path));
+             }
+             std::error_code ec;
+             if (fs::exists(path, ec) && !ec) return;   // already planted
+             std::ofstream f(path, std::ios::binary | std::ios::trunc);
+             if (!f.is_open()) {
+                 logger.Debug("Could not plant canary file in " + directoryPath);
+                 return;
+             }
+             f << "CyberSentinel DLP tripwire file.\r\n"
+                  "Do not modify, rename, encrypt or delete this file.\r\n"
+                  "Any change to it raises a critical ransomware alert.\r\n";
+             f.close();
+             SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_HIDDEN);
+             logger.Info("Canary file planted: " + path);
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("Canary plant failed: ") + e.what());
+         } catch (...) {}
+     }
+
+     bool IsCanaryPath(const std::string& fullPath) {
+         std::lock_guard<std::mutex> lock(ransomMutex);
+         return canaryPaths.count(ToLower(fullPath)) > 0;
+     }
+
+     // A write to the decoy is near-zero false positive: nothing legitimately
+     // touches it. Fires immediately, once per file per cooldown (an encryptor
+     // can emit several notifications for the same file).
+     void ReportCanaryTripped(const std::string& fullPath, const std::string& action) {
+         {
+             std::lock_guard<std::mutex> lock(ransomMutex);
+             const long long now = NowMsEpoch();
+             const std::string key = ToLower(fullPath);
+             auto it = canaryLastAlertMs.find(key);
+             if (it != canaryLastAlertMs.end() &&
+                 now - it->second < RANSOM_ALERT_COOLDOWN_MS) return;
+             canaryLastAlertMs[key] = now;
+         }
+         logger.Warning("============================================================");
+         logger.Warning("  RANSOMWARE CANARY TRIPPED");
+         logger.Warning("  File: " + fullPath);
+         logger.Warning("  Action: " + action);
+         logger.Warning("============================================================");
+
+         JsonBuilder json;
+         json.AddString("event_id", GenerateUUID());
+         json.AddString("event_type", "ransomware");
+         json.AddString("event_subtype", "canary_tripped");
+         json.AddString("agent_id", config.agentId);
+         json.AddString("source_type", "agent");
+         json.AddString("user_email", GetUsername() + "@" + GetHostname());
+         json.AddString("description",
+             "RANSOMWARE CANARY TRIPPED: decoy file was " + action + " — " + fullPath);
+         json.AddString("severity", "critical");
+         json.AddString("action", "alerted");
+         json.AddString("classification_level", "Restricted");
+         json.AddString("file_path", fullPath);
+         json.AddBool("blocked", false);
+         json.AddString("timestamp", GetCurrentTimestampISO());
+         SendEvent(json.Build());
+     }
+
+     // Sliding-window burst detector. Counts EVERY change notification under a
+     // watched tree — deliberately NOT filtered by ShouldMonitorFile, because an
+     // encryptor rewrites whatever it finds, not just the extensions a DLP
+     // policy happens to watch.
+     void NoteFileChangeForRansomware(const std::string& fullPath) {
+         size_t burst = 0;
+         {
+             std::lock_guard<std::mutex> lock(ransomMutex);
+             const long long now = NowMsEpoch();
+             recentChanges.push_back(now);
+             while (!recentChanges.empty() &&
+                    now - recentChanges.front() > RANSOM_WINDOW_MS) {
+                 recentChanges.pop_front();
+             }
+             if (recentChanges.size() < RANSOM_BURST_THRESHOLD) return;
+             // lastMassAlertMs == 0 means "never alerted yet". Test explicitly
+             // rather than relying on `now` being a large epoch value, or the
+             // cooldown silently swallows the FIRST detection — the one that
+             // matters most.
+             if (lastMassAlertMs != 0 &&
+                 now - lastMassAlertMs < RANSOM_ALERT_COOLDOWN_MS) return;
+             lastMassAlertMs = now;
+             burst = recentChanges.size();
+             recentChanges.clear();          // start a fresh window after alerting
+         }
+         const std::string secs = std::to_string(RANSOM_WINDOW_MS / 1000);
+         logger.Warning("============================================================");
+         logger.Warning("  SUSPECTED RANSOMWARE: mass file modification");
+         logger.Warning("  " + std::to_string(burst) + " file changes in " + secs + "s");
+         logger.Warning("  Most recent: " + fullPath);
+         logger.Warning("============================================================");
+
+         JsonBuilder json;
+         json.AddString("event_id", GenerateUUID());
+         json.AddString("event_type", "ransomware");
+         json.AddString("event_subtype", "mass_file_modification");
+         json.AddString("agent_id", config.agentId);
+         json.AddString("source_type", "agent");
+         json.AddString("user_email", GetUsername() + "@" + GetHostname());
+         json.AddString("description",
+             "SUSPECTED RANSOMWARE: " + std::to_string(burst) +
+             " file changes in " + secs + "s under a monitored path (most recent: " +
+             fullPath + ")");
+         json.AddString("severity", "critical");
+         json.AddString("action", "alerted");
+         json.AddString("classification_level", "Restricted");
+         json.AddString("file_path", fullPath);
+         json.AddBool("blocked", false);
+         json.AddString("timestamp", GetCurrentTimestampISO());
+         SendEvent(json.Build());
+     }
+
      void WatchDirectory(const std::string& directoryPath) {
          std::wstring wPath(directoryPath.begin(), directoryPath.end());
          
@@ -5242,8 +5403,29 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                          eventSubtype = "file_access";
                  }
                  
+                 // ── Ransomware early-warning ──────────────────────────
+                 // Runs BEFORE the policy/extension gate below: an encryptor
+                 // rewrites whatever it finds, so filtering to policy-matched
+                 // extensions first would miss the very burst we want to catch.
+                 const bool isChange =
+                     pNotify->Action == FILE_ACTION_ADDED ||
+                     pNotify->Action == FILE_ACTION_MODIFIED ||
+                     pNotify->Action == FILE_ACTION_REMOVED ||
+                     pNotify->Action == FILE_ACTION_RENAMED_OLD_NAME ||
+                     pNotify->Action == FILE_ACTION_RENAMED_NEW_NAME;
+                 const bool isCanary = IsCanaryPath(fullPath);
+                 if (isCanary) {
+                     // Ignore our own creation of the decoy; anything else is a trip.
+                     if (pNotify->Action != FILE_ACTION_ADDED) {
+                         ReportCanaryTripped(fullPath, action);
+                     }
+                 } else if (isChange) {
+                     NoteFileChangeForRansomware(fullPath);
+                 }
+
 // Check if file should be monitored based on policies
-bool shouldMonitor = ShouldMonitorFile(fullPath);
+// (never run DLP classification on our own decoy file)
+bool shouldMonitor = !isCanary && ShouldMonitorFile(fullPath);
 
 if (shouldMonitor) {
     if (pNotify->Action == FILE_ACTION_REMOVED) {

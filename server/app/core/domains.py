@@ -59,6 +59,10 @@ POLICY_TYPE_DOMAIN = {
 EVENT_TYPE_DOMAIN = {
     "usb": PolicyDomain.THREAT,
     "network_exfil": PolicyDomain.THREAT,
+    # Ransomware early-warning indicators from the endpoint agent
+    # (canary_tripped / mass_file_modification). Unknown types fall back to
+    # GENERAL, so an un-upgraded server still ingests these — just undomained.
+    "ransomware": PolicyDomain.THREAT,
     "screen_capture": PolicyDomain.THREAT,
     "print_attempt": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,

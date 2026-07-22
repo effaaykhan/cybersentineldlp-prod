@@ -1828,6 +1828,18 @@ static ClassificationResult Classify(const std::string& content,
     std::map<std::string, FileMetadata> monitoredFiles;  // Key: relative path
     std::map<std::string, ShadowEntry> shadowCopies;     // For BLOCK mode
     std::map<std::string, bool> currentUSBFileState;     // Track if file is currently on USB (true = on USB, false = removed)
+
+    // ── USB adjudication ledger (closes the yank-the-drive bypass) ────────
+    // A file is recorded here the moment we START adjudicating it and removed
+    // only once a verdict is REACHED. If the drive is pulled (or the agent
+    // dies) mid-classification, the entry survives on disk, so the file is
+    // re-adjudicated when the volume comes back instead of being waved through
+    // as "pre-existing". Keyed by volume serial so it follows the stick across
+    // drive-letter changes. Entries are only ever added for files this endpoint
+    // watched being written, so a file the USB picked up on another machine is
+    // NOT force-scanned here.
+    std::mutex usbPendingMutex;
+    std::set<std::string> usbPendingAdjudication;       // "VOLSERIAL|filename"
     std::set<std::string> quarantinedUSBFiles;
     std::vector<USBFileTransferPolicy> usbTransferPolicies;
     std::mutex usbTransferMutex;
@@ -2756,6 +2768,12 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          // "up_to_date" reply keeps them (the cache is what makes
          // installed_version meaningful across restarts).
          LoadCachedPolicyBundle();
+
+         // Restore the USB adjudication ledger. If the agent was stopped (or
+         // the box rebooted) while a USB file was mid-classification, the file
+         // is still unjudged — reload so it is finished when that volume
+         // reappears rather than being trusted as pre-existing.
+         LoadUsbPending();
 
          logger.Info("Fetching initial policies...");
          SyncPolicies(true);
@@ -7254,6 +7272,82 @@ if (shouldMonitor) {
         logger.Info("USB file transfer monitoring stopped");
     }
 
+    // ── USB adjudication ledger helpers ───────────────────────────────────
+    // Stable per-stick identity: the drive LETTER is reused by whatever is
+    // plugged in next, so keying on it would leak state between devices.
+    std::string UsbVolumeSerial(const std::string& drivePath) {
+        try {
+            std::string root = drivePath;
+            if (!root.empty() && root.back() != '\\') root += "\\";
+            char volName[MAX_PATH] = {0};
+            DWORD volSerial = 0, maxComp = 0, fsFlags = 0;
+            char fsName[MAX_PATH] = {0};
+            if (GetVolumeInformationA(root.c_str(), volName, sizeof(volName), &volSerial,
+                                      &maxComp, &fsFlags, fsName, sizeof(fsName))) {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%08X", (unsigned)volSerial);
+                return std::string(buf);
+            }
+        } catch (...) {}
+        return drivePath;   // fall back; still better than nothing
+    }
+
+    std::string UsbPendingPath() const {
+        std::string dir = GetExeDir();
+        return dir.empty() ? ExeRelativePath("cybersentineldlp_usb_pending.cache")
+                           : ExeRelativePath("cybersentineldlp_usb_pending.cache");
+    }
+
+    static std::string UsbPendingKey(const std::string& vol, const std::string& file) {
+        return vol + "|" + file;
+    }
+
+    void LoadUsbPending() {
+        try {
+            std::ifstream f(UsbPendingPath());
+            if (!f.is_open()) return;
+            std::lock_guard<std::mutex> lock(usbPendingMutex);
+            std::string line;
+            while (std::getline(f, line)) {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (!line.empty()) usbPendingAdjudication.insert(line);
+            }
+            if (!usbPendingAdjudication.empty()) {
+                logger.Warning("USB adjudication ledger: " +
+                               std::to_string(usbPendingAdjudication.size()) +
+                               " file(s) were never adjudicated (drive removed or agent stopped "
+                               "mid-scan) — they will be re-checked when that volume returns");
+            }
+        } catch (...) {}
+    }
+
+    // Caller must hold usbPendingMutex.
+    void SaveUsbPendingLocked() {
+        try {
+            std::ofstream f(UsbPendingPath(), std::ios::trunc);
+            if (!f.is_open()) return;
+            for (const auto& k : usbPendingAdjudication) f << k << "\n";
+        } catch (...) {}
+    }
+
+    void MarkUsbPending(const std::string& vol, const std::string& file) {
+        std::lock_guard<std::mutex> lock(usbPendingMutex);
+        usbPendingAdjudication.insert(UsbPendingKey(vol, file));
+        SaveUsbPendingLocked();
+    }
+
+    void ClearUsbPending(const std::string& vol, const std::string& file) {
+        std::lock_guard<std::mutex> lock(usbPendingMutex);
+        if (usbPendingAdjudication.erase(UsbPendingKey(vol, file)) > 0) {
+            SaveUsbPendingLocked();
+        }
+    }
+
+    bool IsUsbPending(const std::string& vol, const std::string& file) {
+        std::lock_guard<std::mutex> lock(usbPendingMutex);
+        return usbPendingAdjudication.count(UsbPendingKey(vol, file)) > 0;
+    }
+
     void MarkExistingUSBFilesAsProcessed(const std::string& drivePath) {
         try {
             // CRITICAL: Verify drive is accessible before scanning
@@ -7300,12 +7394,33 @@ if (shouldMonitor) {
                 }
             }
             if (hasClassificationPolicies) {
+                // Files present when a stick is plugged in are treated as
+                // pre-existing so we don't alert on the thousands of files a
+                // user legitimately already had. That blanket trust WAS a
+                // bypass: copy a sensitive file, yank the drive before the
+                // ~4s classify round-trip finishes, re-insert — the file is
+                // now "pre-existing" and is never classified, blocked, or
+                // logged. Anything still in the adjudication ledger for this
+                // volume is therefore NOT marked processed; the scan below
+                // picks it up and finishes the job we started.
+                const std::string vol = UsbVolumeSerial(drivePath);
+                size_t marked = 0, carriedOver = 0;
                 for (const auto& filePair : existingFiles) {
+                    if (IsUsbPending(vol, filePair.first)) {
+                        carriedOver++;
+                        continue;                     // leave unmarked => gets adjudicated
+                    }
                     std::string classifKey = std::string("classif:") + drivePath + ":" + filePair.first;
                     currentUSBFileState[classifKey] = true;
+                    marked++;
                 }
-                logger.Info("[INFO] Marked " + std::to_string(existingFiles.size()) +
+                logger.Info("[INFO] Marked " + std::to_string(marked) +
                            " pre-existing USB files (classification-based monitoring): " + drivePath);
+                if (carriedOver > 0) {
+                    logger.Warning("[USB LEDGER] " + std::to_string(carriedOver) +
+                                   " file(s) on " + drivePath + " were never adjudicated "
+                                   "(drive removed mid-scan) — forcing classification now");
+                }
             }
 
         } catch (const fs::filesystem_error& e) {
@@ -7776,6 +7891,15 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                 logger.Info("  Path: " + usbFilePath);
                 logger.Info("  Size: " + std::to_string(fs::file_size(usbFilePath)) + " bytes");
 
+                // Record BEFORE classifying. currentUSBFileState was already set
+                // above, which alone means "we looked at it" — but classification
+                // is a network round-trip, and if the drive is pulled during it we
+                // would otherwise have a file marked seen-but-never-judged. The
+                // ledger persists to disk, so the verdict is finished on re-insert
+                // (or after an agent restart) instead of being silently skipped.
+                const std::string pendVol = UsbVolumeSerial(drivePath);
+                MarkUsbPending(pendVol, fileName);
+
                 // Apply the first enabled USB transfer policy
                 for (const auto& policy : usbTransferPolicies) {
                     if (!policy.enabled) continue;
@@ -7824,6 +7948,10 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                                            evalResult.confidenceScore,
                                            evalResult.matchedRules);
                     }
+                    // A verdict was reached (blocked, quarantined, alerted or
+                    // allowed) — the file is no longer awaiting adjudication.
+                    // Reached on every branch above, so the ledger cannot leak.
+                    ClearUsbPending(pendVol, fileName);
                     break;  // Apply first matching policy only
                 }
             }

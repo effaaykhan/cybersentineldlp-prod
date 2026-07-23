@@ -26,6 +26,7 @@ from app.api.v1 import (
     audit_logs,
     incidents,
     fingerprints,
+    data_matching,
     scans,
     decision,
     permissions,
@@ -63,5 +64,6 @@ api_router.include_router(system.router, prefix="/system", tags=["System"])
 api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["Audit Logs"])
 api_router.include_router(incidents.router, prefix="/incidents", tags=["Incidents"])
 api_router.include_router(fingerprints.router, prefix="/fingerprints", tags=["Fingerprints"])
+api_router.include_router(data_matching.router, prefix="/data-matching", tags=["Data Matching (EDM + Fingerprint)"])
 api_router.include_router(scans.router, prefix="/scans", tags=["Scans"])
 api_router.include_router(decision.router, prefix="/decision", tags=["Decision"])

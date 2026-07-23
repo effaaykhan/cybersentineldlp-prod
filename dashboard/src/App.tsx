@@ -9,6 +9,7 @@ import Agents from './pages/Agents'
 import Events from './pages/Events'
 import Alerts from './pages/Alerts'
 import Rules from './pages/Rules'
+import DataMatching from './pages/DataMatching'
 import Policies from './app/dashboard/policies/page'
 import Settings from './pages/Settings'
 import Incidents from './app/dashboard/incidents/page'
@@ -31,6 +32,7 @@ function App() {
           <Route path="events" element={<Events />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="rules" element={<Rules />} />
+          <Route path="data-matching" element={<DataMatching />} />
           <Route path="policies" element={<Policies />} />
           <Route path="incidents" element={<Incidents />} />
           <Route path="log-explorer" element={<LogExplorer />} />

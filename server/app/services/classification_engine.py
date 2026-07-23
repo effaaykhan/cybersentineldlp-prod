@@ -243,6 +243,61 @@ class ClassificationEngine:
                 },
             )
 
+        # Step 1b: Exact Data Matching + document fingerprint (authoritative).
+        # A hit means the content contains the ACTUAL protected data — a real
+        # record from an indexed dataset, or a passage from a registered
+        # document — not merely something regex-shaped. That convicts on its own,
+        # exactly like the whole-file fingerprint above. Matching is local and
+        # uses only keyed one-way digests (see data_matching_service). Guarded so
+        # a malformed index can never break ordinary classification.
+        dm_matches: List[Dict[str, Any]] = []
+        try:
+            from app.services.data_match_index_service import DataMatchIndexService
+            dm_matches = await DataMatchIndexService(self.session).match_content(eval_content)
+        except Exception as e:
+            logger.warning("Data-match (EDM/fingerprint) check failed", error=str(e))
+
+        if dm_matches:
+            _order = {"Public": 0, "Internal": 1, "Confidential": 2, "Restricted": 3}
+            level = max(
+                (m.get("classification", "Restricted") for m in dm_matches),
+                key=lambda c: _order.get(c, 3),
+            )
+            matched_dm: List[Dict[str, Any]] = []
+            for m in dm_matches:
+                if m["type"] == "edm":
+                    name = f"EDM: {m['name']} ({m.get('matched_rows', 1)} record(s))"
+                    label = "EDM_MATCH"
+                    count = m.get("matched_rows", 1)
+                else:
+                    name = f"Fingerprint: {m['name']} (overlap {m.get('overlap', 0)})"
+                    label = "FINGERPRINT_MATCH"
+                    count = m.get("overlap", 1)
+                matched_dm.append({
+                    "rule_id": m["source_id"],
+                    "rule_name": name,
+                    "rule_type": m["type"],
+                    "match_count": count,
+                    "weight": 1.0,
+                    "priority": 0,
+                    "classification_labels": [label],
+                    "severity": "critical",
+                    "category": "Data Match",
+                })
+            return ClassificationResult(
+                classification=level,
+                confidence_score=1.0,
+                matched_rules=matched_dm,
+                total_matches=len(matched_dm),
+                details={
+                    "content_length": len(eval_content),
+                    "rules_evaluated": 0,
+                    "context": ctx,
+                    "method": "data_match",
+                    "matches": dm_matches,
+                },
+            )
+
         # Step 2: Entropy analysis
         # Use a sample for performance (first 10K chars)
         entropy = shannon_entropy(eval_content[:10000])

@@ -68,6 +68,10 @@ def test_edm():
     m = match_edm("aisha khan  555 11 2222", idx, KEY)
     chk("separator + case variants still match the record", m["matched"])
 
+    # (6b) PUNCTUATION on values (real prose): "Doe," / "123-45-6789."
+    m = match_edm("Audit note: Jane Doe, SSN 123-45-6789, flagged for review.", idx, KEY)
+    chk("values with attached punctuation still match", m["matched"] and m["rows"][0]["row_id"] == 0)
+
     # (7) keyed: an index built under a DIFFERENT key cannot be matched with KEY
     idx_other = build_edm_index(ROWS, COLS, OTHER_KEY)
     m = match_edm("Jane Doe 123-45-6789", idx_other, KEY)

@@ -42,6 +42,11 @@ _WS = re.compile(r"\s+")
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)          # word tokens (keeps unicode letters/digits)
 _NUMERIC_TOKEN = re.compile(r"^[\d\s._\-]+$")       # a value that is only digits + separators
 _NONDIGIT = re.compile(r"\D")
+# Punctuation stripped from the ENDS of a candidate before hashing. Real prose
+# attaches these to values ("Doe,", "123-45-6789.", "(Khan)"); without this the
+# token would not equal the clean cell that was indexed. Interior characters
+# (name apostrophes, the '-' in an SSN) are kept.
+_EDGE_PUNCT = " \t\r\n.,;:!?()[]{}<>\"'`|/\\"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -80,7 +85,7 @@ def normalize_variants(value: str) -> Set[str]:
     """
     if value is None:
         return set()
-    base = _WS.sub(" ", str(value)).strip().lower()
+    base = _WS.sub(" ", str(value)).strip().lower().strip(_EDGE_PUNCT)
     if not base:
         return set()
     out = {base}

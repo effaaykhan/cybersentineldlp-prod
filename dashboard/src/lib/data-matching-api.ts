@@ -1,14 +1,7 @@
-import axios from 'axios'
-
-// Reuse the shared axios instance's auth/refresh interceptors by importing the
-// same base client the rest of the app uses.
-const API_URL = (import.meta as any).env?.VITE_API_URL || '/api/v1'
-const client = axios.create({ baseURL: API_URL })
-client.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
+// Reuse the shared client so auth (token from the Zustand auth store) and the
+// 401-refresh interceptor apply — a private axios instance sent the wrong token
+// key and 401'd.
+import apiClient from './api'
 
 export type SourceType = 'edm' | 'fingerprint'
 
@@ -47,7 +40,7 @@ export const listSources = async (params?: {
   source_type?: SourceType
   enabled?: boolean
 }): Promise<DataMatchSource[]> => {
-  const { data } = await client.get('/data-matching/', { params })
+  const { data } = await apiClient.get('/data-matching/', { params })
   return data
 }
 
@@ -60,7 +53,7 @@ export const createEdm = async (body: {
   min_fields: number
   classification: string
 }): Promise<DataMatchSource> => {
-  const { data } = await client.post('/data-matching/edm', body)
+  const { data } = await apiClient.post('/data-matching/edm', body)
   return data
 }
 
@@ -74,7 +67,7 @@ export const createFingerprint = async (body: {
   min_containment: number
   classification: string
 }): Promise<DataMatchSource> => {
-  const { data } = await client.post('/data-matching/fingerprint', body)
+  const { data } = await apiClient.post('/data-matching/fingerprint', body)
   return data
 }
 
@@ -83,16 +76,16 @@ export const updateSource = async (
   body: Partial<Pick<DataMatchSource,
     'name' | 'description' | 'enabled' | 'min_fields' | 'min_shingles' | 'min_containment' | 'classification'>>,
 ): Promise<DataMatchSource> => {
-  const { data } = await client.patch(`/data-matching/${id}`, body)
+  const { data } = await apiClient.patch(`/data-matching/${id}`, body)
   return data
 }
 
 export const deleteSource = async (id: string): Promise<void> => {
-  await client.delete(`/data-matching/${id}`)
+  await apiClient.delete(`/data-matching/${id}`)
 }
 
 export const testContent = async (content: string): Promise<MatchResult> => {
-  const { data } = await client.post('/data-matching/test', { content })
+  const { data } = await apiClient.post('/data-matching/test', { content })
   return data
 }
 

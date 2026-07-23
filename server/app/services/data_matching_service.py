@@ -47,6 +47,20 @@ _NONDIGIT = re.compile(r"\D")
 # ─────────────────────────────────────────────────────────────────────────
 # Keyed one-way primitive
 # ─────────────────────────────────────────────────────────────────────────
+def derive_key(secret: str) -> bytes:
+    """Derive the indexing/matching HMAC key from the deployment secret
+    (settings.SECRET_KEY). The fixed context label domain-separates it from
+    every other use of that secret, so the EDM key is not the JWT key. The
+    derived key lives only in server memory and is NEVER written into an index —
+    that is what makes a stolen index unusable.
+    """
+    return hmac.new(
+        (secret or "").encode("utf-8"),
+        b"cybersentinel-dlp-datamatch-v1",
+        hashlib.sha256,
+    ).digest()
+
+
 def keyed_digest(value: str, key: bytes) -> str:
     """HMAC-SHA256(value) truncated to 128 bits, hex. One-way and keyed:
     without `key` the output cannot be brute-forced back to `value`."""

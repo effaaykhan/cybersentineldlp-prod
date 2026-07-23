@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.services.data_matching_service import (  # noqa: E402
     build_edm_index, match_edm,
     build_fingerprint_index, match_fp,
-    keyed_digest, normalize_variants,
+    keyed_digest, normalize_variants, derive_key,
 )
 
 KEY = b"deployment-secret-key-A"
@@ -127,9 +127,31 @@ def test_fingerprint():
         not match_fp(secret_doc, idx_other, KEY)["matched"])
 
 
+def test_key_derivation():
+    print("\nKey derivation (from deployment SECRET_KEY)")
+    k1 = derive_key("secret-A-at-least-32-characters-long!!")
+    k1b = derive_key("secret-A-at-least-32-characters-long!!")
+    k2 = derive_key("secret-B-at-least-32-characters-long!!")
+    chk("deterministic for a given secret", k1 == k1b)
+    chk("different secret -> different key", k1 != k2)
+    chk("key is 32 raw bytes", isinstance(k1, bytes) and len(k1) == 32)
+    # domain separation: the derived key must not equal a naive HMAC someone
+    # might reuse for another purpose with the same secret.
+    import hmac as _h, hashlib as _hl
+    naive = _h.new(b"secret-A-at-least-32-characters-long!!", b"", _hl.sha256).digest()
+    chk("domain-separated from a naive same-secret HMAC", k1 != naive)
+    # end-to-end: the derived key actually works for indexing/matching
+    idx = build_edm_index(ROWS, COLS, k1)
+    chk("derived key indexes + matches end to end",
+        match_edm("Jane Doe 123-45-6789", idx, k1)["matched"])
+    chk("...and a different derived key can't match that index",
+        not match_edm("Jane Doe 123-45-6789", idx, k2)["matched"])
+
+
 if __name__ == "__main__":
     test_edm()
     test_fingerprint()
+    test_key_derivation()
     print()
     if _fails:
         print(f"FAILURES ({len(_fails)}): " + ", ".join(_fails))

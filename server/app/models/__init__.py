@@ -12,6 +12,7 @@ from app.models.agent_log import AgentLog
 from app.models.device import Device
 from app.models.data_label import DataLabel
 from app.models.file_fingerprint import FileFingerprint
+from app.models.data_match_source import DataMatchSource
 from app.models.policy import Policy
 from app.models.policy_condition import PolicyCondition
 from app.models.policy_action import PolicyAction
@@ -42,6 +43,7 @@ __all__ = [
     "Device",
     "DataLabel",
     "FileFingerprint",
+    "DataMatchSource",
     "Policy",
     "PolicyCondition",
     "PolicyAction",

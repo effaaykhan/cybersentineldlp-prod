@@ -209,6 +209,12 @@ services:
       - ./config:/etc/cybersentineldlp:ro
       - ./server/logs:/var/log/cybersentineldlp
       - ./quarantine:/app/quarantine
+      # Persist the (re)trained ML sensitivity model so a retrain survives
+      # restarts and image updates. A NAMED volume (not a bind mount) is used
+      # deliberately: it inherits the image's dlpuser ownership of /app/ml/models,
+      # so the non-root app can write it. A bind mount would be root-owned and
+      # the retrain would silently fail to persist.
+      - ml_models:/app/ml/models
     ports:
       - "55000:55000"
     depends_on:
@@ -507,4 +513,6 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  ml_models:
     driver: local

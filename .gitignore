@@ -237,3 +237,7 @@ dump.rdb
 # Claude Code local settings
 .claude/
 .cursor/
+
+# ML sensitivity model artifact (retrained per-deployment; never commit)
+ml/models/*.joblib
+server/ml/models/*.joblib

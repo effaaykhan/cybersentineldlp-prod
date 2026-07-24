@@ -328,6 +328,27 @@ else
         || c_yellow "[!] Could not stamp Alembic revision — run it manually: docker exec cybersentineldlp-manager alembic stamp head"
 fi
 
+# ─── 8c. Post-install validation (ML classifier + core health) ────────
+# Downloads validate.sh (kept in INSTALL_DIR so the operator can re-run it) and
+# runs the PASS/FAIL checks. Non-fatal: a failed check warns but does not abort
+# an otherwise-healthy install, since the ML augmentation is additive.
+say "Downloading validate.sh"
+if curl -fsSL "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh" 2>/dev/null; then
+    chmod +x "${INSTALL_DIR}/validate.sh"
+    echo
+    say "Running post-install validation"
+    if bash "${INSTALL_DIR}/validate.sh" --container cybersentineldlp-manager --url http://localhost:55000; then
+        say "Validation passed"
+    else
+        c_yellow "[!] One or more validation checks did not pass. The stack is up, but"
+        c_yellow "    review the output above. Re-run any time:"
+        c_yellow "      sudo bash ${INSTALL_DIR}/validate.sh"
+    fi
+    echo
+else
+    c_yellow "[!] Could not download validate.sh — skipping automated validation."
+fi
+
 # ─── 9. Print connection details ──────────────────────────────────────
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
 

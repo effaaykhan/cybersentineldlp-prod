@@ -595,6 +595,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except Exception as e:
             logger.warning("SIEM connector reload skipped", error=str(e))
 
+        # ML sensitivity classifier self-check — warms the model and logs its
+        # state so a deployer can confirm it at a glance (no auth/API call). It
+        # is fully optional: the pipeline runs with or without it.
+        try:
+            from app.services import ml_classifier as _mlc
+            _st = _mlc.model_status()
+            if _st.get("available"):
+                logger.info("ML classifier self-check: available",
+                            model=_st.get("model"),
+                            cv_accuracy=_st.get("cv_accuracy"),
+                            trained_on=_st.get("trained_on"),
+                            persisted=_st.get("persisted"))
+            else:
+                logger.warning("ML classifier self-check: UNAVAILABLE "
+                               "(transfers still classified by rules/EDM/fingerprint; "
+                               "ML augmentation off)",
+                               enabled=_st.get("enabled"))
+        except Exception as e:
+            logger.warning("ML classifier self-check skipped", error=str(e))
+
         # Additional startup tasks
         logger.info("Server startup complete",
                    environment=settings.ENVIRONMENT,

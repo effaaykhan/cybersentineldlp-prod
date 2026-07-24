@@ -333,7 +333,10 @@ fi
 # runs the PASS/FAIL checks. Non-fatal: a failed check warns but does not abort
 # an otherwise-healthy install, since the ML augmentation is additive.
 say "Downloading validate.sh"
-if curl -fsSL "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh" 2>/dev/null; then
+# Retry: this file was occasionally missed on slow/flaky links because the fetch
+# had no retries. --retry-all-errors also rides out brief raw-CDN propagation.
+if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
+        "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh"; then
     chmod +x "${INSTALL_DIR}/validate.sh"
     echo
     say "Running post-install validation"
@@ -346,7 +349,9 @@ if curl -fsSL "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh" 2>/dev/n
     fi
     echo
 else
-    c_yellow "[!] Could not download validate.sh — skipping automated validation."
+    c_yellow "[!] Could not download validate.sh (transient network issue?) — skipping automated validation."
+    c_yellow "    Run it manually once the network settles:"
+    c_yellow "      curl -fsSL ${RAW_BASE}/validate.sh -o ${INSTALL_DIR}/validate.sh && sudo bash ${INSTALL_DIR}/validate.sh"
 fi
 
 # ─── 9. Print connection details ──────────────────────────────────────

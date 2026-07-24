@@ -68,6 +68,24 @@ custom names. Options: `--chunk-chars` (snippet size), `--min-chars`,
 `--max-rows-per-file`. The summary reports per-level rows and any skipped/
 unreadable files. Aim for a few dozen+ rows per level.
 
+## Combine public + your own (`merge_csv.py`)
+
+Layer your real documents on top of the public set in one balanced file:
+
+```bash
+python3 merge_csv.py training-real.csv training-mine.csv \
+    -o training-merged.csv --balance min --prefer training-mine.csv
+```
+
+- **`--balance min`** (default) trims every level to the smallest level's count so
+  the four levels are even; **`--per-level N`** caps each level to N instead;
+  `--balance none` keeps everything.
+- **`--prefer <file>`** (repeatable) keeps rows from that file **first** when a
+  level is trimmed — so your real documents survive over public filler.
+- De-duplicates identical text across all inputs (preferred files win), normalises
+  labels (case-insensitive + synonyms), and prints per-level counts showing how
+  many rows came from your preferred files. Stdlib only.
+
 ## Feed it to the model
 
 **Dashboard (easiest):** *Enforce → ML Classifier → Retrain on your data* →

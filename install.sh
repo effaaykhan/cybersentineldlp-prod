@@ -83,6 +83,19 @@ if [ ! -f "${ENV_FILE}" ]; then
     curl -fsSL "${RAW_BASE}/${ENV_EXAMPLE}" -o "${ENV_EXAMPLE}"
 fi
 
+# Fetch the validation script NOW, in the same healthy network window as the
+# files above — NOT after the long image pull, during which DNS/network can drop
+# (as seen in the field). It only runs later (section 8c); running it needs no
+# internet. Non-fatal: validation is optional, so a miss here never aborts.
+say "Downloading validate.sh"
+if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
+        "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh"; then
+    chmod +x "${INSTALL_DIR}/validate.sh"
+else
+    c_yellow "[!] Could not download validate.sh now — will retry after startup."
+    rm -f "${INSTALL_DIR}/validate.sh"
+fi
+
 # ─── 4. Generate .env with secure random secrets ──────────────────────
 gen_secret() {
     # 48 chars of url-safe random
@@ -332,12 +345,17 @@ fi
 # Downloads validate.sh (kept in INSTALL_DIR so the operator can re-run it) and
 # runs the PASS/FAIL checks. Non-fatal: a failed check warns but does not abort
 # an otherwise-healthy install, since the ML augmentation is additive.
-say "Downloading validate.sh"
-# Retry: this file was occasionally missed on slow/flaky links because the fetch
-# had no retries. --retry-all-errors also rides out brief raw-CDN propagation.
-if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
-        "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh"; then
-    chmod +x "${INSTALL_DIR}/validate.sh"
+# validate.sh was fetched up-front (section 3). If it's missing — because the
+# network dropped during the image pull — make one more attempt now; running it
+# itself needs no internet (docker + curl to localhost only).
+if [ ! -x "${INSTALL_DIR}/validate.sh" ]; then
+    say "Fetching validate.sh (deferred from earlier)"
+    curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
+        "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh" 2>/dev/null \
+        && chmod +x "${INSTALL_DIR}/validate.sh" || true
+fi
+
+if [ -x "${INSTALL_DIR}/validate.sh" ]; then
     echo
     say "Running post-install validation"
     if bash "${INSTALL_DIR}/validate.sh" --container cybersentineldlp-manager --url http://localhost:55000; then
@@ -349,7 +367,7 @@ if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 
     fi
     echo
 else
-    c_yellow "[!] Could not download validate.sh (transient network issue?) — skipping automated validation."
+    c_yellow "[!] validate.sh unavailable (network was down) — skipping automated validation."
     c_yellow "    Run it manually once the network settles:"
     c_yellow "      curl -fsSL ${RAW_BASE}/validate.sh -o ${INSTALL_DIR}/validate.sh && sudo bash ${INSTALL_DIR}/validate.sh"
 fi

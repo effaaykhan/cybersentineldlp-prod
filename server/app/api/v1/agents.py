@@ -998,10 +998,26 @@ class PolicyEvaluationRequest(BaseModel):
         None, description="Why the caller could not inspect: too_large | unreadable"
     )
     file_size: Optional[int] = Field(None, description="File size in bytes")
-    event_type: str = Field(..., description="Event type (e.g., 'usb_file_transfer', 'clipboard')")
+    event_type: str = Field(..., description="Event type (e.g., 'usb_file_transfer', 'clipboard', 'network_exfil')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
     source_path: Optional[str] = Field(None, description="Source file path")
     destination_path: Optional[str] = Field(None, description="Destination path")
+    # ── Network exfiltration context ─────────────────────────────────────────
+    # Populated by the agent when it intercepts an outbound network transfer
+    # (event_type="network_exfil"). The file itself is still sent via
+    # file_content_b64 and classified/extracted exactly like a USB copy — so
+    # every file type and the uninspectable invariant are handled for free.
+    # These fields only add the "how / where" so method- and destination-scoped
+    # policies can match. All optional: a purely content-gated network policy
+    # ("block Confidential leaving over the network") ignores them entirely.
+    protocol: Optional[str] = Field(None, description="Transport/app protocol: ftp|sftp|scp|http|https|tcp|udp|smb|dns|...")
+    transfer_method: Optional[str] = Field(None, description="Canonical exfil method: ftp|scp|sftp|tftp|http_post|http_server|python_http_server|curl|wget|netcat|powershell_upload|smb_copy|dns_tunnel|cloud_cli|webdav|rsync|...")
+    process_name: Optional[str] = Field(None, description="Process initiating the transfer (e.g. python.exe, scp.exe, curl.exe)")
+    process_path: Optional[str] = Field(None, description="Full path of the initiating process")
+    destination_host: Optional[str] = Field(None, description="Remote hostname / domain")
+    destination_ip: Optional[str] = Field(None, description="Remote IP address")
+    destination_port: Optional[int] = Field(None, description="Remote port")
+    direction: Optional[str] = Field(None, description="Traffic direction: outbound|inbound")
 
 
 class ClassificationDetails(BaseModel):
@@ -1010,6 +1026,7 @@ class ClassificationDetails(BaseModel):
     confidence: float = Field(..., description="Confidence score (0.0 - 1.0)")
     matched_rules: List[Dict[str, Any]] = Field(default_factory=list, description="List of matched classification rules")
     total_matches: int = Field(0, description="Total number of pattern matches")
+    document_types: List[Dict[str, Any]] = Field(default_factory=list, description="Detected document/image type(s), most confident first")
 
 
 class PolicyEvaluationResponse(BaseModel):
@@ -1153,6 +1170,17 @@ async def evaluate_policy_realtime(
             matched_rules_count=len(classification_result.matched_rules),
         )
 
+        # 1b. Identify the document/image TYPE (patent, passport, source code, …).
+        # Purely ADDITIVE: this never changes the classification level or any
+        # existing decision — it only annotates the event and exposes a new
+        # policy-matchable field. Guarded so a failure can't affect evaluate.
+        document_types = []
+        try:
+            from app.services.document_classifier import classify_document
+            document_types = classify_document(content_to_classify)
+        except Exception as e:
+            logger.warning("Document-type classification failed", error=str(e))
+
         # 2. Build event data structure for policy evaluation
         event_data = {
             "classification_level": classification_result.classification,
@@ -1175,7 +1203,38 @@ async def evaluate_policy_realtime(
             # cannot inspect and which would otherwise look "Public".
             "extraction_status": extraction_status,
             "extraction_kind": extract_kind,
+            # Additive: the detected document/image type. Policy-matchable, so an
+            # operator MAY write `document_type equals source_code -> block`.
+            # Existing policies don't reference it, so their behaviour is unchanged.
+            "document_type": document_types[0]["type"] if document_types else None,
+            "document_type_label": document_types[0]["label"] if document_types else None,
         }
+
+        # Network exfiltration context — only present for network_exfil events.
+        # Written both flat and under a "network"/"process" object so the
+        # evaluator's dotted field mappings resolve either shape. Blank/absent
+        # fields are dropped so a rule like `transfer_method in [...]` simply
+        # doesn't match rather than matching an empty string.
+        network_fields = {
+            "protocol": request.protocol,
+            "transfer_method": request.transfer_method,
+            "process_name": request.process_name,
+            "process_path": request.process_path,
+            "destination_host": request.destination_host,
+            "destination_ip": request.destination_ip,
+            "destination_port": request.destination_port,
+            "direction": request.direction,
+        }
+        network_fields = {k: v for k, v in network_fields.items() if v not in (None, "")}
+        if network_fields:
+            event_data.update(network_fields)
+            event_data["network"] = {
+                k: v for k, v in network_fields.items() if k not in ("process_name", "process_path")
+            }
+            event_data["process"] = {
+                "name": request.process_name,
+                "path": request.process_path,
+            }
 
         # 3. Evaluate classification-aware policies
         policy_evaluator = DatabasePolicyEvaluator()
@@ -1241,6 +1300,7 @@ async def evaluate_policy_realtime(
                 confidence=classification_result.confidence_score,
                 matched_rules=classification_result.matched_rules,
                 total_matches=classification_result.total_matches,
+                document_types=document_types,
             ),
             policies_triggered=triggered_policies,
             should_log=True,

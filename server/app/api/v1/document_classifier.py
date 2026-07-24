@@ -46,7 +46,8 @@ async def classify(
     """Identify the document/image type(s) of the supplied content or file."""
     text = body.content
     extract_kind = "text"
-    if not text and body.file_b64:
+    provided_file = bool(body.file_b64)
+    if not text and provided_file:
         try:
             data = base64.b64decode(body.file_b64, validate=True)
         except (binascii.Error, ValueError):
@@ -54,8 +55,19 @@ async def classify(
         ex = extract_text(body.filename or "upload", data)  # images/scanned PDFs → OCR here
         extract_kind = ex.kind
         text = ex.text
+
     if not text or not text.strip():
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Provide content or a readable file_b64")
+        # A file was given but no readable text came out (scanned image with OCR
+        # unavailable, a binary/too-large file, an empty doc). That is not a
+        # server error — report it plainly so the UI can explain it.
+        if provided_file:
+            return {
+                "matched": False,
+                "extract_kind": extract_kind,
+                "document_types": [],
+                "note": f"No readable text could be extracted from the file (kind={extract_kind}).",
+            }
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Provide content or a file to classify")
 
     matches = classify_document(text, top_k=body.top_k, min_confidence=body.min_confidence)
     return {

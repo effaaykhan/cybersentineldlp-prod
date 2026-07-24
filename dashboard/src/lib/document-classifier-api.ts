@@ -18,6 +18,7 @@ export interface ClassifyResult {
   matched: boolean
   extract_kind: string
   document_types: DocTypeMatch[]
+  note?: string
 }
 
 export const getCatalogue = async (): Promise<{ count: number; classifiers: Classifier[] }> => {

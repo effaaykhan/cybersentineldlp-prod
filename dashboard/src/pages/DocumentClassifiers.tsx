@@ -87,7 +87,10 @@ function Tester() {
       return classifyDocument({ content: text })
     },
     onSuccess: (r) => setResult(r),
-    onError: (e: any) => toast.error(extractErrorDetail(e, e?.message || 'Classification failed')),
+    onError: (e: any) => {
+      if (e?.response?.status === 413) toast.error('File too large to upload (max ~30 MB).')
+      else toast.error(extractErrorDetail(e, e?.message || 'Classification failed'))
+    },
   })
 
   const conf = (n: number) => `${Math.round(n * 100)}%`
@@ -119,7 +122,9 @@ function Tester() {
             <div className="text-xs text-cs-muted mb-2">Read via <span className="num">{result.extract_kind}</span></div>
           )}
           {result.document_types.length === 0 ? (
-            <div className="text-sm text-cs-muted">No document type recognised.</div>
+            <div className="text-sm text-cs-muted">
+              {result.note || 'No document type recognised — the content does not match any of the 24 built-in types.'}
+            </div>
           ) : (
             <ul className="space-y-2">
               {result.document_types.map((d) => (

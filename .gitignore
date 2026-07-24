@@ -244,3 +244,6 @@ server/ml/models/*.joblib
 
 # Derived ML training CSV (regenerate from public datasets via build_real_csv.py; mixed upstream licenses)
 samples/ml-training/*.csv
+
+# ...but DO track the training-set helper scripts (root *.sh rule would hide this one)
+!samples/ml-training/make-training-set.sh

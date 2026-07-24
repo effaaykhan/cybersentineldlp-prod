@@ -1,0 +1,4 @@
+Refund queue (internal notes)
+- Jane Doe, account ACCT-19205472, DOB 1955-01-14
+- John Smith, account ACCT-33254575, DOB 1988-10-05
+- Aisha Khan, account ACCT-50667065, DOB 1972-04-20

@@ -1,0 +1,4 @@
+Refund queue (internal notes)
+- Alex Fictional, account ACCT-00000001, DOB 1901-01-01
+- Sam Madeup, account ACCT-00000002, DOB 1902-02-02
+- Pat Nonexistent, account ACCT-00000003, DOB 1903-03-03

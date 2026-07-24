@@ -47,6 +47,9 @@ _NONDIGIT = re.compile(r"\D")
 # token would not equal the clean cell that was indexed. Interior characters
 # (name apostrophes, the '-' in an SSN) are kept.
 _EDGE_PUNCT = " \t\r\n.,;:!?()[]{}<>\"'`|/\\"
+# Field separators turned into spaces before EDM tokenising, so comma/tab/pipe-
+# packed records (a raw CSV/TSV export) are split into individual cells.
+_FIELD_DELIM = re.compile(r"[,\t\r\n;|]+")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -136,10 +139,18 @@ def build_edm_index(
     }
 
 
-def _ngrams(content: str, max_n: int = 3) -> Iterable[str]:
-    """Whitespace tokens joined into contiguous 1..max_n-grams, plus each raw
-    token on its own (so "123-45-6789" survives as a single token)."""
-    tokens = content.split()
+def _ngrams(content: str, max_n: int = 4) -> Iterable[str]:
+    """Candidate 1..max_n-grams from the content.
+
+    Splitting on whitespace alone missed FIELD-DELIMITED data: a raw CSV row
+    "Jane,Doe,ACCT-19205472,1955-01-14" is one whitespace token, so its cells
+    were never matched and an export of protected records with no regex pattern
+    slipped through. We first turn comma / tab / pipe / semicolon / newline —
+    the usual field separators — into spaces, so each cell becomes its own
+    token. Interior value characters (an SSN's '-', a name's apostrophe) are
+    kept. max_n=4 lets 4-group values like a spaced card number match as one.
+    """
+    tokens = _FIELD_DELIM.sub(" ", content).split()
     n = len(tokens)
     for i in range(n):
         for size in range(1, max_n + 1):

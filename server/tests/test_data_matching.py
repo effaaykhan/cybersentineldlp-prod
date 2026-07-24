@@ -72,6 +72,11 @@ def test_edm():
     m = match_edm("Audit note: Jane Doe, SSN 123-45-6789, flagged for review.", idx, KEY)
     chk("values with attached punctuation still match", m["matched"] and m["rows"][0]["row_id"] == 0)
 
+    # (6c) COMMA-PACKED / TSV records (a raw export with no spaces between cells)
+    m = match_edm("first,last,ssn\nJane,Doe,123-45-6789", idx, KEY)
+    chk("comma-packed CSV row matches (field delimiters split into cells)",
+        m["matched"] and m["rows"][0]["row_id"] == 0)
+
     # (7) keyed: an index built under a DIFFERENT key cannot be matched with KEY
     idx_other = build_edm_index(ROWS, COLS, OTHER_KEY)
     m = match_edm("Jane Doe 123-45-6789", idx_other, KEY)

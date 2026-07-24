@@ -160,8 +160,11 @@ models/checkpoints/
 
 # Data files
 *.csv
-# Synthetic EDM test dataset is meant to be shipped, not local scratch.
+# Synthetic EDM sample dataset + test files are shipped, not local scratch.
 !samples/edm/customers-sample.csv
+!samples/edm/tests/*.csv
+!samples/edm/tests/*.xlsx
+!samples/edm/tests/*.xlsx
 *.xlsx
 *.xls
 *.json

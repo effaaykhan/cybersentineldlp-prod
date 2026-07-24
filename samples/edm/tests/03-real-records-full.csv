@@ -1,0 +1,4 @@
+first_name,last_name,ssn,credit_card,account_number,email,phone,date_of_birth
+Jane,Doe,736-47-6840,1340 8889 0899 7000,ACCT-19205472,jane.doe0@example.com,+1-362-585-9376,1955-01-14
+John,Smith,821-94-5563,7310 9558 5841 5785,ACCT-33254575,john.smith1@example.com,+1-456-496-4981,1988-10-05
+Aisha,Khan,859-76-6821,1284 5279 2996 5454,ACCT-50667065,aisha.khan2@example.com,+1-237-567-3412,1972-04-20

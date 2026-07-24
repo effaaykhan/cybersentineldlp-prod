@@ -11,6 +11,7 @@ import Alerts from './pages/Alerts'
 import Rules from './pages/Rules'
 import DataMatching from './pages/DataMatching'
 import DocumentClassifiers from './pages/DocumentClassifiers'
+import MLClassifier from './pages/MLClassifier'
 import Policies from './app/dashboard/policies/page'
 import Settings from './pages/Settings'
 import Incidents from './app/dashboard/incidents/page'
@@ -35,6 +36,7 @@ function App() {
           <Route path="rules" element={<Rules />} />
           <Route path="data-matching" element={<DataMatching />} />
           <Route path="document-classifiers" element={<DocumentClassifiers />} />
+          <Route path="ml-classifier" element={<MLClassifier />} />
           <Route path="policies" element={<Policies />} />
           <Route path="incidents" element={<Incidents />} />
           <Route path="log-explorer" element={<LogExplorer />} />

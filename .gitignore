@@ -241,3 +241,6 @@ dump.rdb
 # ML sensitivity model artifact (retrained per-deployment; never commit)
 ml/models/*.joblib
 server/ml/models/*.joblib
+
+# Derived ML training CSV (regenerate from public datasets via build_real_csv.py; mixed upstream licenses)
+samples/ml-training/*.csv

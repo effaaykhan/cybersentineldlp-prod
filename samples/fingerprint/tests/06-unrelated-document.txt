@@ -1,0 +1,3 @@
+CONFIDENTIAL — Product roadmap Q4
+
+The engineering team will prioritise the new reporting dashboard, single sign-on for enterprise tenants, and a rewrite of the notification service. Beta invitations go out in November, with general availability targeted for January pending load testing and a security review.

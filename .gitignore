@@ -160,13 +160,13 @@ models/checkpoints/
 
 # Data files
 *.csv
+*.xlsx
+*.xls
 # Synthetic EDM sample dataset + test files are shipped, not local scratch.
+# These negations MUST come after the *.csv/*.xlsx rules above (last match wins).
 !samples/edm/customers-sample.csv
 !samples/edm/tests/*.csv
 !samples/edm/tests/*.xlsx
-!samples/edm/tests/*.xlsx
-*.xlsx
-*.xls
 *.json
 !package.json
 !package-lock.json

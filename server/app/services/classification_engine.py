@@ -400,6 +400,27 @@ class ClassificationEngine:
 
         classification = self._determine_classification(confidence_score, has_strong_signal)
 
+        # ── ML sensitivity classifier (ADDITIVE, raise-only) ──────────────
+        # A learned model predicts the level too. We combine by taking the
+        # STRONGER of the rule-based level and a CONFIDENT ML prediction — ML can
+        # only raise protection, never lower it, so every existing detection is
+        # preserved. Guarded: if the model is unavailable it is a no-op. The ml
+        # opinion is always recorded for visibility even when it doesn't change
+        # the enforced level. Disable with DLP_ML_CLASSIFIER_ENABLED=0.
+        ml_info = None
+        method = "multi_technique_correlated"
+        try:
+            from app.services.ml_classifier import predict_level, LEVEL_ORDER
+            ml_info = predict_level(eval_content)
+            if ml_info and ml_info.get("confident"):
+                if LEVEL_ORDER.get(ml_info["level"], 0) > LEVEL_ORDER.get(classification, 0):
+                    classification = ml_info["level"]
+                    method = "ml_raised"
+                    if confidence_score < ml_info["confidence"]:
+                        confidence_score = ml_info["confidence"]
+        except Exception as e:
+            logger.warning("ML sensitivity classifier failed", error=str(e))
+
         return ClassificationResult(
             classification=classification,
             confidence_score=round(confidence_score, 4),
@@ -411,8 +432,9 @@ class ClassificationEngine:
                 "context": ctx,
                 "context_multiplier": context_multiplier,
                 "entropy_score": round(entropy, 4),
-                "method": "multi_technique_correlated",
+                "method": method,
                 "correlation": correlation_result.get("signals", []) if correlation_result else [],
+                "ml_classification": ml_info,
             },
             entropy_score=round(entropy, 4),
             data_types=data_types,

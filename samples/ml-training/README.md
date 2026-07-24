@@ -34,6 +34,40 @@ python3 build_real_csv.py training-real.csv
 Only needs Python stdlib + internet (pulls rows from the Hugging Face
 datasets-server API). Edit `PER_LEVEL` to scale, or `SOURCES` to swap datasets.
 
+## Best option: your own documents (`folder_to_csv.py`)
+
+The public datasets above are a strong starting point, but a classifier tuned on
+*your* files is far better. Sort a sample of real documents into per-level
+folders and convert them — with the **same** PDF/DOCX/image-OCR extraction the
+live DLP pipeline uses:
+
+```
+my-docs/
+  Public/        press releases, public web/marketing, published docs
+  Internal/      memos, meeting notes, routine email exports
+  Confidential/  contracts, financials, business plans
+  Restricted/    PII exports, credentials, medical, legal-privileged
+```
+
+Run it **inside the manager container** (so PDF/DOCX/OCR work):
+
+```bash
+docker cp ./my-docs cybersentinel-manager:/tmp/my-docs
+docker cp samples/ml-training/folder_to_csv.py cybersentinel-manager:/tmp/f2c.py
+docker exec -e PYTHONPATH=/app -w /app cybersentinel-manager \
+    python3 /tmp/f2c.py /tmp/my-docs -o /tmp/training-mine.csv
+docker cp cybersentinel-manager:/tmp/training-mine.csv ./training-mine.csv
+```
+
+It handles `.pdf` (text **and** OCR for scans), `.docx`, `.xlsx`, `.pptx`,
+images (`.png/.jpg/.tiff` → OCR), `.txt/.md/.csv/.log/.json`, and archives.
+Long documents are split into several snippets (one contract → many rows).
+Folder names are case-insensitive with synonyms (`sensitive`→Confidential,
+`secret/pii`→Restricted, …); use `--map "hr=Restricted,legal=Confidential"` for
+custom names. Options: `--chunk-chars` (snippet size), `--min-chars`,
+`--max-rows-per-file`. The summary reports per-level rows and any skipped/
+unreadable files. Aim for a few dozen+ rows per level.
+
 ## Feed it to the model
 
 **Dashboard (easiest):** *Enforce → ML Classifier → Retrain on your data* →

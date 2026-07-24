@@ -16,6 +16,7 @@ import {
   UserCog,
   Radar,
   Fingerprint,
+  ScanText,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -54,6 +55,7 @@ const groups: NavGroup[] = [
     items: [
       { name: 'Rules',    to: '/rules',    icon: List,   requires: ['create_policy', 'update_policy'] },
       { name: 'Data Matching', to: '/data-matching', icon: Fingerprint, requires: ['create_policy', 'update_policy'] },
+      { name: 'Doc Classifiers', to: '/document-classifiers', icon: ScanText, requires: ['create_policy', 'update_policy'] },
       { name: 'Policies', to: '/policies', icon: Shield, requires: ['create_policy', 'update_policy'] },
     ],
   },

@@ -5,6 +5,25 @@ content, retrain it on real labelled text. This folder builds a balanced
 `text,label` training set from **public** datasets, mapped to the four DLP
 sensitivity levels.
 
+## Quick start (one command)
+
+`make-training-set.sh` wires all three helpers below into a single run and prints
+per-level counts:
+
+```bash
+./make-training-set.sh                          # public set only  -> training-set.csv
+./make-training-set.sh --docs ./my-docs         # public + YOUR documents (preferred)
+./make-training-set.sh --docs ./my-docs --no-public   # only your documents
+./make-training-set.sh --docs ./my-docs --upload --token "$ADMIN_TOKEN"   # + retrain now
+```
+
+Options: `--public-per-level N` (public rows/level, default 300), `--balance
+min|none`, `--per-level N`, `--container NAME` (default `cybersentinel-manager`),
+`--host URL`, `--replace`. It runs the public build on the host, extracts your
+documents **inside the manager container** (for PDF/DOCX/OCR), merges with your
+rows preferred, and optionally POSTs the result to `/ml-classifier/retrain`.
+Prefer step-by-step control? Use the three scripts directly, described below.
+
 ## What maps to what (weak supervision)
 
 Each public dataset is used as a proxy for the *kind of language* a sensitivity

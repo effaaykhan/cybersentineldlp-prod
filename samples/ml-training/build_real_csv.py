@@ -12,11 +12,11 @@ datasets-server API. Weak-supervision mapping (dataset nature -> DLP level):
 This is heuristic labelling, not ground truth — but it gives the model real,
 diverse vocabulary per level. Review/trim before trusting in production.
 """
-import csv, json, re, sys, time, urllib.parse, urllib.request, random
+import csv, json, os, re, sys, time, urllib.parse, urllib.request, random
 
 random.seed(42)
 BASE = "https://datasets-server.huggingface.co/rows"
-PER_LEVEL = 300
+PER_LEVEL = int(os.environ.get("PER_LEVEL", "300"))   # rows per level (env-overridable)
 _ws = re.compile(r"\s+")
 _quoted = re.compile(r"^\s*>.*$", re.M)          # quoted email reply lines
 

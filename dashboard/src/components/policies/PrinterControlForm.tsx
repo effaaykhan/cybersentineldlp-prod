@@ -1,6 +1,6 @@
 'use client'
 
-import { Printer, ShieldCheck, ShieldAlert, Network, Cable, Ban } from 'lucide-react'
+import { Printer, ShieldCheck, ShieldAlert, Network, Cable, Ban, ListChecks } from 'lucide-react'
 import { PrinterControlConfig } from '@/types/policy'
 
 interface Props {
@@ -9,8 +9,10 @@ interface Props {
 }
 
 const SCOPES: Array<{ value: PrinterControlConfig['scope']; label: string; desc: string; icon: typeof Ban }> = [
+  { value: 'allowlist', label: 'Allowlist (only sanctioned printers)', icon: ListChecks,
+    desc: 'Allow only printers on the sanctioned list (Enforce → Printers); cancel jobs to any other printer. Most granular.' },
   { value: 'block_network', label: 'Block network printers', icon: Network,
-    desc: 'Block printing to shared / IP network printers; allow local (directly-attached) printers. Common DLP control.' },
+    desc: 'Block printing to shared / IP network printers; allow local (directly-attached) printers.' },
   { value: 'block_all', label: 'Block all printing', icon: Ban,
     desc: 'Cancel every print job on the endpoint, local and network.' },
   { value: 'block_local', label: 'Block local printers', icon: Cable,

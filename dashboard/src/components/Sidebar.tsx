@@ -18,6 +18,7 @@ import {
   Fingerprint,
   BrainCircuit,
   Usb,
+  Printer,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -58,6 +59,7 @@ const groups: NavGroup[] = [
       { name: 'Data Matching', to: '/data-matching', icon: Fingerprint, requires: ['create_policy', 'update_policy'] },
       { name: 'ML Classifier', to: '/ml-classifier', icon: BrainCircuit, requires: ['create_policy', 'update_policy'] },
       { name: 'USB Devices', to: '/usb-devices', icon: Usb, requires: ['create_policy', 'update_policy'] },
+      { name: 'Printers', to: '/printers', icon: Printer, requires: ['create_policy', 'update_policy'] },
       { name: 'Policies', to: '/policies', icon: Shield, requires: ['create_policy', 'update_policy'] },
     ],
   },

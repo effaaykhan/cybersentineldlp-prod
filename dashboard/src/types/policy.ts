@@ -86,9 +86,9 @@ export interface USBDeviceControlConfig {
 
 export interface PrinterControlConfig {
   mode: 'enforce' | 'audit'
-  // block_all = block every print job; block_network = block network printers
-  // only; block_local = block local (directly-attached) printers only
-  scope: 'block_all' | 'block_network' | 'block_local'
+  // block_all = block every print job; block_network / block_local = by type;
+  // allowlist = allow only sanctioned printers, block the rest
+  scope: 'block_all' | 'block_network' | 'block_local' | 'allowlist'
 }
 
 export interface USBTransferConfig {

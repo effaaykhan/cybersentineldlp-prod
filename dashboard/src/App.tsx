@@ -12,6 +12,7 @@ import Rules from './pages/Rules'
 import DataMatching from './pages/DataMatching'
 import MLClassifier from './pages/MLClassifier'
 import UsbDevices from './pages/UsbDevices'
+import Printers from './pages/Printers'
 import Policies from './app/dashboard/policies/page'
 import Settings from './pages/Settings'
 import Incidents from './app/dashboard/incidents/page'
@@ -37,6 +38,7 @@ function App() {
           <Route path="data-matching" element={<DataMatching />} />
           <Route path="ml-classifier" element={<MLClassifier />} />
           <Route path="usb-devices" element={<UsbDevices />} />
+          <Route path="printers" element={<Printers />} />
           <Route path="policies" element={<Policies />} />
           <Route path="incidents" element={<Incidents />} />
           <Route path="log-explorer" element={<LogExplorer />} />

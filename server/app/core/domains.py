@@ -59,7 +59,8 @@ POLICY_TYPE_DOMAIN = {
     # policy fell back to GENERAL and dropped out of domain-scoped reporting.
     "email_send_prevention": PolicyDomain.DATA_PROTECTION,
     "cloud_upload_prevention": PolicyDomain.DATA_PROTECTION,
-    # Access Control — device authorization (future-facing types)
+    # Access Control — device authorization
+    "usb_device_control": PolicyDomain.ACCESS_CONTROL,
     "usb_device_authorization": PolicyDomain.ACCESS_CONTROL,
     "device_access": PolicyDomain.ACCESS_CONTROL,
 }

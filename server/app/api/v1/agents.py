@@ -1044,6 +1044,168 @@ class PolicyEvaluationResponse(BaseModel):
     extraction_kind: str = Field("text", description="pdf | docx | xlsx | archive | text | ...")
 
 
+class DeviceAuthorizeRequest(BaseModel):
+    """Device identity the agent reports when a USB storage device connects."""
+    serial_number: Optional[str] = Field(None, description="USB serial number — the match key")
+    vendor_id: Optional[str] = None
+    product_id: Optional[str] = None
+    product_name: Optional[str] = None
+    manufacturer: Optional[str] = None
+    volume_label: Optional[str] = None
+    volume_serial: Optional[str] = None
+    drive_letter: Optional[str] = None
+    device_name: Optional[str] = None
+
+
+class DeviceAuthorizeResponse(BaseModel):
+    action: str                      # "allow" | "block" — what the agent must enforce
+    sanctioned: bool                 # serial is on the enabled allowlist
+    enforced: bool                   # a usb_device_control policy is active
+    mode: str                        # "enforce" | "audit" | "off"
+    would_block: bool = False        # audit mode: allowed, but would block under enforce
+    reason: str
+    serial_number: Optional[str] = None
+
+
+async def _log_device_authorization(agent_id, req: "DeviceAuthorizeRequest", action, sanctioned,
+                                     enforced, mode, would_block, reason) -> None:
+    """Write the connect-time decision to the event log so the device + verdict
+    are visible on the Events page."""
+    import uuid as _uuid
+    from app.core.domains import domain_for_event_type
+    mongo = get_mongodb()["dlp_events"]
+    now = datetime.now(timezone.utc)
+    ident = req.product_name or req.device_name or req.serial_number or "USB device"
+    if action == "block":
+        title, sev = f"USB device blocked (unsanctioned): {ident}", "high"
+    elif would_block:
+        title, sev = f"Unsanctioned USB device allowed (audit): {ident}", "medium"
+    elif enforced and sanctioned:
+        title, sev = f"Sanctioned USB device allowed: {ident}", "low"
+    else:
+        title, sev = f"USB device connected: {ident}", "info"
+
+    doc = {
+        "id": f"devauth-{_uuid.uuid4()}",
+        "timestamp": now,
+        "event_type": "usb",
+        "event_subtype": "usb_device_authorization",
+        "usb_event_type": "device_authorization",
+        "severity": sev,
+        "agent_id": agent_id,
+        "source": "agent",
+        "source_type": "agent",
+        "user_email": "agent@system",
+        "title": title,
+        "action_taken": action,
+        "blocked": action == "block",
+        "quarantined": False,
+        "classification_level": None,
+        "processing_status": "completed",
+        "processed_at": now,
+        "policy_domain": domain_for_event_type("usb"),
+        # device-control specifics (read model allows extra → surface in the UI)
+        "device_sanctioned": sanctioned,
+        "device_control_enforced": enforced,
+        "device_control_mode": mode,
+        "would_block": would_block,
+        "reason": reason,
+        "metadata": {},
+    }
+    ident_fields = {k: v for k, v in {
+        "serial_number": req.serial_number, "vendor_id": req.vendor_id,
+        "product_id": req.product_id, "product_name": req.product_name,
+        "manufacturer": req.manufacturer, "volume_label": req.volume_label,
+        "volume_serial": req.volume_serial, "drive_letter": req.drive_letter,
+        "device_name": req.device_name,
+    }.items() if v not in (None, "")}
+    doc.update(ident_fields)
+    if ident_fields:
+        doc["usb"] = dict(ident_fields)
+    await mongo.insert_one(doc)
+
+
+@router.post("/{agent_id}/device/authorize", response_model=DeviceAuthorizeResponse)
+async def authorize_usb_device(
+    agent_id: str,
+    request: DeviceAuthorizeRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Real-time USB DEVICE authorization for agent-side enforcement (STRICT
+    ALLOWLIST / default-deny). The agent calls this the moment a USB storage
+    device connects, before permitting it. Requires a valid X-Agent-Key.
+
+    Decision:
+      * no active usb_device_control policy  -> allow (monitoring only)
+      * serial is on the enabled allowlist   -> allow (sanctioned)
+      * otherwise                            -> block  (enforce mode)
+                                                allow + would_block (audit mode)
+
+    The verdict is logged as an event so the device and outcome appear in the log.
+    Content control (file inspection on transfers) is unchanged and still applies
+    to sanctioned devices.
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+    from app.models.sanctioned_usb_device import SanctionedUsbDevice
+
+    serial = (request.serial_number or "").strip()
+
+    # Is device control enabled? Highest-priority active usb_device_control policy.
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "usb_device_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+    enforced = policy is not None
+    mode = "off"
+    if enforced:
+        mode = ((policy.config or {}).get("mode") or "enforce").lower()
+
+    # Serial match against the enabled allowlist.
+    sanctioned = False
+    if serial:
+        row = (await db.execute(
+            _select(SanctionedUsbDevice).where(
+                SanctionedUsbDevice.serial_number == serial,
+                SanctionedUsbDevice.is_enabled.is_(True),
+            )
+        )).scalar_one_or_none()
+        sanctioned = row is not None
+
+    would_block = False
+    if not enforced:
+        action, reason = "allow", "USB device control not enabled — monitoring only"
+    elif sanctioned:
+        action, reason = "allow", "Device is sanctioned"
+    else:
+        # Unsanctioned (unknown serial, or no serial at all under strict allowlist).
+        base_reason = ("Device has no serial number and cannot be sanctioned"
+                       if not serial else "Unsanctioned USB storage device")
+        if mode == "audit":
+            action, would_block, reason = "allow", True, f"{base_reason} — would be blocked (audit mode)"
+        else:
+            action, reason = "block", f"{base_reason} — blocked"
+
+    try:
+        await _log_device_authorization(agent_id, request, action, sanctioned,
+                                        enforced, mode, would_block, reason)
+    except Exception as e:  # logging must never change the decision
+        logger.warning("device authorization event log failed", agent_id=agent_id, error=str(e))
+
+    logger.info("USB device authorization", agent_id=agent_id, serial=serial or None,
+                action=action, sanctioned=sanctioned, enforced=enforced, mode=mode)
+    return DeviceAuthorizeResponse(
+        action=action, sanctioned=sanctioned, enforced=enforced, mode=mode,
+        would_block=would_block, reason=reason, serial_number=serial or None,
+    )
+
+
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
 async def evaluate_policy_realtime(
     agent_id: str,

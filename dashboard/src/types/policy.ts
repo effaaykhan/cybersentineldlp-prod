@@ -92,6 +92,13 @@ export interface PrinterControlConfig {
   scope: 'block_all' | 'block_network' | 'block_local' | 'allowlist'
 }
 
+export interface PrintContentConfig {
+  // enforce = cancel sensitive print jobs; audit = log "would block", don't cancel
+  mode: 'enforce' | 'audit'
+  // classification levels that trigger the action
+  levels: string[]
+}
+
 export interface USBTransferConfig {
   monitoredPaths: string[]
   action: USBTransferAction
@@ -181,6 +188,7 @@ export type PolicyConfig =
   | USBDeviceConfig
   | USBDeviceControlConfig
   | PrinterControlConfig
+  | PrintContentConfig
   | USBTransferConfig
   | GoogleDriveLocalConfig
   | GoogleDriveCloudConfig

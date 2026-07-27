@@ -1856,6 +1856,7 @@ static ClassificationResult Classify(const std::string& content,
     std::string printerControlScope;                    // block_all | block_network | block_local | allowlist | none
     std::set<std::string> sanctionedPrinters;           // enabled allowlist printer names (UPPERCASE)
     std::atomic<bool> printContentInspection{false};    // a print_content_prevention policy is active
+    std::string printContentMode;                       // "enforce" | "audit" | "off" (guarded by printerPolicyMutex)
     std::mutex printerPolicyMutex;
 
     // Screen-capture classification detail. classifyText (run on the content-scan
@@ -2319,6 +2320,10 @@ if (!shouldBlock) {
              }
              printerControlEnforced.store(enforced);
              printContentInspection.store(JsonBoolTrue(response, "content_inspection"));
+             {
+                 std::lock_guard<std::mutex> lock(printerPolicyMutex);
+                 printContentMode = config.ExtractJsonValue(response, "content_mode");
+             }
              logger.Info("Printer control: enforced=" + std::string(enforced ? "true" : "false") +
                          " mode=" + (mode.empty() ? "off" : mode) +
                          " scope=" + (scope.empty() ? "none" : scope) +
@@ -2456,6 +2461,16 @@ if (!shouldBlock) {
              return false;
          }
          bool block = config.ExtractJsonValue(resp, "action") == "block";
+         std::string cmode;
+         {
+             std::lock_guard<std::mutex> lock(printerPolicyMutex);
+             cmode = printContentMode;
+         }
+         if (block && cmode == "audit") {
+             logger.Info("PRINT_CONTENT_AUDIT: would block " + docName +
+                         " — sensitive content (" + std::to_string(text.size()) + " chars)");
+             return false;   // audit: log, don't cancel
+         }
          logger.Info("Print content inspection: " + docName + " -> " +
                      (block ? "BLOCK" : "allow") + " (" + std::to_string(text.size()) + " chars)");
          return block;

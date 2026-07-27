@@ -1267,6 +1267,7 @@ class PrinterPolicyResponse(BaseModel):
     scope: str              # "block_all" | "block_network" | "block_local" | "allowlist" | "none"
     printers: List[str]     # sanctioned printer names (used when scope == "allowlist")
     content_inspection: bool  # an active print_content_prevention policy exists
+    content_mode: str         # "enforce" | "audit" | "off" (print content control)
     generated_at: datetime
 
 
@@ -1317,16 +1318,20 @@ async def printer_policy(
 
     # Is print CONTENT control active? The agent only inspects the spooled document
     # (pause + read + /evaluate) when this is true, to avoid latency otherwise.
-    content_n = await db.scalar(
-        _select(func.count()).select_from(Policy).where(
+    # content_mode drives enforce (cancel) vs audit (log "would block") agent-side.
+    content_policy = (await db.execute(
+        _select(Policy).where(
             Policy.type == "print_content_prevention",
             Policy.status == "active",
             Policy.deleted_at.is_(None),
-        )
-    )
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+    content_inspection = content_policy is not None
+    content_mode = ((content_policy.config or {}).get("mode") or "enforce").lower() \
+        if content_inspection else "off"
     return PrinterPolicyResponse(
         enforced=enforced, mode=mode, scope=scope, printers=printers,
-        content_inspection=bool(content_n and content_n > 0),
+        content_inspection=content_inspection, content_mode=content_mode,
         generated_at=datetime.now(timezone.utc),
     )
 

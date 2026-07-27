@@ -115,6 +115,8 @@ def transform_frontend_config_to_backend(
         return _transform_onedrive_cloud_config(config)
     elif policy_type == "network_exfiltration_prevention":
         return _transform_network_config(config)
+    elif policy_type == "print_content_prevention":
+        return _transform_print_content_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -184,6 +186,36 @@ def _transform_network_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], D
         action = "alert"
     actions = {action: {}}
 
+    return conditions, actions
+
+
+def _transform_print_content_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform print content-control config (dashboard form) to backend
+    conditions/actions.
+
+    Frontend format::
+        { "mode": "enforce" | "audit", "levels": ["Confidential", "Restricted"] }
+
+    The rule fires when a print event carries content classified at one of the
+    selected levels. It ALWAYS produces a block action so the agent's real-time
+    evaluate learns the content is sensitive; enforce-vs-audit (cancel the job vs
+    just log "would block") is applied AGENT-SIDE from ``mode``, which the agent
+    reads from the printer-policy endpoint's ``content_mode``. An alert is added
+    for dashboard visibility.
+    """
+    levels = config.get("levels") or ["Confidential", "Restricted"]
+    conditions = {
+        "match": "all",
+        "rules": [
+            {"field": "event_type", "operator": "equals", "value": "print"},
+            {"field": "classification_level", "operator": "in", "value": levels},
+        ],
+    }
+    actions = {
+        "block": {},
+        "alert": {"severity": "high", "message": "Sensitive document blocked from printing"},
+    }
     return conditions, actions
 
 

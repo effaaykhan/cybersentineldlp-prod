@@ -9,6 +9,7 @@ import {
   USBDeviceConfig,
   USBDeviceControlConfig,
   PrinterControlConfig,
+  PrintContentConfig,
   USBTransferConfig,
   FileTransferConfig,
   NetworkPreventionConfig
@@ -22,6 +23,7 @@ import USBDevicePolicyForm from './USBDevicePolicyForm'
 import USBTransferPolicyForm from './USBTransferPolicyForm'
 import USBDeviceControlForm from './USBDeviceControlForm'
 import PrinterControlForm from './PrinterControlForm'
+import PrintContentForm from './PrintContentForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
@@ -73,16 +75,6 @@ const POLICY_TEMPLATES: Partial<Record<PolicyType, ClassificationTemplate>> = {
     },
     actions: { block: {}, alert: { severity: 'critical', message: 'Sensitive data blocked from outbound email' } },
   },
-  print_content_prevention: {
-    conditions: {
-      match: 'all',
-      rules: [
-        { field: 'event_type', operator: 'equals', value: 'print' },
-        { field: 'classification_level', operator: 'in', value: SENSITIVE_LEVELS },
-      ],
-    },
-    actions: { block: {}, alert: { severity: 'high', message: 'Sensitive document blocked from printing' } },
-  },
   // network_exfiltration_prevention is NOT here: it uses the easy config form
   // (NetworkPreventionPolicyForm) like clipboard, not the conditions/actions
   // builder. The server derives conditions/actions from its config.
@@ -95,7 +87,7 @@ const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in PO
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
@@ -179,6 +171,9 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
     case 'printer_control':
       return { mode: 'enforce', scope: 'block_network' } as PrinterControlConfig
 
+    case 'print_content_prevention':
+      return { mode: 'enforce', levels: ['Confidential', 'Restricted'] } as PrintContentConfig
+
     default:
       return {}
   }
@@ -235,7 +230,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -663,6 +658,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'printer_control' && (
                   <PrinterControlForm
                     config={config as PrinterControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'print_content_prevention' && (
+                  <PrintContentForm
+                    config={config as PrintContentConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

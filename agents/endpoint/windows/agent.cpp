@@ -2236,6 +2236,11 @@ if (!shouldBlock) {
                  ClearUsbInstallRestrictions();
                  lastAllowlistSig = sig;
              }
+
+             // Recover any SANCTIONED device that a previous build left disabled
+             // (Code 22). Runs every sync — not tied to connect-event timing — so
+             // a stuck-dark approved device comes back within one cycle regardless.
+             ReconcileSanctionedDevices();
          } catch (...) {
              logger.Error("FetchUsbAllowlist failed");
          }
@@ -2361,10 +2366,15 @@ if (!shouldBlock) {
              logger.Warning("USB DEVICE CONTROL: BLOCKING unsanctioned device"
                             " serial=" + details.serialNumber +
                             " model=" + details.productName);
+             // Block by dismounting/ejecting the volume ONLY. We deliberately no
+             // longer CM_Disable the device node: a node disable PERSISTS across
+             // replugs (leaves the device at Code 22 / CM_PROB_DISABLED) and left
+             // approved devices stuck dark, needing a manual Enable. Ejecting is
+             // transient — the drive vanishes from Explorer, and on each replug the
+             // device re-arrives and is ejected again while it stays unsanctioned.
+             // Sensitive data is still blocked by content control during the brief
+             // mount window, so this prevents data loss without bricking devices.
              EjectUsbDriveLetter(details.driveLetter);
-             if (!serialUp.empty()) DisableUsbStorageDeviceByInstance(serialUp);
-             // (A device with no serial can't be node-targeted here; the eject
-             //  above and the Approach-A install restriction cover that case.)
          } else {
              logger.Info("USB device control: allowed serial=" + details.serialNumber);
              // Re-enable the node in case a prior block (or a previous enforce
@@ -2390,6 +2400,39 @@ if (!shouldBlock) {
          }
          SetupDiDestroyDeviceInfoList(hDevInfo);
          return enabled;
+     }
+
+     // Every sync: re-enable any currently-present USBSTOR node whose serial is
+     // sanctioned AND that has a problem (e.g. disabled). This reliably recovers a
+     // device that an older build disabled while unsanctioned and was later
+     // approved, without depending on connect-event timing. Idempotent.
+     void ReconcileSanctionedDevices() {
+         std::set<std::string> serials;
+         {
+             std::lock_guard<std::mutex> lock(usbAllowlistMutex);
+             serials = sanctionedUsbSerials;
+         }
+         if (serials.empty()) return;
+         HDEVINFO hDevInfo = SetupDiGetClassDevsA(NULL, "USBSTOR", NULL,
+                                                  DIGCF_PRESENT | DIGCF_ALLCLASSES);
+         if (hDevInfo == INVALID_HANDLE_VALUE) return;
+         SP_DEVINFO_DATA d; d.cbSize = sizeof(SP_DEVINFO_DATA);
+         for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &d); i++) {
+             char id[512];
+             if (!SetupDiGetDeviceInstanceIdA(hDevInfo, &d, id, sizeof(id), NULL)) continue;
+             std::string idUp = ToUpperStr(id);
+             bool sanctioned = false;
+             for (const auto& s : serials)
+                 if (idUp.find(s) != std::string::npos) { sanctioned = true; break; }
+             if (!sanctioned) continue;
+             ULONG st = 0, prob = 0;
+             if (CM_Get_DevNode_Status(&st, &prob, d.DevInst, 0) == CR_SUCCESS &&
+                 (st & DN_HAS_PROBLEM)) {
+                 if (CM_Enable_DevNode(d.DevInst, 0) == CR_SUCCESS)
+                     logger.Info("USB device control: re-enabled sanctioned device " + std::string(id));
+             }
+         }
+         SetupDiDestroyDeviceInfoList(hDevInfo);
      }
 
      // Lock + dismount + eject a single drive letter (the blocked device's volume).

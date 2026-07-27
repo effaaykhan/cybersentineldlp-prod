@@ -145,13 +145,22 @@ void PrintMonitor::MonitorLoop() {
 
                                                 bool isSensitive = (classification == "Restricted" ||
                                                                     classification == "Confidential");
-                                                std::string action = isSensitive ? "Block" : "Allow";
+                                                // Printer DEVICE control (additive): block this job if the
+                                                // printer itself is disallowed by a printer_control policy,
+                                                // regardless of content. Leaves the content path below intact.
+                                                bool deviceBlocked = m_printerControl && m_printerControl(printerName);
+                                                std::string action = (isSensitive || deviceBlocked) ? "Block" : "Allow";
 
                                                 if (m_logger) m_logger("INFO", "PRINT_POLICY_DECISION: " +
                                                                        action + " for " + docName);
 
                                                 // Enforce
-                                                if (isSensitive) {
+                                                if (deviceBlocked) {
+                                                    CancelPrintJob(printerName, jobId);
+                                                    if (m_logger) m_logger("WARNING",
+                                                        "PRINT_DEVICE_BLOCKED: " + printerName +
+                                                        " — blocked by printer control policy");
+                                                } else if (isSensitive) {
                                                     CancelPrintJob(printerName, jobId);
                                                     if (m_logger) m_logger("WARNING",
                                                         "PRINT_JOB_BLOCKED: " + docName +

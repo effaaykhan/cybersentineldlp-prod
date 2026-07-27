@@ -1848,6 +1848,14 @@ static ClassificationResult Classify(const std::string& content,
     std::mutex usbAllowlistMutex;
     std::string lastAllowlistSig;                       // skip registry churn when unchanged
 
+    // ── PRINTER DEVICE CONTROL (fast scope: block all / network / local) ──
+    // Synced from GET /agents/{id}/printer-policy. The PrintMonitor asks
+    // ShouldBlockPrinter() per job and cancels matching ones in enforce mode.
+    std::atomic<bool> printerControlEnforced{false};
+    std::string printerControlMode;                     // "enforce" | "audit" | "off"
+    std::string printerControlScope;                    // block_all | block_network | block_local | none
+    std::mutex printerPolicyMutex;
+
     // Screen-capture classification detail. classifyText (run on the content-scan
     // thread) stashes the most recent SENSITIVE screen verdict's score + matched
     // data-type labels here; the screen_capture event callback reads them back so
@@ -2247,6 +2255,79 @@ if (!shouldBlock) {
          } catch (...) {
              logger.Error("FetchUsbAllowlist failed");
          }
+     }
+
+     // ── Printer device control ────────────────────────────────────────────
+     // Fetch the printer-control policy (enforced/mode/scope). Called each sync.
+     void FetchPrinterPolicy() {
+         try {
+             if (!httpClient) return;
+             auto [status, response] = httpClient->Get(
+                 "/agents/" + config.agentId + "/printer-policy");
+             if (status != 200) return;   // keep last-known on error/outage
+             bool enforced = JsonBoolTrue(response, "enforced");
+             std::string mode = config.ExtractJsonValue(response, "mode");
+             std::string scope = config.ExtractJsonValue(response, "scope");
+             {
+                 std::lock_guard<std::mutex> lock(printerPolicyMutex);
+                 printerControlMode = mode;
+                 printerControlScope = scope;
+             }
+             printerControlEnforced.store(enforced);
+             logger.Info("Printer control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " scope=" + (scope.empty() ? "none" : scope));
+         } catch (...) {
+             logger.Error("FetchPrinterPolicy failed");
+         }
+     }
+
+     // True if the printer is a NETWORK printer (shared/IP), false if local
+     // (USB/LPT/directly-attached). Read from the printer's attributes + port.
+     bool IsNetworkPrinter(const std::string& printerName) {
+         HANDLE hPrinter = NULL;
+         if (!OpenPrinterA(const_cast<LPSTR>(printerName.c_str()), &hPrinter, NULL))
+             return false;
+         bool network = false;
+         DWORD needed = 0;
+         GetPrinterA(hPrinter, 2, NULL, 0, &needed);
+         if (needed > 0) {
+             std::vector<BYTE> buf(needed);
+             if (GetPrinterA(hPrinter, 2, buf.data(), needed, &needed)) {
+                 PRINTER_INFO_2A* pi = reinterpret_cast<PRINTER_INFO_2A*>(buf.data());
+                 if (pi->Attributes & PRINTER_ATTRIBUTE_NETWORK) network = true;
+                 std::string port = ToUpperStr(pi->pPortName ? pi->pPortName : "");
+                 if (port.rfind("\\\\", 0) == 0 || port.find("IP_") != std::string::npos ||
+                     port.find("WSD") != std::string::npos || port.find("TCP") != std::string::npos)
+                     network = true;
+             }
+         }
+         ClosePrinter(hPrinter);
+         return network;
+     }
+
+     // Decision consumed by the PrintMonitor callback: should this printer's job
+     // be blocked by the printer_control policy? In audit mode we log "would
+     // block" but return false (don't cancel).
+     bool ShouldBlockPrinter(const std::string& printerName) {
+         if (!printerControlEnforced.load()) return false;
+         std::string mode, scope;
+         {
+             std::lock_guard<std::mutex> lock(printerPolicyMutex);
+             mode = printerControlMode;
+             scope = printerControlScope;
+         }
+         bool matches = false;
+         if (scope == "block_all")          matches = true;
+         else if (scope == "block_network") matches = IsNetworkPrinter(printerName);
+         else if (scope == "block_local")   matches = !IsNetworkPrinter(printerName);
+         if (!matches) return false;
+         if (mode == "audit") {
+             logger.Info("PRINT_DEVICE_AUDIT: would block printer " + printerName +
+                         " (scope " + scope + ")");
+             return false;
+         }
+         return true;   // enforce
      }
 
      // Approach A: program Windows Device Installation Restrictions so the kernel
@@ -3673,6 +3754,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              },
              printClassifier
          );
+         // Printer DEVICE control: cancel jobs on disallowed printers (additive;
+         // content-based blocking inside PrintMonitor is unchanged).
+         printMonitor->SetPrinterControl(
+             [this](const std::string& printerName) { return ShouldBlockPrinter(printerName); });
          printMonitor->Start();
          logger.Info("Print monitoring started");
 
@@ -3859,6 +3944,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              // caches the allowlist for offline connect decisions and programs
              // the Device Installation Restrictions.
              FetchUsbAllowlist();
+             // Refresh the printer device-control policy on the same cadence.
+             FetchPrinterPolicy();
          } catch (const std::exception& e) {
              logger.Error(std::string("Failed to sync policies: ") + e.what());
          } catch (...) {

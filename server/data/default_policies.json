@@ -478,5 +478,254 @@
         "severity": "medium"
       }
     }
+  },
+  {
+    "name": "Network Exfiltration — Block Sensitive Data (all methods)",
+    "description": "The core Network Prevention rule. Blocks Confidential/Restricted data from leaving the endpoint over ANY network channel — python http.server, ftp/sftp/scp/tftp, http(s) POST uploads, curl/wget, netcat, SMB copy, WebDAV, rsync, DNS tunnelling, cloud CLIs. It is deliberately method-AGNOSTIC: it matches on the fact that classified data is going out, not on how, so a novel tool is covered the moment the agent routes the transfer through the real-time evaluate endpoint. Works on every file type because the file is extracted+classified server-side (pdf/docx/xlsx/archives/OCR) exactly like a USB copy.",
+    "enabled": true,
+    "priority": 90,
+    "type": "network_exfiltration_prevention",
+    "severity": "critical",
+    "config": {
+      "description": "Block sensitive data leaving the endpoint over the network, regardless of protocol or tool",
+      "monitoredMethods": ["ftp", "sftp", "scp", "tftp", "http_post", "http_server", "python_http_server", "curl", "wget", "netcat", "powershell_upload", "smb_copy", "webdav", "rsync", "cloud_cli", "dns_tunnel"],
+      "monitoredPorts": [20, 21, 22, 53, 69, 80, 443, 445, 873, 989, 990, 8000, 8080, 8443],
+      "direction": "outbound",
+      "dataTypes": ["CREDIT_CARD", "SSN", "AADHAAR", "PAN_CARD", "PASSPORT", "EMAIL", "PHONE", "API_KEY", "PRIVATE_KEY", "AWS_KEY", "DATABASE_CONNECTION", "IFSC", "UPI_ID", "INDIAN_BANK_ACCOUNT"],
+      "classificationLevels": ["Confidential", "Restricted"],
+      "minMatchCount": 1,
+      "inspectContent": true,
+      "action": "block"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "network_exfil",
+            "network_transfer",
+            "network_upload"
+          ]
+        },
+        {
+          "field": "classification_level",
+          "operator": "in",
+          "value": [
+            "Confidential",
+            "Restricted"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "critical",
+        "message": "Sensitive data exfiltration over the network blocked"
+      }
+    }
+  },
+  {
+    "name": "Network Exfiltration — Block Uninspectable / Oversized Content",
+    "description": "Closes the inspection-bypass over the network: blocks files that SHOULD have been readable but weren't (encrypted or opaque archives, corrupt/renamed office files, legacy .doc/.xls/.ppt, images we couldn't OCR) and files too large to inspect (over the agent cap, or whose text outran the scan budget). Without this, zipping-with-a-password or padding a secret past the cap makes a file skip inspection and sail out. 'We couldn't inspect it' must never mean 'it's clean'. Covers all file types by construction. TRADE-OFF: also blocks genuinely-uninspectable big files (videos, disk images) going out — switch this action to alert if that matters more than the bypass.",
+    "enabled": true,
+    "priority": 88,
+    "type": "network_exfiltration_prevention",
+    "severity": "high",
+    "config": {
+      "description": "Refuse network transfers of content that could not be inspected",
+      "monitoredMethods": ["ftp", "sftp", "scp", "tftp", "http_post", "http_server", "python_http_server", "curl", "wget", "netcat", "powershell_upload", "smb_copy", "webdav", "rsync", "cloud_cli", "dns_tunnel"],
+      "monitoredPorts": [20, 21, 22, 53, 69, 80, 443, 445, 873, 989, 990, 8000, 8080, 8443],
+      "direction": "outbound",
+      "blockOn": ["unreadable", "too_large"],
+      "inspectContent": true,
+      "action": "block"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "network_exfil",
+            "network_transfer",
+            "network_upload"
+          ]
+        },
+        {
+          "field": "extraction_status",
+          "operator": "in",
+          "value": [
+            "unreadable",
+            "too_large"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "high",
+        "message": "Uninspectable file blocked from network transfer"
+      }
+    }
+  },
+  {
+    "name": "Network Exfiltration — Block High-Risk Transfer Tools",
+    "description": "Hard-denies the exfiltration tools themselves, independent of content. Blocks any transfer the agent attributes to a high-risk method (ftp/sftp/scp/tftp, python http.server, netcat, curl/wget, powershell upload, DNS tunnel, WebDAV, rsync, cloud CLI) — even for Public/Internal data — because on a controlled endpoint these tools have no legitimate use for moving files off the box. This is a deliberate, aggressive posture: it WILL break a legitimate admin scp/curl, so scope it to specific agents or relax to alert if that matters. Sensitive data over these tools is also caught by 'Block Sensitive Data (all methods)'; this rule additionally stops the tool regardless of classification.",
+    "enabled": true,
+    "priority": 85,
+    "type": "network_exfiltration_prevention",
+    "severity": "high",
+    "config": {
+      "description": "Block data transfers initiated by high-risk exfiltration tools",
+      "monitoredMethods": ["ftp", "sftp", "scp", "tftp", "http_server", "python_http_server", "netcat", "curl", "wget", "powershell_upload", "dns_tunnel", "webdav", "rsync", "cloud_cli"],
+      "monitoredPorts": [20, 21, 22, 53, 69, 873],
+      "direction": "outbound",
+      "dataTypes": ["CREDIT_CARD", "SSN", "AADHAAR", "PAN_CARD", "PASSPORT", "EMAIL", "PHONE", "API_KEY", "PRIVATE_KEY", "AWS_KEY", "DATABASE_CONNECTION", "IFSC", "UPI_ID", "INDIAN_BANK_ACCOUNT"],
+      "inspectContent": true,
+      "action": "block"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "network_exfil",
+            "network_transfer",
+            "network_upload"
+          ]
+        },
+        {
+          "field": "transfer_method",
+          "operator": "in",
+          "value": [
+            "ftp",
+            "sftp",
+            "scp",
+            "tftp",
+            "http_server",
+            "python_http_server",
+            "netcat",
+            "curl",
+            "wget",
+            "powershell_upload",
+            "dns_tunnel",
+            "webdav",
+            "rsync",
+            "cloud_cli"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "block": {}
+    }
+  },
+  {
+    "name": "Network Exfiltration — Alert on High-Risk Transfer Tools",
+    "description": "Companion visibility rule to 'Block High-Risk Transfer Tools'. Raises a high-severity alert whenever the agent attributes a transfer to a high-risk method (ftp/sftp/scp/tftp, python http.server, netcat, curl/wget, powershell upload, DNS tunnel, WebDAV, rsync, cloud CLI). Kept SEPARATE from the block rule so the two work independently: disable the block and you still get the alert; disable this and the block still enforces silently. Both ship enabled, so a high-risk tool transfer is both blocked and alerted.",
+    "enabled": true,
+    "priority": 45,
+    "type": "network_exfiltration_prevention",
+    "severity": "high",
+    "config": {
+      "description": "Alert on data transfers initiated by high-risk exfiltration tools",
+      "monitoredMethods": ["ftp", "sftp", "scp", "tftp", "http_server", "python_http_server", "netcat", "curl", "wget", "powershell_upload", "dns_tunnel", "webdav", "rsync", "cloud_cli"],
+      "monitoredPorts": [20, 21, 22, 53, 69, 873],
+      "direction": "outbound",
+      "dataTypes": ["CREDIT_CARD", "SSN", "AADHAAR", "PAN_CARD", "PASSPORT", "EMAIL", "PHONE", "API_KEY", "PRIVATE_KEY", "AWS_KEY", "DATABASE_CONNECTION", "IFSC", "UPI_ID", "INDIAN_BANK_ACCOUNT"],
+      "inspectContent": true,
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "network_exfil",
+            "network_transfer",
+            "network_upload"
+          ]
+        },
+        {
+          "field": "transfer_method",
+          "operator": "in",
+          "value": [
+            "ftp",
+            "sftp",
+            "scp",
+            "tftp",
+            "http_server",
+            "python_http_server",
+            "netcat",
+            "curl",
+            "wget",
+            "powershell_upload",
+            "dns_tunnel",
+            "webdav",
+            "rsync",
+            "cloud_cli"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "high",
+        "message": "Data transfer via high-risk exfiltration tool detected"
+      }
+    }
+  },
+  {
+    "name": "Network Exfiltration — Alert on Internal Data",
+    "description": "Visibility (does not block) when Internal-classified data leaves over the network. Mirrors the Cloud/Email 'Alert Internal' rules so the same graduated posture — block Confidential/Restricted, alert Internal, ignore Public — applies to network egress too.",
+    "enabled": true,
+    "priority": 30,
+    "type": "network_exfiltration_prevention",
+    "severity": "medium",
+    "config": {
+      "description": "Visibility over Internal data leaving via the network",
+      "monitoredMethods": ["ftp", "sftp", "scp", "tftp", "http_post", "http_server", "python_http_server", "curl", "wget", "netcat", "powershell_upload", "smb_copy", "webdav", "rsync", "cloud_cli", "dns_tunnel"],
+      "monitoredPorts": [20, 21, 22, 53, 69, 80, 443, 445, 873, 989, 990, 8000, 8080, 8443],
+      "direction": "outbound",
+      "dataTypes": ["CREDIT_CARD", "SSN", "AADHAAR", "PAN_CARD", "PASSPORT", "EMAIL", "PHONE", "API_KEY", "PRIVATE_KEY", "AWS_KEY", "DATABASE_CONNECTION", "IFSC", "UPI_ID", "INDIAN_BANK_ACCOUNT"],
+      "classificationLevels": ["Internal"],
+      "minMatchCount": 1,
+      "inspectContent": true,
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "network_exfil",
+            "network_transfer",
+            "network_upload"
+          ]
+        },
+        {
+          "field": "classification_level",
+          "operator": "equals",
+          "value": "Internal"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "medium",
+        "message": "Internal data sent over the network"
+      }
+    }
   }
 ]

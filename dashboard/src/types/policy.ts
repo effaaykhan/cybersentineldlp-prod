@@ -15,9 +15,11 @@ export type PolicyType =
   | 'classification_aware_policy'
   | 'cloud_upload_prevention'
   | 'email_send_prevention'
+  | 'network_exfiltration_prevention'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log' | 'block'
+export type NetworkPreventionAction = 'block' | 'alert' | 'log'
 export type FileSystemAction = 'alert' | 'log' | 'block' | 'quarantine'
 export type FileTransferAction = 'block' | 'quarantine' | 'alert'
 export type USBDeviceAction = 'alert' | 'log' | 'block'
@@ -117,6 +119,19 @@ export interface OneDriveCloudConfig {
   action: 'log'
 }
 
+// Network prevention config — mirrors the clipboard form (detection
+// categories + custom regex + action) plus the network channels/ports to hook.
+// The agent consumes the whole object; the server derives conditions/actions
+// from it via transform_frontend_config_to_backend('network_exfiltration_prevention').
+export interface NetworkPreventionConfig {
+  dataTypes: string[]                 // detection categories: SSN, AADHAAR, PAN_CARD, ...
+  customPatterns: Array<{ regex: string, description?: string }>
+  monitoredMethods: string[]          // ftp, sftp, scp, python_http_server, curl, ...
+  monitoredPorts: number[]            // 21, 22, 8000, ...
+  direction: 'outbound' | 'inbound'
+  action: NetworkPreventionAction
+}
+
 // Classification-aware policy types
 export interface PolicyCondition {
   field: string
@@ -154,6 +169,7 @@ export type PolicyConfig =
   | GoogleDriveCloudConfig
   | OneDriveCloudConfig
   | ClassificationPolicyConfig
+  | NetworkPreventionConfig
 
 export interface Policy {
   id: string

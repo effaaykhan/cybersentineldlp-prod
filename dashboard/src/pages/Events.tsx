@@ -461,13 +461,22 @@ function EventDetailModal({
           )}
 
           {/* Classification Level and Confidence Score */}
-          {(event.classification_level || event.classification_score) && (
+          {(event.classification_level || event.classification_score || event.document_type_label) && (
             <div className="bg-cs-indigo-faint rounded-cs-card p-6 border border-[color-mix(in_srgb,var(--cs-indigo)_20%,var(--cs-panel))]">
               <div className="flex items-center gap-2 mb-4">
                 <Shield className="w-5 h-5 text-cs-indigo" />
                 <label className="text-sm text-cs-ink-2 uppercase font-semibold">Classification Result</label>
               </div>
               <div className="grid grid-cols-2 gap-4">
+                {event.document_type_label && (
+                  <div>
+                    <label className="text-xs text-cs-ink-2 mb-1 block">Document Type</label>
+                    <span className="inline-flex items-center gap-2 px-4 py-2 rounded-cs-sm border text-base font-bold bg-[color-mix(in_srgb,var(--cs-indigo)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-indigo)_30%,var(--cs-panel))] text-cs-indigo">
+                      <FileText className="w-4 h-4" />
+                      {event.document_type_label}
+                    </span>
+                  </div>
+                )}
                 {event.classification_level && (
                   <div>
                     <label className="text-xs text-cs-ink-2 mb-1 block">Classification Level</label>
@@ -1128,6 +1137,12 @@ export default function Events() {
                       {event.classification_labels && event.classification_labels.length > 0 && (
                         <span className="badge bg-cs-indigo-faint text-cs-indigo ring-[color-mix(in_srgb,var(--cs-indigo)_25%,var(--cs-panel))]">
                           {event.classification_labels[0]}
+                        </span>
+                      )}
+                      {event.document_type_label && (
+                        <span className="badge inline-flex items-center gap-1 bg-cs-indigo-faint text-cs-indigo ring-[color-mix(in_srgb,var(--cs-indigo)_25%,var(--cs-panel))]">
+                          <FileText className="h-3 w-3" />
+                          {event.document_type_label}
                         </span>
                       )}
                     </div>

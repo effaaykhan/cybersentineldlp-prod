@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -61,6 +61,12 @@ const policyTypes: Array<{
     label: 'Email Send Prevention',
     description: 'Block outbound email carrying Confidential/Restricted attachments or body text; alert on Internal',
     icon: Mail
+  },
+  {
+    type: 'network_exfiltration_prevention',
+    label: 'Network Prevention',
+    description: 'Block sensitive data leaving over any network channel — FTP/SCP/SFTP, python http.server, curl/wget, netcat, DNS tunnelling, cloud CLIs',
+    icon: Network
   }
 ]
 

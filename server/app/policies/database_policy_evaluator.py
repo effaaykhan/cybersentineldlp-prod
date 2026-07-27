@@ -212,6 +212,23 @@ class DatabasePolicyEvaluator:
             "source": ["source", "event.source"],
             "connection_id": ["connection_id", "metadata.connection_id"],
             "folder_id": ["folder_id", "metadata.folder_id"],
+            # Network exfiltration context (network_exfiltration_prevention).
+            # Sent by the endpoint agent when it intercepts an outbound transfer.
+            # These let an operator write method/destination-scoped rules such as
+            #   transfer_method in [ftp, scp, python_http_server] -> alert
+            #   destination_ip starts_with 10.  (allow internal), etc.
+            # extraction_status / classification_level are already mapped above,
+            # so a content-gated rule ("block Confidential over the network")
+            # needs no new field — it matches on those regardless of method.
+            "protocol": ["network.protocol", "protocol"],
+            "transfer_method": ["network.transfer_method", "transfer_method", "exfil_method"],
+            "process_name": ["process.name", "process_name"],
+            "process_path": ["process.path", "process_path"],
+            "destination_host": ["network.destination_host", "destination_host", "remote_host"],
+            "destination_ip": ["network.destination_ip", "destination_ip", "remote_ip", "network.remote_ip"],
+            "destination_port": ["network.destination_port", "destination_port", "remote_port"],
+            "direction": ["network.direction", "direction"],
+            "bytes_transferred": ["network.bytes_transferred", "bytes_transferred"],
             # Classification fields
             "classification_level": ["classification_metadata.classification_level", "classification_level"],
             "confidence_score": ["classification_metadata.confidence_score", "confidence_score"],

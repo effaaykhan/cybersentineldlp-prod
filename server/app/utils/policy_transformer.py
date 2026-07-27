@@ -42,6 +42,10 @@ MONITORING_POLICY_TYPES = {
     "usb_device_monitoring",
     "usb_file_transfer_monitoring",
     "google_drive_local_monitoring",
+    # Network prevention is agent-enforced too (the endpoint hooks the exfil
+    # channels and reads config.monitoredMethods / dataTypes / action), so the
+    # dashboard's single action selector is authoritative for it as well.
+    "network_exfiltration_prevention",
 }
 
 
@@ -109,12 +113,78 @@ def transform_frontend_config_to_backend(
         return _transform_google_drive_cloud_config(config)
     elif policy_type == "onedrive_cloud_monitoring":
         return _transform_onedrive_cloud_config(config)
+    elif policy_type == "network_exfiltration_prevention":
+        return _transform_network_config(config)
     else:
         # Unknown type, return empty defaults
         return (
             {"match": "all", "rules": []},
             {"log": {}},
         )
+
+
+def _transform_network_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform network prevention config (dashboard form) to backend conditions/actions.
+
+    Frontend format (mirrors the clipboard form + network specifics)::
+
+        {
+            "dataTypes": ["SSN", "AADHAAR", "PAN_CARD", ...],   # detection categories
+            "customPatterns": [{"regex": "...", "description": "..."}],
+            "monitoredMethods": ["ftp", "scp", "python_http_server", ...],
+            "monitoredPorts": [21, 22, 8000, ...],
+            "direction": "outbound",
+            "action": "block" | "alert" | "log"
+        }
+
+    The AGENT consumes the full config (which channels to hook, which data
+    categories to look for, what to do). Server-side we build matchable rules
+    for the real-time evaluate path:
+
+      * always gate on the network event types;
+      * if the operator scoped to specific methods, gate on transfer_method so
+        the rule only fires for those tools/protocols;
+      * if the operator selected any detection categories, gate on
+        classification_level in [Confidential, Restricted] — i.e. "act when the
+        server's content classification found something sensitive." (Per-category
+        precision is the agent's job via config.dataTypes; the server can't
+        regex a binary file, it classifies it.) With NO categories selected the
+        rule is method-only, so "block all scp/ftp regardless of content" is
+        expressible too.
+    """
+    data_types = config.get("dataTypes") or []
+    custom_patterns = config.get("customPatterns") or []
+    methods = config.get("monitoredMethods") or []
+    action = config.get("action", "alert")
+
+    has_detection = bool(data_types) or bool(custom_patterns)
+
+    rules: List[Dict[str, Any]] = [
+        {
+            "field": "event_type",
+            "operator": "in",
+            "value": ["network_exfil", "network_transfer", "network_upload"],
+        }
+    ]
+    if methods:
+        rules.append({"field": "transfer_method", "operator": "in", "value": methods})
+    if has_detection:
+        rules.append(
+            {
+                "field": "classification_level",
+                "operator": "in",
+                "value": ["Confidential", "Restricted"],
+            }
+        )
+
+    conditions = {"match": "all", "rules": rules}
+
+    if action not in {"block", "alert", "log", "quarantine"}:
+        action = "alert"
+    actions = {action: {}}
+
+    return conditions, actions
 
 
 def _transform_clipboard_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:

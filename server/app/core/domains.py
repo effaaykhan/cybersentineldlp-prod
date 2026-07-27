@@ -35,6 +35,11 @@ POLICY_TYPE_DOMAIN = {
     "usb": PolicyDomain.THREAT,
     "network_exfil": PolicyDomain.THREAT,
     "network_exfiltration": PolicyDomain.THREAT,
+    # Network Prevention — block/alert on data leaving the endpoint over any
+    # network channel (python http.server, ftp/sftp/scp, http(s) POST, curl/
+    # wget, netcat, DNS tunnelling, cloud CLIs, …). Enforced agent-side via the
+    # real-time evaluate endpoint, exactly like USB file transfer.
+    "network_exfiltration_prevention": PolicyDomain.THREAT,
     "screen_capture": PolicyDomain.THREAT,
     "screen_capture_monitoring": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,
@@ -64,6 +69,12 @@ POLICY_TYPE_DOMAIN = {
 EVENT_TYPE_DOMAIN = {
     "usb": PolicyDomain.THREAT,
     "network_exfil": PolicyDomain.THREAT,
+    # Outbound data movement over the network inspected by the endpoint agent
+    # (any protocol/tool). All carry event_type "network_exfil" today; the
+    # aliases keep older/looser agent builds domained rather than GENERAL.
+    "network_transfer": PolicyDomain.THREAT,
+    "network_upload": PolicyDomain.THREAT,
+    "network": PolicyDomain.THREAT,
     # Ransomware early-warning indicators from the endpoint agent
     # (canary_tripped / mass_file_modification). Unknown types fall back to
     # GENERAL, so an un-upgraded server still ingests these — just undomained.

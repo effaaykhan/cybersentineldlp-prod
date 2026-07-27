@@ -121,6 +121,11 @@ class EventCreate(BaseModel):
     classification_labels: Optional[List[str]] = Field(None, description="List of sensitive data types detected")
     classification_category: Optional[str] = Field(None, description="Classification category (Public/Internal/Confidential/Restricted)")
     classification_rules_matched: Optional[List[str]] = Field(None, description="Names of classification rules that matched")
+    # Document/image TYPE (passport, patent, source_code, …). Optional: the agent
+    # MAY supply it (e.g. from the evaluate response); if it doesn't, the server
+    # classifies it from the captured content during background processing.
+    document_type: Optional[str] = Field(None, description="Detected document/image type id, e.g. 'passport'")
+    document_type_label: Optional[str] = Field(None, description="Human label for document_type, e.g. 'Passport'")
     detected_content: Optional[str] = Field(None, description="Summary of detected sensitive content")
     action: Optional[str] = Field(None, description="Action taken (logged, blocked, alerted, etc.)")
     destination: Optional[str] = Field(None, description="Destination path for transfers")
@@ -180,6 +185,21 @@ class EventCreate(BaseModel):
         None,
         description="True when content_changes was capped to avoid oversized payloads",
     )
+    # Network exfiltration context captured by the endpoint agent on
+    # network_exfil events (data leaving over ftp/scp/http/python-server/…).
+    # All Optional so a partial payload never 422s and drops the event; blank
+    # fields are pruned before persisting. Stored flat (DLPEvent has
+    # extra="allow", so they reach the event-detail UI) and mirrored under a
+    # "network" object for the SIEM formatter / title builder.
+    protocol: Optional[str] = Field(None, description="Transport/app protocol (ftp, scp, https, dns, …)")
+    transfer_method: Optional[str] = Field(None, description="Canonical exfil method (scp, python_http_server, curl, …)")
+    process_name: Optional[str] = Field(None, description="Process that initiated the transfer")
+    process_path: Optional[str] = Field(None, description="Full path of the initiating process")
+    destination_host: Optional[str] = Field(None, description="Remote hostname / domain")
+    destination_ip: Optional[str] = Field(None, description="Remote IP address")
+    destination_port: Optional[str] = Field(None, description="Remote port (string — agent may send '' when unknown)")
+    direction: Optional[str] = Field(None, description="Traffic direction (outbound/inbound)")
+    bytes_transferred: Optional[str] = Field(None, description="Bytes moved (decimal string)")
 
 
 class DLPEvent(BaseModel):
@@ -491,6 +511,11 @@ async def create_event(
         event_doc["event_subtype"] = event.event_subtype
     if event.description:
         event_doc["description"] = event.description
+    # Document/image type: keep an agent-supplied value now; otherwise the
+    # background processor fills it in by classifying the captured content.
+    if event.document_type:
+        event_doc["document_type"] = event.document_type
+        event_doc["document_type_label"] = event.document_type_label or event.document_type
     # Preserve agent-provided content diff fields so the event detail
     # view can render the per-line change list. Empty diffs are still
     # written so the UI can distinguish "modified, no textual change"
@@ -528,6 +553,26 @@ async def create_event(
     if usb_device_fields:
         event_doc.update(usb_device_fields)
         event_doc["usb"] = {**event_doc.get("usb", {}), **usb_device_fields}
+
+    # Network exfiltration context (network_exfil events). Same pattern as the
+    # USB block above: persist the how/where the agent captured so the analyst
+    # can see "Confidential file → scp → 203.0.113.5:22 by scp.exe" on the event
+    # detail view. Blank/absent fields dropped so we never store placeholders.
+    network_event_fields = {
+        "protocol": event.protocol,
+        "transfer_method": event.transfer_method,
+        "process_name": event.process_name,
+        "process_path": event.process_path,
+        "destination_host": event.destination_host,
+        "destination_ip": event.destination_ip,
+        "destination_port": event.destination_port,
+        "direction": event.direction,
+        "bytes_transferred": event.bytes_transferred,
+    }
+    network_event_fields = {k: v for k, v in network_event_fields.items() if v not in (None, "")}
+    if network_event_fields:
+        event_doc.update(network_event_fields)
+        event_doc["network"] = {**event_doc.get("network", {}), **network_event_fields}
 
     # Hydrate agent-asserted matched policies. The agent ran the policy
     # bundle against the content and is authoritative on which monitoring
@@ -622,6 +667,13 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
     db = get_mongodb()
     events_collection = db["dlp_events"]
 
+    # Snapshot the fields the document-type step needs BEFORE process_event runs
+    # — the processor mutates/consumes payload (content in particular), so these
+    # must be read up-front.
+    _doctype_agent = payload.get("document_type")
+    _doctype_agent_label = payload.get("document_type_label")
+    _doctype_content = payload.get("content") or ""
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             processor = get_event_processor()
@@ -693,6 +745,33 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                     update_fields["matched_policies"] = server_matches
             if processed.get("metadata"):
                 update_fields["metadata"] = processed["metadata"]
+
+            # Document/image TYPE for the log (passport, patent, source_code, …).
+            # ADDITIVE — annotates the event only; never changes the action,
+            # severity, or classification level. Prefer a type the agent already
+            # supplied; otherwise classify the captured content server-side so a
+            # transfer of e.g. a passport is labelled in the log with no agent
+            # change. Guarded: a failure here never fails event processing.
+            try:
+                doc_type = _doctype_agent
+                doc_label = _doctype_agent_label
+                doc_types = []
+                if not doc_type:
+                    text = _doctype_content
+                    if isinstance(text, str) and len(text.strip()) >= 20:
+                        from app.services.document_classifier import classify_document
+                        doc_types = classify_document(text)
+                        if doc_types:
+                            doc_type = doc_types[0]["type"]
+                            doc_label = doc_types[0]["label"]
+                if doc_type:
+                    update_fields["document_type"] = doc_type
+                    update_fields["document_type_label"] = doc_label or doc_type
+                    if doc_types:
+                        update_fields["document_types"] = doc_types
+            except Exception as _dte:
+                logger.warning("document-type detection skipped",
+                               event_id=event_id, error=str(_dte))
 
             await events_collection.update_one(
                 {"id": event_id},
@@ -905,6 +984,10 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
         payload["clipboard_content"] = event.content
     elif event.description and event.event_type.lower() == "clipboard":
         payload["clipboard_content"] = event.description
+
+    if event.document_type:
+        payload["document_type"] = event.document_type
+        payload["document_type_label"] = event.document_type_label or event.document_type
 
     if event.event_subtype:
         payload["event"]["subtype"] = event.event_subtype

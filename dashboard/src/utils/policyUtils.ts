@@ -13,7 +13,7 @@ import {
   USBTransferConfig,
   FileTransferConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, UploadCloud, Mail, Network } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -34,6 +34,12 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Cloud
     case 'google_drive_cloud_monitoring':
       return Cloud
+    case 'cloud_upload_prevention':
+      return UploadCloud
+    case 'email_send_prevention':
+      return Mail
+    case 'network_exfiltration_prevention':
+      return Network
     default:
       return FileText
   }
@@ -58,6 +64,12 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Google Drive (Local)'
     case 'google_drive_cloud_monitoring':
       return 'Google Drive (Cloud)'
+    case 'cloud_upload_prevention':
+      return 'Cloud Upload Prevention'
+    case 'email_send_prevention':
+      return 'Email Send Prevention'
+    case 'network_exfiltration_prevention':
+      return 'Network Prevention'
     default:
       return 'Unknown'
   }
@@ -170,6 +182,19 @@ export const formatPolicyConfig = (policy: Policy): string => {
           ? `${c.monitoredPaths.length} path(s)`
           : 'All paths'
         return `Paths: ${paths} | Action: ${effAction}`
+      }
+
+      case 'network_exfiltration_prevention': {
+        const c = config as any
+        const methods = (c.monitoredMethods || []).length > 0
+          ? `${c.monitoredMethods.length} channel(s)`
+          : 'All channels'
+        const dts = (c.dataTypes || []).length
+        const custom = (c.customPatterns || []).length
+        const detect = dts || custom
+          ? `${dts} categor${dts === 1 ? 'y' : 'ies'}${custom ? ` + ${custom} custom` : ''}`
+          : 'Any file'
+        return `Channels: ${methods} | Detect: ${detect} | Action: ${effAction}`
       }
 
       case 'google_drive_local_monitoring': {
@@ -309,6 +334,30 @@ export const validatePolicy = (policy: Partial<Policy>): { valid: boolean; error
         if (c.action === 'quarantine' && !c.quarantinePath?.trim()) {
           errors.push('Quarantine path is required when action is quarantine')
         }
+        break
+      }
+
+      case 'network_exfiltration_prevention': {
+        const c = policy.config as {
+          monitoredMethods?: string[]
+          dataTypes?: string[]
+          customPatterns?: Array<{ regex: string; description?: string }>
+        }
+        // A policy with neither a channel nor a detection pattern would act on
+        // every file over every network channel — almost never intended.
+        if (
+          (c.monitoredMethods?.length ?? 0) === 0 &&
+          (c.dataTypes?.length ?? 0) === 0 &&
+          (c.customPatterns?.length ?? 0) === 0
+        ) {
+          errors.push('Select at least one channel or one detection pattern')
+        }
+        ;(c.customPatterns || []).forEach((custom, index) => {
+          const validation = validateRegex(custom.regex)
+          if (!validation.valid) {
+            errors.push(`Custom pattern ${index + 1}: ${validation.error}`)
+          }
+        })
         break
       }
     }
@@ -541,6 +590,15 @@ const getDefaultConfig = (type: PolicyType): any => {
       return { events: { connect: false, disconnect: false, fileTransfer: false }, action: 'alert' }
     case 'usb_file_transfer_monitoring':
       return { monitoredPaths: [], action: 'block' }
+    case 'network_exfiltration_prevention':
+      return {
+        dataTypes: [],
+        customPatterns: [],
+        monitoredMethods: [],
+        monitoredPorts: [21, 22, 69, 80, 443, 445, 8000, 8080],
+        direction: 'outbound',
+        action: 'block',
+      }
     case 'google_drive_local_monitoring':
       return {
         basePath: 'G:\\My Drive\\',

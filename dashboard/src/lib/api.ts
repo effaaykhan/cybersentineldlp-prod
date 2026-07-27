@@ -178,6 +178,9 @@ export type Event = {
   classification_metadata?: Record<string, any>
   classification_category?: string
   classification_rules_matched?: string[]
+  document_type?: string
+  document_type_label?: string
+  document_types?: Array<{ type: string; label: string; category?: string; confidence?: number }>
   detected_content?: string
   file_path?: string
   file_name?: string

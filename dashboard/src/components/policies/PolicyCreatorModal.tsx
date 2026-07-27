@@ -4,11 +4,12 @@ import { useState, useEffect } from 'react'
 import { 
   Policy, 
   PolicyType, 
-  ClipboardConfig, 
-  FileSystemConfig, 
-  USBDeviceConfig, 
+  ClipboardConfig,
+  FileSystemConfig,
+  USBDeviceConfig,
   USBTransferConfig,
-  FileTransferConfig
+  FileTransferConfig,
+  NetworkPreventionConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -17,6 +18,7 @@ import FileSystemPolicyForm from './FileSystemPolicyForm'
 import FileTransferPolicyForm from './FileTransferPolicyForm'
 import USBDevicePolicyForm from './USBDevicePolicyForm'
 import USBTransferPolicyForm from './USBTransferPolicyForm'
+import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -67,6 +69,9 @@ const POLICY_TEMPLATES: Partial<Record<PolicyType, ClassificationTemplate>> = {
     },
     actions: { block: {}, alert: { severity: 'critical', message: 'Sensitive data blocked from outbound email' } },
   },
+  // network_exfiltration_prevention is NOT here: it uses the easy config form
+  // (NetworkPreventionPolicyForm) like clipboard, not the conditions/actions
+  // builder. The server derives conditions/actions from its config.
 }
 
 const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in POLICY_TEMPLATES
@@ -76,13 +81,24 @@ const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in PO
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
     case 'email_send_prevention':
       // These use conditions/actions, not a typed config object.
       return {}
+
+    case 'network_exfiltration_prevention':
+      // Easy config form (like clipboard). Server derives conditions/actions.
+      return {
+        dataTypes: [],
+        customPatterns: [],
+        monitoredMethods: [],
+        monitoredPorts: [21, 22, 69, 80, 443, 445, 8000, 8080],
+        direction: 'outbound',
+        action: 'block',
+      } as NetworkPreventionConfig
 
     case 'clipboard_monitoring':
       return {
@@ -199,7 +215,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -616,7 +632,14 @@ export default function PolicyCreatorModal({
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}
-                
+
+                {policyType === 'network_exfiltration_prevention' && (
+                  <NetworkPreventionPolicyForm
+                    config={config as NetworkPreventionConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
                 {usesClassificationBuilder(policyType) && (
                   <ClassificationPolicyForm
                     policy={classificationPolicy}

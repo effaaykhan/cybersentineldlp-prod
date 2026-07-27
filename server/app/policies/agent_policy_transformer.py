@@ -20,6 +20,11 @@ POLICY_PLATFORM_SUPPORT: Dict[str, List[str]] = {
     "usb_device_monitoring": ["windows"],
     "usb_file_transfer_monitoring": ["windows"],
     "google_drive_local_monitoring": ["windows"],
+    # Network exfiltration prevention — the endpoint agent hooks outbound
+    # transfers (ftp/scp/http/python-server/…) and calls the real-time evaluate
+    # endpoint before allowing them. Windows-only, matching the platform scope
+    # of the shipping C++ agent.
+    "network_exfiltration_prevention": ["windows"],
 }
 
 POLICY_CAPABILITY_MAP: Dict[str, str] = {
@@ -29,6 +34,7 @@ POLICY_CAPABILITY_MAP: Dict[str, str] = {
     "usb_device_monitoring": "usb_monitoring",
     "usb_file_transfer_monitoring": "usb_monitoring",
     "google_drive_local_monitoring": "file_monitoring",
+    "network_exfiltration_prevention": "network_monitoring",
 }
 
 

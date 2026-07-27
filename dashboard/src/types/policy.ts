@@ -10,6 +10,7 @@ export type PolicyType =
   | 'usb_device_monitoring'
   | 'usb_file_transfer_monitoring'
   | 'usb_device_control'
+  | 'printer_control'
   | 'google_drive_local_monitoring'
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
@@ -81,6 +82,13 @@ export interface USBDeviceConfig {
 export interface USBDeviceControlConfig {
   // enforce = block unsanctioned devices; audit = allow but log what would block
   mode: 'enforce' | 'audit'
+}
+
+export interface PrinterControlConfig {
+  mode: 'enforce' | 'audit'
+  // block_all = block every print job; block_network = block network printers
+  // only; block_local = block local (directly-attached) printers only
+  scope: 'block_all' | 'block_network' | 'block_local'
 }
 
 export interface USBTransferConfig {
@@ -171,6 +179,7 @@ export type PolicyConfig =
   | FileTransferConfig
   | USBDeviceConfig
   | USBDeviceControlConfig
+  | PrinterControlConfig
   | USBTransferConfig
   | GoogleDriveLocalConfig
   | GoogleDriveCloudConfig

@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -49,6 +49,12 @@ const policyTypes: Array<{
     label: 'USB Device Control',
     description: 'Block unsanctioned USB storage devices (strict allowlist by serial number)',
     icon: Usb
+  },
+  {
+    type: 'printer_control',
+    label: 'Printer Control',
+    description: 'Manage how local and network printers operate — block all, network, or local printing',
+    icon: Printer
   },
   {
     type: 'classification_aware_policy',

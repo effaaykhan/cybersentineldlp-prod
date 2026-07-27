@@ -248,3 +248,7 @@ samples/ml-training/*.csv
 
 # ...but DO track the training-set helper scripts (root *.sh rule would hide this one)
 !samples/ml-training/make-training-set.sh
+
+# Local artifacts — not source, keep out of the repo
+cybersentinel-cloud-guard.zip
+update-summary.md

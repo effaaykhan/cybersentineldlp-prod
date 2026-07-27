@@ -45,6 +45,12 @@ const policyTypes: Array<{
     icon: HardDrive
   },
   {
+    type: 'usb_device_control',
+    label: 'USB Device Control',
+    description: 'Block unsanctioned USB storage devices (strict allowlist by serial number)',
+    icon: Usb
+  },
+  {
     type: 'classification_aware_policy',
     label: 'Classification-Aware Policy',
     description: 'Advanced policy based on content classification and confidence scores',

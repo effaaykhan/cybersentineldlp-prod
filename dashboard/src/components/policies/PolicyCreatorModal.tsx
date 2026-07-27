@@ -7,6 +7,7 @@ import {
   ClipboardConfig,
   FileSystemConfig,
   USBDeviceConfig,
+  USBDeviceControlConfig,
   USBTransferConfig,
   FileTransferConfig,
   NetworkPreventionConfig
@@ -18,6 +19,7 @@ import FileSystemPolicyForm from './FileSystemPolicyForm'
 import FileTransferPolicyForm from './FileTransferPolicyForm'
 import USBDevicePolicyForm from './USBDevicePolicyForm'
 import USBTransferPolicyForm from './USBTransferPolicyForm'
+import USBDeviceControlForm from './USBDeviceControlForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
@@ -81,7 +83,7 @@ const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in PO
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
@@ -159,6 +161,9 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
         action: 'block'
       } as USBTransferConfig
 
+    case 'usb_device_control':
+      return { mode: 'enforce' } as USBDeviceControlConfig
+
     default:
       return {}
   }
@@ -215,7 +220,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -629,6 +634,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'usb_file_transfer_monitoring' && (
                   <USBTransferPolicyForm
                     config={config as USBTransferConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'usb_device_control' && (
+                  <USBDeviceControlForm
+                    config={config as USBDeviceControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

@@ -9,6 +9,7 @@ export type PolicyType =
   | 'file_transfer_monitoring'
   | 'usb_device_monitoring'
   | 'usb_file_transfer_monitoring'
+  | 'usb_device_control'
   | 'google_drive_local_monitoring'
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
@@ -75,6 +76,11 @@ export interface USBDeviceConfig {
     fileTransfer: boolean
   }
   action: USBDeviceAction
+}
+
+export interface USBDeviceControlConfig {
+  // enforce = block unsanctioned devices; audit = allow but log what would block
+  mode: 'enforce' | 'audit'
 }
 
 export interface USBTransferConfig {
@@ -164,6 +170,7 @@ export type PolicyConfig =
   | FileSystemConfig
   | FileTransferConfig
   | USBDeviceConfig
+  | USBDeviceControlConfig
   | USBTransferConfig
   | GoogleDriveLocalConfig
   | GoogleDriveCloudConfig

@@ -17,6 +17,7 @@ import {
   Radar,
   Fingerprint,
   BrainCircuit,
+  Usb,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -56,6 +57,7 @@ const groups: NavGroup[] = [
       { name: 'Rules',    to: '/rules',    icon: List,   requires: ['create_policy', 'update_policy'] },
       { name: 'Data Matching', to: '/data-matching', icon: Fingerprint, requires: ['create_policy', 'update_policy'] },
       { name: 'ML Classifier', to: '/ml-classifier', icon: BrainCircuit, requires: ['create_policy', 'update_policy'] },
+      { name: 'USB Devices', to: '/usb-devices', icon: Usb, requires: ['create_policy', 'update_policy'] },
       { name: 'Policies', to: '/policies', icon: Shield, requires: ['create_policy', 'update_policy'] },
     ],
   },

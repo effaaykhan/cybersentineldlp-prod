@@ -1853,7 +1853,8 @@ static ClassificationResult Classify(const std::string& content,
     // ShouldBlockPrinter() per job and cancels matching ones in enforce mode.
     std::atomic<bool> printerControlEnforced{false};
     std::string printerControlMode;                     // "enforce" | "audit" | "off"
-    std::string printerControlScope;                    // block_all | block_network | block_local | none
+    std::string printerControlScope;                    // block_all | block_network | block_local | allowlist | none
+    std::set<std::string> sanctionedPrinters;           // enabled allowlist printer names (UPPERCASE)
     std::mutex printerPolicyMutex;
 
     // Screen-capture classification detail. classifyText (run on the content-scan
@@ -2268,10 +2269,37 @@ if (!shouldBlock) {
              bool enforced = JsonBoolTrue(response, "enforced");
              std::string mode = config.ExtractJsonValue(response, "mode");
              std::string scope = config.ExtractJsonValue(response, "scope");
+
+             // Parse the "printers":[...] allowlist (used when scope == allowlist).
+             std::set<std::string> printers;
+             size_t ap = response.find("\"printers\"");
+             if (ap != std::string::npos) {
+                 size_t lb = response.find('[', ap);
+                 size_t rb = (lb == std::string::npos) ? std::string::npos : response.find(']', lb);
+                 if (lb != std::string::npos && rb != std::string::npos) {
+                     std::string arr = response.substr(lb + 1, rb - lb - 1);
+                     size_t p = 0;
+                     while ((p = arr.find('"', p)) != std::string::npos) {
+                         size_t q = arr.find('"', p + 1);
+                         if (q == std::string::npos) break;
+                         std::string name = arr.substr(p + 1, q - p - 1);
+                         // JSON-unescape backslashes (UNC names like \\srv\printer
+                         // arrive as \\\\srv\\printer).
+                         std::string un; un.reserve(name.size());
+                         for (size_t k = 0; k < name.size(); ++k) {
+                             if (name[k] == '\\' && k + 1 < name.size() && name[k + 1] == '\\') { un += '\\'; ++k; }
+                             else un += name[k];
+                         }
+                         if (!un.empty()) printers.insert(ToUpperStr(un));
+                         p = q + 1;
+                     }
+                 }
+             }
              {
                  std::lock_guard<std::mutex> lock(printerPolicyMutex);
                  printerControlMode = mode;
                  printerControlScope = scope;
+                 sanctionedPrinters = printers;
              }
              printerControlEnforced.store(enforced);
              logger.Info("Printer control: enforced=" + std::string(enforced ? "true" : "false") +
@@ -2312,15 +2340,18 @@ if (!shouldBlock) {
      bool ShouldBlockPrinter(const std::string& printerName) {
          if (!printerControlEnforced.load()) return false;
          std::string mode, scope;
+         bool sanctioned = false;
          {
              std::lock_guard<std::mutex> lock(printerPolicyMutex);
              mode = printerControlMode;
              scope = printerControlScope;
+             sanctioned = sanctionedPrinters.count(ToUpperStr(printerName)) > 0;
          }
          bool matches = false;
          if (scope == "block_all")          matches = true;
          else if (scope == "block_network") matches = IsNetworkPrinter(printerName);
          else if (scope == "block_local")   matches = !IsNetworkPrinter(printerName);
+         else if (scope == "allowlist")     matches = !sanctioned;   // block anything not sanctioned
          if (!matches) return false;
          if (mode == "audit") {
              logger.Info("PRINT_DEVICE_AUDIT: would block printer " + printerName +

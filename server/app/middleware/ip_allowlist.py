@@ -41,6 +41,7 @@ _LOOPBACK = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128"
 _AGENT_HEARTBEAT = re.compile(r"^/api/v1/agents/[^/]+/heartbeat/?$")
 _AGENT_SYNC = re.compile(r"^/api/v1/agents/[^/]+/(policies/sync|policy/evaluate|device/authorize)/?$")
 _AGENT_UNREG = re.compile(r"^/api/v1/agents/[^/]+/unregister/?$")
+_AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/usb-allowlist/?$")
 
 
 def bump_ip_allowlist_cache() -> None:
@@ -81,6 +82,8 @@ def _is_exempt(method: str, path: str) -> bool:
     if method == "PUT" and _AGENT_HEARTBEAT.match(path):
         return True
     if method == "POST" and _AGENT_SYNC.match(path):
+        return True
+    if method == "GET" and _AGENT_USB_ALLOWLIST.match(path):
         return True
     if method == "DELETE" and _AGENT_UNREG.match(path):
         return True

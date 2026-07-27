@@ -1206,6 +1206,61 @@ async def authorize_usb_device(
     )
 
 
+class UsbAllowlistResponse(BaseModel):
+    enforced: bool                 # an active usb_device_control policy exists
+    mode: str                      # "enforce" | "audit" | "off"
+    count: int
+    serials: List[str]             # enabled sanctioned serial numbers
+    devices: List[Dict[str, Any]]  # serial + vid/pid/model, for building device IDs
+    generated_at: datetime
+
+
+@router.get("/{agent_id}/usb-allowlist", response_model=UsbAllowlistResponse)
+async def usb_allowlist(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    The USB device allowlist the endpoint enforces locally (Approach A: Windows
+    Device Installation Restrictions). Returns the enabled sanctioned serials plus
+    whether device control is enforced and in which mode. Requires X-Agent-Key.
+
+    Agent should apply: enforced && mode == "enforce"  -> DenyUnspecified + allow
+    ONLY these serials (block everything else, no race, works offline). mode ==
+    "audit" or not enforced -> do NOT block (monitor / log-only).
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+    from app.models.sanctioned_usb_device import SanctionedUsbDevice
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "usb_device_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+    enforced = policy is not None
+    mode = ((policy.config or {}).get("mode") or "enforce").lower() if enforced else "off"
+
+    rows = (await db.execute(
+        _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
+    )).scalars().all()
+    devices = [{
+        "serial_number": d.serial_number,
+        "vendor_id": d.vendor_id,
+        "product_id": d.product_id,
+        "product_name": d.product_name,
+    } for d in rows]
+    return UsbAllowlistResponse(
+        enforced=enforced, mode=mode, count=len(devices),
+        serials=[d["serial_number"] for d in devices],
+        devices=devices, generated_at=datetime.now(timezone.utc),
+    )
+
+
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
 async def evaluate_policy_realtime(
     agent_id: str,

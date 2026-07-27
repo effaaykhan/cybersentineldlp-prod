@@ -1855,6 +1855,7 @@ static ClassificationResult Classify(const std::string& content,
     std::string printerControlMode;                     // "enforce" | "audit" | "off"
     std::string printerControlScope;                    // block_all | block_network | block_local | allowlist | none
     std::set<std::string> sanctionedPrinters;           // enabled allowlist printer names (UPPERCASE)
+    std::atomic<bool> printContentInspection{false};    // a print_content_prevention policy is active
     std::mutex printerPolicyMutex;
 
     // Screen-capture classification detail. classifyText (run on the content-scan
@@ -2317,9 +2318,11 @@ if (!shouldBlock) {
                  sanctionedPrinters = printers;
              }
              printerControlEnforced.store(enforced);
+             printContentInspection.store(JsonBoolTrue(response, "content_inspection"));
              logger.Info("Printer control: enforced=" + std::string(enforced ? "true" : "false") +
                          " mode=" + (mode.empty() ? "off" : mode) +
-                         " scope=" + (scope.empty() ? "none" : scope));
+                         " scope=" + (scope.empty() ? "none" : scope) +
+                         " content_inspection=" + std::string(printContentInspection.load() ? "true" : "false"));
          } catch (...) {
              logger.Error("FetchPrinterPolicy failed");
          }
@@ -2374,6 +2377,88 @@ if (!shouldBlock) {
              return false;
          }
          return true;   // enforce
+     }
+
+     // ── Print CONTENT inspection (real spooled-document content) ───────────
+     static std::string ReadFileBytesAll(const std::string& path) {
+         std::ifstream f(path, std::ios::binary);
+         if (!f) return "";
+         return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+     }
+
+     // Newest *.SPL in the spool dir (fallback when the job-id name doesn't match).
+     std::string NewestSpoolFile(const std::string& dir) {
+         WIN32_FIND_DATAA fd;
+         HANDLE h = FindFirstFileA((dir + "*.SPL").c_str(), &fd);
+         if (h == INVALID_HANDLE_VALUE) return "";
+         std::string best;
+         FILETIME bestT{0, 0};
+         do {
+             if (CompareFileTime(&fd.ftLastWriteTime, &bestT) > 0) {
+                 bestT = fd.ftLastWriteTime;
+                 best = dir + fd.cFileName;
+             }
+         } while (FindNextFileA(h, &fd));
+         FindClose(h);
+         return best;
+     }
+
+     // Best-effort text extraction from raw spool bytes: pull ASCII runs AND
+     // UTF-16LE runs (EMF ExtTextOutW stores document text as UTF-16). Works across
+     // EMF/RAW/PS/PCL to varying degrees; enough to feed the classifier.
+     static std::string ExtractSpoolStrings(const std::string& data) {
+         std::string out, run;
+         for (unsigned char c : data) {
+             if (c >= 0x20 && c < 0x7f) run += (char)c;
+             else { if (run.size() >= 4) { out += run; out += ' '; } run.clear(); }
+         }
+         if (run.size() >= 4) { out += run; out += ' '; }
+         run.clear();
+         for (size_t i = 0; i + 1 < data.size(); i += 2) {
+             unsigned char lo = (unsigned char)data[i], hi = (unsigned char)data[i + 1];
+             if (hi == 0 && lo >= 0x20 && lo < 0x7f) run += (char)lo;
+             else { if (run.size() >= 4) { out += run; out += ' '; } run.clear(); }
+         }
+         if (run.size() >= 4) { out += run; out += ' '; }
+         return out;
+     }
+
+     std::string ReadSpoolText(int jobId) {
+         char sysdir[MAX_PATH] = {0};
+         GetSystemDirectoryA(sysdir, MAX_PATH);
+         std::string dir = std::string(sysdir) + "\\spool\\PRINTERS\\";
+         char name[32];
+         snprintf(name, sizeof(name), "%05d.SPL", jobId);
+         std::string bytes = ReadFileBytesAll(dir + name);
+         if (bytes.empty()) {
+             std::string p = NewestSpoolFile(dir);
+             if (!p.empty()) bytes = ReadFileBytesAll(p);
+         }
+         if (bytes.empty()) return "";
+         return ExtractSpoolStrings(bytes);
+     }
+
+     // Callback for PrintMonitor: inspect the spooled document via the server and
+     // return true to block. Only runs when a print_content_prevention policy is
+     // active. Fail-open (allow) on any error so printing is never bricked.
+     bool EvaluatePrintContent(const std::string& printerName, int jobId, const std::string& docName) {
+         if (!printContentInspection.load() || !httpClient) return false;
+         std::string text = ReadSpoolText(jobId);
+         if (text.size() < 20) text = docName;   // fall back to the document name
+         JsonBuilder j;
+         j.AddString("file_name", docName);
+         j.AddString("file_content", text.substr(0, 200000));
+         j.AddString("event_type", "print");
+         auto [st, resp] = httpClient->Post(
+             "/agents/" + config.agentId + "/policy/evaluate", j.Build());
+         if (st != 200) {
+             logger.Warning("Print content evaluate HTTP " + std::to_string(st) + " — allowing");
+             return false;
+         }
+         bool block = config.ExtractJsonValue(resp, "action") == "block";
+         logger.Info("Print content inspection: " + docName + " -> " +
+                     (block ? "BLOCK" : "allow") + " (" + std::to_string(text.size()) + " chars)");
+         return block;
      }
 
      // Approach A: program Windows Device Installation Restrictions so the kernel
@@ -3811,6 +3896,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          // content-based blocking inside PrintMonitor is unchanged).
          printMonitor->SetPrinterControl(
              [this](const std::string& printerName) { return ShouldBlockPrinter(printerName); });
+         // Print CONTENT control: inspect the spooled document via the server.
+         printMonitor->SetPrintContent(
+             [this](const std::string& printerName, int jobId, const std::string& docName) {
+                 return EvaluatePrintContent(printerName, jobId, docName);
+             });
          printMonitor->Start();
          logger.Info("Print monitoring started");
 

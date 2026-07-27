@@ -86,6 +86,14 @@ bool PrintMonitor::CancelPrintJob(const std::string& printerName, int jobId) {
     }
 }
 
+bool PrintMonitor::ControlJob(const std::string& printerName, int jobId, unsigned long command) {
+    HANDLE hPrinter = NULL;
+    if (!OpenPrinterA(const_cast<LPSTR>(printerName.c_str()), &hPrinter, NULL)) return false;
+    BOOL ok = SetJob(hPrinter, jobId, 0, NULL, command);
+    ClosePrinter(hPrinter);
+    return ok ? true : false;
+}
+
 void PrintMonitor::MonitorLoop() {
     char username[256] = {0};
     DWORD userSize = sizeof(username);
@@ -149,7 +157,20 @@ void PrintMonitor::MonitorLoop() {
                                                 // printer itself is disallowed by a printer_control policy,
                                                 // regardless of content. Leaves the content path below intact.
                                                 bool deviceBlocked = m_printerControl && m_printerControl(printerName);
-                                                std::string action = (isSensitive || deviceBlocked) ? "Block" : "Allow";
+
+                                                // Print CONTENT control: when configured, pause the job,
+                                                // inspect the spooled document's real content via the server,
+                                                // and use that decision instead of the filename heuristic.
+                                                bool contentBlocked;
+                                                if (m_printContent) {
+                                                    ControlJob(printerName, jobId, JOB_CONTROL_PAUSE);
+                                                    contentBlocked = m_printContent(printerName, jobId, docName);
+                                                    if (!contentBlocked && !deviceBlocked)
+                                                        ControlJob(printerName, jobId, JOB_CONTROL_RESUME);
+                                                } else {
+                                                    contentBlocked = isSensitive;   // legacy filename fallback
+                                                }
+                                                std::string action = (contentBlocked || deviceBlocked) ? "Block" : "Allow";
 
                                                 if (m_logger) m_logger("INFO", "PRINT_POLICY_DECISION: " +
                                                                        action + " for " + docName);
@@ -160,11 +181,11 @@ void PrintMonitor::MonitorLoop() {
                                                     if (m_logger) m_logger("WARNING",
                                                         "PRINT_DEVICE_BLOCKED: " + printerName +
                                                         " — blocked by printer control policy");
-                                                } else if (isSensitive) {
+                                                } else if (contentBlocked) {
                                                     CancelPrintJob(printerName, jobId);
                                                     if (m_logger) m_logger("WARNING",
                                                         "PRINT_JOB_BLOCKED: " + docName +
-                                                        " — " + classification + " data detected");
+                                                        " — sensitive content detected");
                                                 }
 
                                                 // Build event
@@ -175,7 +196,7 @@ void PrintMonitor::MonitorLoop() {
                                                 event.category = classification;
                                                 event.actionTaken = action;
                                                 event.blockReason = deviceBlocked ? "printer_control"
-                                                                    : (isSensitive ? "content" : "");
+                                                                    : (contentBlocked ? "content" : "");
                                                 event.pages = pages;
                                                 event.jobId = jobId;
                                                 event.timestamp = GetTimestamp();

@@ -30,6 +30,11 @@ public:
     // printer_control policy (independent of document content). Additive — leaves
     // the content-classification path below untouched.
     using PrinterControlCallback = std::function<bool(const std::string& printerName)>;
+    // Print CONTENT control: inspect the spooled document and return true to block.
+    // When set, the job is PAUSED before this runs (so it can't print during the
+    // server round-trip) and resumed if allowed. Returns false to allow.
+    using PrintContentCallback = std::function<bool(const std::string& printerName, int jobId,
+                                                    const std::string& documentName)>;
 
     PrintMonitor(PrintCallback callback, LogCallback logger = nullptr,
                  ClassifyCallback classifier = nullptr);
@@ -41,6 +46,7 @@ public:
 
     void SetClassifier(ClassifyCallback classifier) { m_classifier = classifier; }
     void SetPrinterControl(PrinterControlCallback cb) { m_printerControl = cb; }
+    void SetPrintContent(PrintContentCallback cb) { m_printContent = cb; }
 
 private:
     void MonitorLoop();
@@ -51,6 +57,8 @@ private:
     LogCallback m_logger;
     ClassifyCallback m_classifier;
     PrinterControlCallback m_printerControl;
+    PrintContentCallback m_printContent;
+    bool ControlJob(const std::string& printerName, int jobId, unsigned long command);
     std::thread m_thread;
     std::atomic<bool> m_running{false};
     HANDLE m_changeNotification{INVALID_HANDLE_VALUE};

@@ -1262,10 +1262,11 @@ async def usb_allowlist(
 
 
 class PrinterPolicyResponse(BaseModel):
-    enforced: bool          # an active printer_control policy exists
+    enforced: bool          # an active printer_control (device) policy exists
     mode: str               # "enforce" | "audit" | "off"
     scope: str              # "block_all" | "block_network" | "block_local" | "allowlist" | "none"
     printers: List[str]     # sanctioned printer names (used when scope == "allowlist")
+    content_inspection: bool  # an active print_content_prevention policy exists
     generated_at: datetime
 
 
@@ -1286,7 +1287,7 @@ async def printer_policy(
     (sensitive documents) is a separate, existing layer and is unaffected.
     """
     await verify_agent_key(http_request)
-    from sqlalchemy import select as _select
+    from sqlalchemy import select as _select, func
     from app.models.policy import Policy
     from app.models.sanctioned_printer import SanctionedPrinter
 
@@ -1313,8 +1314,19 @@ async def printer_policy(
                 )
             )).all()
         ]
+
+    # Is print CONTENT control active? The agent only inspects the spooled document
+    # (pause + read + /evaluate) when this is true, to avoid latency otherwise.
+    content_n = await db.scalar(
+        _select(func.count()).select_from(Policy).where(
+            Policy.type == "print_content_prevention",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        )
+    )
     return PrinterPolicyResponse(
         enforced=enforced, mode=mode, scope=scope, printers=printers,
+        content_inspection=bool(content_n and content_n > 0),
         generated_at=datetime.now(timezone.utc),
     )
 

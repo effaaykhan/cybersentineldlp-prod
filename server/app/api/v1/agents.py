@@ -1261,6 +1261,50 @@ async def usb_allowlist(
     )
 
 
+class PrinterPolicyResponse(BaseModel):
+    enforced: bool          # an active printer_control policy exists
+    mode: str               # "enforce" | "audit" | "off"
+    scope: str              # "block_all" | "block_network" | "block_local" | "none"
+    generated_at: datetime
+
+
+@router.get("/{agent_id}/printer-policy", response_model=PrinterPolicyResponse)
+async def printer_policy(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Printer device-control policy for the endpoint (fast scope). Returns whether
+    printing is governed and how: block_all / block_network / block_local, in
+    enforce or audit mode. Requires X-Agent-Key.
+
+    The agent applies: enforced && mode=="enforce" -> cancel print jobs that match
+    the scope (all printers / network printers / local printers). audit or not
+    enforced -> do NOT cancel (monitor/log only). Content-aware print blocking
+    (sensitive documents) is a separate, existing layer and is unaffected.
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "printer_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+    enforced = policy is not None
+    cfg = (policy.config or {}) if policy else {}
+    mode = (cfg.get("mode") or "enforce").lower() if enforced else "off"
+    scope = (cfg.get("scope") or "block_network").lower() if enforced else "none"
+    return PrinterPolicyResponse(
+        enforced=enforced, mode=mode, scope=scope,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
 async def evaluate_policy_realtime(
     agent_id: str,

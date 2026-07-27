@@ -61,6 +61,7 @@ POLICY_TYPE_DOMAIN = {
     "cloud_upload_prevention": PolicyDomain.DATA_PROTECTION,
     # Access Control — device authorization
     "usb_device_control": PolicyDomain.ACCESS_CONTROL,
+    "printer_control": PolicyDomain.ACCESS_CONTROL,
     "usb_device_authorization": PolicyDomain.ACCESS_CONTROL,
     "device_access": PolicyDomain.ACCESS_CONTROL,
 }

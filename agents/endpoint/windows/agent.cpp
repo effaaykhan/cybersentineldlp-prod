@@ -2222,13 +2222,18 @@ if (!shouldBlock) {
                          " mode=" + (mode.empty() ? "off" : mode) +
                          " sanctioned=" + std::to_string(serials.size()));
 
-             // Approach A: kernel-level restrictions (or clear them when off/audit).
-             // Only touch the registry when the effective allowlist changed, to
-             // avoid re-writing (and re-triggering device evaluation) every cycle.
+             // Approach A (Device Installation Restrictions) is DISABLED: on real
+             // hardware the AllowDeviceInstanceIDs serial-wildcard did NOT reliably
+             // override the storage-class Deny, so it blocked APPROVED devices.
+             // Approach B below (authorize-on-connect + per-device eject/disable) is
+             // the enforcement. We proactively CLEAR any restriction keys a previous
+             // build may have written so approved devices recover, then leave the
+             // kernel policy untouched. (ApplyUsbInstallRestrictions is retained for
+             // a future revisit once the instance-id match is validated on hardware.)
              std::string sig = std::string(enforced ? "1" : "0") + "|" + mode + "|";
              for (const auto& s : serials) sig += s + ",";
              if (sig != lastAllowlistSig) {
-                 ApplyUsbInstallRestrictions(enforced, mode, serials);
+                 ClearUsbInstallRestrictions();
                  lastAllowlistSig = sig;
              }
          } catch (...) {
@@ -2362,7 +2367,29 @@ if (!shouldBlock) {
              //  above and the Approach-A install restriction cover that case.)
          } else {
              logger.Info("USB device control: allowed serial=" + details.serialNumber);
+             // Re-enable the node in case a prior block (or a previous enforce
+             // session) left this now-approved device disabled — otherwise an
+             // approved device that was once blocked would never come back.
+             if (!serialUp.empty()) EnableUsbStorageDeviceByInstance(serialUp);
          }
+     }
+
+     // Re-enable the specific USBSTOR device node matching this serial (undo a
+     // prior per-device block for a device that is now sanctioned).
+     bool EnableUsbStorageDeviceByInstance(const std::string& serialUp) {
+         HDEVINFO hDevInfo = SetupDiGetClassDevsA(NULL, "USBSTOR", NULL,
+                                                  DIGCF_PRESENT | DIGCF_ALLCLASSES);
+         if (hDevInfo == INVALID_HANDLE_VALUE) return false;
+         SP_DEVINFO_DATA d; d.cbSize = sizeof(SP_DEVINFO_DATA);
+         bool enabled = false;
+         for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &d); i++) {
+             char id[512];
+             if (!SetupDiGetDeviceInstanceIdA(hDevInfo, &d, id, sizeof(id), NULL)) continue;
+             if (ToUpperStr(id).find(serialUp) == std::string::npos) continue;
+             if (CM_Enable_DevNode(d.DevInst, 0) == CR_SUCCESS) enabled = true;
+         }
+         SetupDiDestroyDeviceInfoList(hDevInfo);
+         return enabled;
      }
 
      // Lock + dismount + eject a single drive letter (the blocked device's volume).

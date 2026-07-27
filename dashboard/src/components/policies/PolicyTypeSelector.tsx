@@ -75,6 +75,12 @@ const policyTypes: Array<{
     icon: Mail
   },
   {
+    type: 'print_content_prevention',
+    label: 'Print Content Control',
+    description: 'Inspect printed document content; block/alert when Confidential/Restricted data is sent to a printer',
+    icon: Printer
+  },
+  {
     type: 'network_exfiltration_prevention',
     label: 'Network Prevention',
     description: 'Block sensitive data leaving over any network channel — FTP/SCP/SFTP, python http.server, curl/wget, netcat, DNS tunnelling, cloud CLIs',

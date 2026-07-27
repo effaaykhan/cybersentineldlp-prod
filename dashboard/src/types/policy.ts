@@ -17,6 +17,7 @@ export type PolicyType =
   | 'classification_aware_policy'
   | 'cloud_upload_prevention'
   | 'email_send_prevention'
+  | 'print_content_prevention'
   | 'network_exfiltration_prevention'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'

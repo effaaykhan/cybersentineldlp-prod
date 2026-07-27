@@ -73,6 +73,16 @@ const POLICY_TEMPLATES: Partial<Record<PolicyType, ClassificationTemplate>> = {
     },
     actions: { block: {}, alert: { severity: 'critical', message: 'Sensitive data blocked from outbound email' } },
   },
+  print_content_prevention: {
+    conditions: {
+      match: 'all',
+      rules: [
+        { field: 'event_type', operator: 'equals', value: 'print' },
+        { field: 'classification_level', operator: 'in', value: SENSITIVE_LEVELS },
+      ],
+    },
+    actions: { block: {}, alert: { severity: 'high', message: 'Sensitive document blocked from printing' } },
+  },
   // network_exfiltration_prevention is NOT here: it uses the easy config form
   // (NetworkPreventionPolicyForm) like clipboard, not the conditions/actions
   // builder. The server derives conditions/actions from its config.

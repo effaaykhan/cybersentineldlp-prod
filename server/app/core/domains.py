@@ -59,6 +59,9 @@ POLICY_TYPE_DOMAIN = {
     # policy fell back to GENERAL and dropped out of domain-scoped reporting.
     "email_send_prevention": PolicyDomain.DATA_PROTECTION,
     "cloud_upload_prevention": PolicyDomain.DATA_PROTECTION,
+    # Print channel content control — block/alert on printing sensitive documents.
+    # Enforced agent-side via the real-time evaluate endpoint, like USB file transfer.
+    "print_content_prevention": PolicyDomain.DATA_PROTECTION,
     # Access Control — device authorization
     "usb_device_control": PolicyDomain.ACCESS_CONTROL,
     "printer_control": PolicyDomain.ACCESS_CONTROL,

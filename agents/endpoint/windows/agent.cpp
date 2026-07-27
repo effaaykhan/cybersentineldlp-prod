@@ -399,6 +399,10 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      std::pair<int, std::string> Delete(const std::string& path) {
          return SendRequest(L"DELETE", path, "");
      }
+
+     std::pair<int, std::string> Get(const std::string& path) {
+         return SendRequest(L"GET", path, "");
+     }
      
  private:
      void ParseUrl(const std::string& url) {
@@ -1833,6 +1837,17 @@ static ClassificationResult Classify(const std::string& content,
     std::mutex usbTransferMutex;
     std::atomic<bool> usbBlockingActive{false};  // Track if USB blocking is currently active
 
+    // ── USB DEVICE CONTROL (sanctioned-device allowlist, matched by serial) ──
+    // Synced from GET /agents/{id}/usb-allowlist so on-connect decisions work
+    // offline and Device Installation Restrictions can be programmed. Distinct
+    // from the usb_device_monitoring policies above: this is the allowlist that
+    // blocks UNSANCTIONED storage devices.
+    std::atomic<bool> usbDeviceControlEnforced{false};  // an active usb_device_control policy exists
+    std::string usbDeviceControlMode;                   // "enforce" | "audit" | "off"
+    std::set<std::string> sanctionedUsbSerials;         // enabled allowlist serials (UPPERCASE)
+    std::mutex usbAllowlistMutex;
+    std::string lastAllowlistSig;                       // skip registry churn when unchanged
+
     // Screen-capture classification detail. classifyText (run on the content-scan
     // thread) stashes the most recent SENSITIVE screen verdict's score + matched
     // data-type labels here; the screen_capture event callback reads them back so
@@ -1930,6 +1945,14 @@ static ClassificationResult Classify(const std::string& content,
         // BLOCK policy ejects the drive before the blocked-event is sent, so
         // this is the only chance to record its volume label/serial/capacity.
         USBDeviceDetails arrivalDetails = CollectUSBDeviceDetails(deviceId);
+
+        // USB DEVICE CONTROL: evaluate the sanctioned-serial allowlist and
+        // enforce (block unsanctioned devices) BEFORE the monitoring-policy
+        // logic below. Driven by FetchUsbAllowlist(); independent of the
+        // usb_device_monitoring policies.
+        if (usbDeviceControlEnforced.load()) {
+            AuthorizeAndEnforceUsbDevice(deviceId, arrivalDetails);
+        }
 
         std::cout << "[DEBUG] ===========================================" << std::endl;
         std::cout << "[DEBUG] HandleUsbDeviceArrival" << std::endl;
@@ -2117,6 +2140,269 @@ if (!shouldBlock) {
     logger.Info("USB device connected (non-blocking policy): " + betterDeviceName);
     HandleUsbEvent(betterDeviceName, deviceId, "connect");
 }
+     }
+
+     // ════════════════════════════════════════════════════════════════════
+     //  USB DEVICE CONTROL — sanctioned-device allowlist (by serial number)
+     //  Approach B: authorize-on-connect + per-device disable (dynamic/online,
+     //              offline fallback to the synced allowlist).
+     //  Approach A: Windows Device Installation Restrictions (kernel-enforced,
+     //              race-free, offline).
+     // ════════════════════════════════════════════════════════════════════
+
+     static std::string ToUpperStr(const std::string& s) {
+         std::string r = s;
+         std::transform(r.begin(), r.end(), r.begin(),
+                        [](unsigned char c){ return (char)std::toupper(c); });
+         return r;
+     }
+
+     // Booleans aren't handled by ExtractJsonValue, so scan for "key":true.
+     static bool JsonBoolTrue(const std::string& json, const std::string& key) {
+         return json.find("\"" + key + "\":true") != std::string::npos
+             || json.find("\"" + key + "\": true") != std::string::npos;
+     }
+
+     // Fetch the allowlist from the server and (a) cache it for offline connect
+     // decisions, (b) program Device Installation Restrictions (Approach A).
+     // Called every policy-sync cycle. Never throws.
+     void FetchUsbAllowlist() {
+         try {
+             if (!httpClient) return;
+             auto [status, response] = httpClient->Get(
+                 "/agents/" + config.agentId + "/usb-allowlist");
+             if (status != 200) {
+                 // Server unreachable / error: KEEP the last-known allowlist so
+                 // enforcement survives an outage. Don't clear or unblock.
+                 if (status == 0)
+                     logger.Debug("USB allowlist: server unreachable, keeping cached list");
+                 else
+                     logger.Warning("USB allowlist fetch HTTP " + std::to_string(status));
+                 return;
+             }
+             bool enforced = JsonBoolTrue(response, "enforced");
+             std::string mode = config.ExtractJsonValue(response, "mode");
+
+             // Parse the "serials":[...] array (ExtractJsonValue can't do arrays).
+             std::set<std::string> serials;
+             size_t ap = response.find("\"serials\"");
+             if (ap != std::string::npos) {
+                 size_t lb = response.find('[', ap);
+                 size_t rb = (lb == std::string::npos) ? std::string::npos : response.find(']', lb);
+                 if (lb != std::string::npos && rb != std::string::npos) {
+                     std::string arr = response.substr(lb + 1, rb - lb - 1);
+                     size_t p = 0;
+                     while ((p = arr.find('"', p)) != std::string::npos) {
+                         size_t q = arr.find('"', p + 1);
+                         if (q == std::string::npos) break;
+                         std::string s = arr.substr(p + 1, q - p - 1);
+                         if (!s.empty()) serials.insert(ToUpperStr(s));
+                         p = q + 1;
+                     }
+                 }
+             }
+
+             {
+                 std::lock_guard<std::mutex> lock(usbAllowlistMutex);
+                 usbDeviceControlMode = mode;
+                 sanctionedUsbSerials = serials;
+             }
+             usbDeviceControlEnforced.store(enforced);
+
+             // When enforced, the USB monitor MUST be armed even if there are no
+             // usb_device_monitoring policies — otherwise DBT_DEVICEARRIVAL never
+             // reaches HandleUsbDeviceArrival. Asserting these wakes UsbMonitor
+             // (its wait loop re-checks) and lets the arrival handler proceed.
+             if (enforced) {
+                 hasUsbDevicePolicies.store(true);
+                 allowEvents.store(true);
+             }
+
+             logger.Info("USB device control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " sanctioned=" + std::to_string(serials.size()));
+
+             // Approach A: kernel-level restrictions (or clear them when off/audit).
+             // Only touch the registry when the effective allowlist changed, to
+             // avoid re-writing (and re-triggering device evaluation) every cycle.
+             std::string sig = std::string(enforced ? "1" : "0") + "|" + mode + "|";
+             for (const auto& s : serials) sig += s + ",";
+             if (sig != lastAllowlistSig) {
+                 ApplyUsbInstallRestrictions(enforced, mode, serials);
+                 lastAllowlistSig = sig;
+             }
+         } catch (...) {
+             logger.Error("FetchUsbAllowlist failed");
+         }
+     }
+
+     // Approach A: program Windows Device Installation Restrictions so the kernel
+     // blocks unsanctioned USB storage at install time (no race, works offline).
+     // We DENY the USB mass-storage disk class and ALLOW only the sanctioned
+     // serials via device-instance-id wildcards. "Allow" takes precedence over
+     // "Deny", so sanctioned devices install and every other USB disk is blocked.
+     // We NEVER set DenyUnspecified (that would block keyboards/mice/etc.).
+     void ApplyUsbInstallRestrictions(bool enforced, const std::string& mode,
+                                      const std::set<std::string>& serials) {
+         const std::string R = "SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions";
+         if (!enforced || mode != "enforce") {
+             ClearUsbInstallRestrictions();
+             return;
+         }
+         HKEY hRoot;
+         if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, R.c_str(), 0, NULL, 0,
+                             KEY_ALL_ACCESS, NULL, &hRoot, NULL) != ERROR_SUCCESS) {
+             logger.Error("USB device control: cannot open DeviceInstall Restrictions (admin required)");
+             return;
+         }
+         DWORD one = 1;
+         RegSetValueExA(hRoot, "DenyDeviceIDs", 0, REG_DWORD, (BYTE*)&one, sizeof(DWORD));
+         RegSetValueExA(hRoot, "DenyDeviceIDsRetroactive", 0, REG_DWORD, (BYTE*)&one, sizeof(DWORD));
+         RegSetValueExA(hRoot, "AllowDeviceInstanceIDs", 0, REG_DWORD, (BYTE*)&one, sizeof(DWORD));
+         RegCloseKey(hRoot);
+
+         // Deny: the USB mass-storage disk compatible id (all USB flash disks).
+         HKEY hDeny;
+         if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, (R + "\\DenyDeviceIDs").c_str(), 0, NULL, 0,
+                             KEY_ALL_ACCESS, NULL, &hDeny, NULL) == ERROR_SUCCESS) {
+             const char* genDisk = "USBSTOR\\GenDisk";
+             RegSetValueExA(hDeny, "1", 0, REG_SZ, (const BYTE*)genDisk, (DWORD)strlen(genDisk) + 1);
+             RegCloseKey(hDeny);
+         }
+
+         // Allow: rebuild the instance-id wildcard list from the sanctioned serials.
+         std::string allowPath = R + "\\AllowDeviceInstanceIDs";
+         RegDeleteTreeA(HKEY_LOCAL_MACHINE, allowPath.c_str());   // clear stale entries first
+         HKEY hAllow;
+         if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, allowPath.c_str(), 0, NULL, 0,
+                             KEY_ALL_ACCESS, NULL, &hAllow, NULL) == ERROR_SUCCESS) {
+             int n = 1;
+             for (const auto& s : serials) {
+                 std::string pat = "USBSTOR\\*" + s + "*";        // wildcard match on serial
+                 std::string name = std::to_string(n++);
+                 RegSetValueExA(hAllow, name.c_str(), 0, REG_SZ,
+                                (const BYTE*)pat.c_str(), (DWORD)pat.size() + 1);
+             }
+             RegCloseKey(hAllow);
+         }
+         logger.Info("USB device control: applied Device Installation Restrictions (allow " +
+                     std::to_string(serials.size()) + " serial(s))");
+     }
+
+     // Remove the Approach-A restrictions we set (used when device control is off
+     // or in audit mode). Only touches the values/subkeys this agent writes.
+     void ClearUsbInstallRestrictions() {
+         const std::string R = "SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceInstall\\Restrictions";
+         HKEY hRoot;
+         if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, R.c_str(), 0, KEY_ALL_ACCESS, &hRoot) == ERROR_SUCCESS) {
+             RegDeleteValueA(hRoot, "DenyDeviceIDs");
+             RegDeleteValueA(hRoot, "DenyDeviceIDsRetroactive");
+             RegDeleteValueA(hRoot, "AllowDeviceInstanceIDs");
+             RegCloseKey(hRoot);
+         }
+         RegDeleteTreeA(HKEY_LOCAL_MACHINE, (R + "\\DenyDeviceIDs").c_str());
+         RegDeleteTreeA(HKEY_LOCAL_MACHINE, (R + "\\AllowDeviceInstanceIDs").c_str());
+     }
+
+     // Approach B: on connect, ask the server (authoritative + logs the verdict);
+     // fall back to the cached allowlist when offline. On "block", dismount/eject
+     // the device's volume and disable that specific device node.
+     void AuthorizeAndEnforceUsbDevice(const std::string& deviceId, const USBDeviceDetails& details) {
+         // Parse VID/PID from the device instance id (same way as elsewhere).
+         std::string vid, pid;
+         {
+             size_t v = deviceId.find("VID_");
+             if (v != std::string::npos && v + 8 <= deviceId.size()) vid = deviceId.substr(v + 4, 4);
+             size_t p = deviceId.find("PID_");
+             if (p != std::string::npos && p + 8 <= deviceId.size()) pid = deviceId.substr(p + 4, 4);
+         }
+         std::string serialUp = ToUpperStr(details.serialNumber);
+
+         // 1) Decide.
+         std::string action;
+         if (httpClient) {
+             JsonBuilder j;
+             j.AddString("serial_number", details.serialNumber);
+             j.AddString("vendor_id", vid);
+             j.AddString("product_id", pid);
+             j.AddString("product_name", details.productName);
+             j.AddString("manufacturer", details.manufacturer);
+             j.AddString("volume_label", details.volumeLabel);
+             j.AddString("volume_serial", details.volumeSerial);
+             j.AddString("drive_letter", details.driveLetter);
+             auto [st, resp] = httpClient->Post(
+                 "/agents/" + config.agentId + "/device/authorize", j.Build());
+             if (st == 200) action = config.ExtractJsonValue(resp, "action");
+         }
+         if (action.empty()) {
+             // Offline / no response: decide from the cached allowlist.
+             std::string mode;
+             bool sanctioned = false;
+             {
+                 std::lock_guard<std::mutex> lock(usbAllowlistMutex);
+                 mode = usbDeviceControlMode;
+                 sanctioned = !serialUp.empty() && sanctionedUsbSerials.count(serialUp) > 0;
+             }
+             if (!usbDeviceControlEnforced.load() || mode != "enforce")
+                 action = "allow";
+             else
+                 action = sanctioned ? "allow" : "block";
+             logger.Info("USB device control (offline): serial=" + details.serialNumber +
+                         " -> " + action);
+         }
+
+         // 2) Enforce.
+         if (action == "block") {
+             logger.Warning("USB DEVICE CONTROL: BLOCKING unsanctioned device"
+                            " serial=" + details.serialNumber +
+                            " model=" + details.productName);
+             EjectUsbDriveLetter(details.driveLetter);
+             if (!serialUp.empty()) DisableUsbStorageDeviceByInstance(serialUp);
+             // (A device with no serial can't be node-targeted here; the eject
+             //  above and the Approach-A install restriction cover that case.)
+         } else {
+             logger.Info("USB device control: allowed serial=" + details.serialNumber);
+         }
+     }
+
+     // Lock + dismount + eject a single drive letter (the blocked device's volume).
+     void EjectUsbDriveLetter(const std::string& driveLetter) {
+         if (driveLetter.empty()) return;
+         char letter = driveLetter[0];
+         std::string devicePath = "\\\\.\\" + std::string(1, letter) + ":";
+         HANDLE h = CreateFileA(devicePath.c_str(), GENERIC_READ | GENERIC_WRITE,
+             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+         if (h == INVALID_HANDLE_VALUE) return;
+         DWORD br = 0;
+         DeviceIoControl(h, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &br, NULL);
+         DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &br, NULL);
+         PREVENT_MEDIA_REMOVAL pmr; pmr.PreventMediaRemoval = FALSE;
+         DeviceIoControl(h, IOCTL_STORAGE_MEDIA_REMOVAL, &pmr, sizeof(pmr), NULL, 0, &br, NULL);
+         DeviceIoControl(h, IOCTL_STORAGE_EJECT_MEDIA, NULL, 0, NULL, 0, &br, NULL);
+         CloseHandle(h);
+         logger.Info("USB device control: dismounted/ejected " + driveLetter);
+     }
+
+     // Disable the specific USBSTOR device node whose instance id contains this
+     // serial (targeted, unlike DisableAllUSBStorageDevices which disables all).
+     bool DisableUsbStorageDeviceByInstance(const std::string& serialUp) {
+         HDEVINFO hDevInfo = SetupDiGetClassDevsA(NULL, "USBSTOR", NULL,
+                                                  DIGCF_PRESENT | DIGCF_ALLCLASSES);
+         if (hDevInfo == INVALID_HANDLE_VALUE) return false;
+         SP_DEVINFO_DATA d; d.cbSize = sizeof(SP_DEVINFO_DATA);
+         bool disabled = false;
+         for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &d); i++) {
+             char id[512];
+             if (!SetupDiGetDeviceInstanceIdA(hDevInfo, &d, id, sizeof(id), NULL)) continue;
+             if (ToUpperStr(id).find(serialUp) == std::string::npos) continue;
+             CONFIGRET cr = CM_Disable_DevNode(d.DevInst, 0);
+             if (cr == CR_SUCCESS || DisableDevice(hDevInfo, &d)) {
+                 logger.Warning("USB device control: disabled node " + std::string(id));
+                 disabled = true;
+             }
+         }
+         SetupDiDestroyDeviceInfoList(hDevInfo);
+         return disabled;
      }
 
      bool BlockUSBStorageViaRegistry(bool block) {
@@ -3474,6 +3760,12 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      logger.Warning("Response: " + response.substr(0, 500));
                  }
              }
+
+             // Refresh the USB device-control allowlist on the same cadence
+             // (runs even when the policy bundle was up-to-date). This both
+             // caches the allowlist for offline connect decisions and programs
+             // the Device Installation Restrictions.
+             FetchUsbAllowlist();
          } catch (const std::exception& e) {
              logger.Error(std::string("Failed to sync policies: ") + e.what());
          } catch (...) {

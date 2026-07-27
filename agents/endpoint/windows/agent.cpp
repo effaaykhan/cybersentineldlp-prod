@@ -2023,8 +2023,11 @@ if (shouldBlock && usbBlockingActive.load()) {
     // CRITICAL FIX: Block IMMEDIATELY before device fully initializes
     bool blockSuccess = false;
     
-    // Method 1: Registry block (prevents driver from loading)
-    bool registryBlocked = BlockUSBStorageViaRegistry(true);
+    // Method 1: Registry block (prevents driver from loading).
+    // SKIP when USB device control is enforced: this sets the USBSTOR service
+    // Start=4, killing ALL USB storage including SANCTIONED devices. Under an
+    // allowlist that is wrong — device control governs per-device instead.
+    bool registryBlocked = usbDeviceControlEnforced.load() ? false : BlockUSBStorageViaRegistry(true);
     if (registryBlocked) {
         logger.Info("✓ Step 1: Registry block applied");
         blockSuccess = true;
@@ -2402,6 +2405,18 @@ if (!shouldBlock) {
          return enabled;
      }
 
+     // True if this device instance id belongs to a sanctioned device (its serial
+     // is on the enabled allowlist) while device control is enforced. Used to
+     // exempt approved devices from the global "block all USB" enforcement.
+     bool IsSanctionedInstanceId(const std::string& instanceId) {
+         if (!usbDeviceControlEnforced.load()) return false;
+         std::string idUp = ToUpperStr(instanceId);
+         std::lock_guard<std::mutex> lock(usbAllowlistMutex);
+         for (const auto& s : sanctionedUsbSerials)
+             if (!s.empty() && idUp.find(s) != std::string::npos) return true;
+         return false;
+     }
+
      // Every sync: re-enable any currently-present USBSTOR node whose serial is
      // sanctioned AND that has a problem (e.g. disabled). This reliably recovers a
      // device that an older build disabled while unsanctioned and was later
@@ -2561,8 +2576,16 @@ if (!shouldBlock) {
             char deviceID[256];
             if (SetupDiGetDeviceInstanceIdA(hDevInfo, &devInfoData, deviceID, sizeof(deviceID), NULL)) {
                 if (strstr(deviceID, "USBSTOR") != NULL) {
+                    // NEVER disable a SANCTIONED device. The USB device-control
+                    // allowlist takes precedence over a blunt "block all USB"
+                    // monitoring policy — otherwise this global block bricks the
+                    // approved device (leaves it at Code 22 / CM_PROB_DISABLED).
+                    if (IsSanctionedInstanceId(deviceID)) {
+                        logger.Info("Exempting sanctioned USB device from block: " + std::string(deviceID));
+                        continue;
+                    }
                     deviceCount++;
-                    
+
                     // Use ConfigManager API for more reliable disabling
                     DEVINST devInst = devInfoData.DevInst;
                     CONFIGRET cr = CM_Disable_DevNode(devInst, 0);

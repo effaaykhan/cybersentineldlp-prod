@@ -126,6 +126,10 @@ class EventCreate(BaseModel):
     # classifies it from the captured content during background processing.
     document_type: Optional[str] = Field(None, description="Detected document/image type id, e.g. 'passport'")
     document_type_label: Optional[str] = Field(None, description="Human label for document_type, e.g. 'Passport'")
+    # Print events: the target printer, and WHY a job was blocked
+    # ('printer_control' = device policy, 'content' = sensitive document).
+    printer_name: Optional[str] = Field(None, description="Target printer name (print events)")
+    block_reason: Optional[str] = Field(None, description="Why blocked: 'printer_control' | 'content'")
     detected_content: Optional[str] = Field(None, description="Summary of detected sensitive content")
     action: Optional[str] = Field(None, description="Action taken (logged, blocked, alerted, etc.)")
     destination: Optional[str] = Field(None, description="Destination path for transfers")
@@ -516,6 +520,11 @@ async def create_event(
     if event.document_type:
         event_doc["document_type"] = event.document_type
         event_doc["document_type_label"] = event.document_type_label or event.document_type
+    # Print events: target printer + block reason (printer_control vs content).
+    if event.printer_name:
+        event_doc["printer_name"] = event.printer_name
+    if event.block_reason:
+        event_doc["block_reason"] = event.block_reason
     # Preserve agent-provided content diff fields so the event detail
     # view can render the per-line change list. Empty diffs are still
     # written so the UI can distinguish "modified, no textual change"

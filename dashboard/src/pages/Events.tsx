@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen } from 'lucide-react'
+import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen, Printer } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { searchEvents, getAllAgents, clearAllEvents, type Event } from '@/lib/api'
@@ -670,6 +670,32 @@ function EventDetailModal({
             </div>
           )}
 
+          {/* Printer Details — shown for print events */}
+          {event.event_type?.toLowerCase() === 'print' && event.printer_name && (
+            <div className="rounded-cs-card border border-cs-hair overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2 bg-cs-hair-2 border-b border-cs-hair">
+                <Printer className="w-4 h-4 text-cs-muted" />
+                <span className="text-xs font-semibold text-cs-ink-2 uppercase tracking-wide">Printer Details</span>
+              </div>
+              <div className="grid grid-cols-2 gap-px bg-cs-hair">
+                <div className="bg-cs-panel p-3">
+                  <label className="text-[11px] text-cs-muted uppercase font-medium mb-0.5 block">Printer</label>
+                  <p className="text-cs-ink text-sm font-medium break-words">{event.printer_name}</p>
+                </div>
+                <div className="bg-cs-panel p-3">
+                  <label className="text-[11px] text-cs-muted uppercase font-medium mb-0.5 block">Decision</label>
+                  <p className="text-sm font-medium">
+                    {event.block_reason === 'printer_control'
+                      ? <span className="text-cs-crit">Blocked — printer control policy</span>
+                      : event.block_reason === 'content'
+                      ? <span className="text-cs-crit">Blocked — sensitive content</span>
+                      : <span className="text-cs-emerald">Allowed</span>}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Raw JSON Data (Expandable) */}
           <div className="border-t border-cs-hair pt-4">
             <button
@@ -1143,6 +1169,12 @@ export default function Events() {
                         <span className="badge inline-flex items-center gap-1 bg-cs-indigo-faint text-cs-indigo ring-[color-mix(in_srgb,var(--cs-indigo)_25%,var(--cs-panel))]">
                           <FileText className="h-3 w-3" />
                           {event.document_type_label}
+                        </span>
+                      )}
+                      {event.block_reason === 'printer_control' && (
+                        <span className="badge inline-flex items-center gap-1 bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] text-cs-crit ring-[color-mix(in_srgb,var(--cs-crit)_25%,var(--cs-panel))]">
+                          <Printer className="h-3 w-3" />
+                          Printer blocked
                         </span>
                       )}
                     </div>

@@ -3736,14 +3736,21 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("agent_id", config.agentId);
                  json.AddString("source_type", "agent");
                  json.AddString("user_email", event.user + "@" + config.agentName);
-                 json.AddString("description", event.actionTaken == "Block"
-                     ? "PRINT JOB BLOCKED: " + event.documentName + " — " + event.category + " data"
-                     : "Print job: " + event.documentName);
+                 std::string desc;
+                 if (event.actionTaken == "Block" && event.blockReason == "printer_control")
+                     desc = "PRINT BLOCKED (printer control): " + event.documentName + " -> " + event.printerName;
+                 else if (event.actionTaken == "Block")
+                     desc = "PRINT JOB BLOCKED: " + event.documentName + " — " + event.category + " data";
+                 else
+                     desc = "Print job: " + event.documentName + " -> " + event.printerName;
+                 json.AddString("description", desc);
                  json.AddString("severity", event.actionTaken == "Block" ? "high" : "low");
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.category);
                  json.AddBool("blocked", event.actionTaken == "Block");
                  json.AddString("file_path", event.documentName);
+                 json.AddString("printer_name", event.printerName);
+                 json.AddString("block_reason", event.blockReason);
                  json.AddString("timestamp", GetCurrentTimestampISO());
                  SendEvent(json.Build());
              },

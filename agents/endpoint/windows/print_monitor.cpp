@@ -174,6 +174,8 @@ void PrintMonitor::MonitorLoop() {
                                                 event.user = jobUser;
                                                 event.category = classification;
                                                 event.actionTaken = action;
+                                                event.blockReason = deviceBlocked ? "printer_control"
+                                                                    : (isSensitive ? "content" : "");
                                                 event.pages = pages;
                                                 event.jobId = jobId;
                                                 event.timestamp = GetTimestamp();

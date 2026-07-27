@@ -15,6 +15,7 @@ struct PrintEvent {
     std::string classificationRule;
     std::string category;           // Public, Internal, Confidential, Restricted
     std::string actionTaken;        // Allow, Block, Alert
+    std::string blockReason;        // "" | "content" | "printer_control"
     int pages = 0;
     int jobId = 0;
     std::string timestamp;

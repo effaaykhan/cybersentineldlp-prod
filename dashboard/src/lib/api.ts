@@ -181,6 +181,8 @@ export type Event = {
   document_type?: string
   document_type_label?: string
   document_types?: Array<{ type: string; label: string; category?: string; confidence?: number }>
+  printer_name?: string
+  block_reason?: string
   detected_content?: string
   file_path?: string
   file_name?: string

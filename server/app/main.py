@@ -175,6 +175,29 @@ async def _auto_init_schema_and_admin():
                 """
             ))
 
+        # sanctioned_usb_devices (USB device-control allowlist, matched on serial).
+        # Same idempotent-create rationale as taxii_share_config above: existing
+        # installs skip create_all, so create it on every boot.
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS sanctioned_usb_devices (
+                    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    serial_number VARCHAR(255) NOT NULL UNIQUE,
+                    label         VARCHAR(255),
+                    vendor_id     VARCHAR(16),
+                    product_id    VARCHAR(16),
+                    product_name  VARCHAR(255),
+                    manufacturer  VARCHAR(255),
+                    is_enabled    BOOLEAN NOT NULL DEFAULT true,
+                    notes         VARCHAR(1000),
+                    approved_by   UUID,
+                    approved_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            ))
+
         # Seed default admin if no users exist yet.
         # Uses ON CONFLICT to handle race conditions with multiple workers.
         async with _db.postgres_session_factory() as session:

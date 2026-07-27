@@ -1264,7 +1264,8 @@ async def usb_allowlist(
 class PrinterPolicyResponse(BaseModel):
     enforced: bool          # an active printer_control policy exists
     mode: str               # "enforce" | "audit" | "off"
-    scope: str              # "block_all" | "block_network" | "block_local" | "none"
+    scope: str              # "block_all" | "block_network" | "block_local" | "allowlist" | "none"
+    printers: List[str]     # sanctioned printer names (used when scope == "allowlist")
     generated_at: datetime
 
 
@@ -1287,6 +1288,7 @@ async def printer_policy(
     await verify_agent_key(http_request)
     from sqlalchemy import select as _select
     from app.models.policy import Policy
+    from app.models.sanctioned_printer import SanctionedPrinter
 
     policy = (await db.execute(
         _select(Policy).where(
@@ -1299,8 +1301,20 @@ async def printer_policy(
     cfg = (policy.config or {}) if policy else {}
     mode = (cfg.get("mode") or "enforce").lower() if enforced else "off"
     scope = (cfg.get("scope") or "block_network").lower() if enforced else "none"
+
+    # Ship the sanctioned printer names only when allowlist scope is in play, so
+    # the agent can enforce "block anything not on the list" (offline-capable).
+    printers: List[str] = []
+    if enforced and scope == "allowlist":
+        printers = [
+            n for (n,) in (await db.execute(
+                _select(SanctionedPrinter.printer_name).where(
+                    SanctionedPrinter.is_enabled.is_(True)
+                )
+            )).all()
+        ]
     return PrinterPolicyResponse(
-        enforced=enforced, mode=mode, scope=scope,
+        enforced=enforced, mode=mode, scope=scope, printers=printers,
         generated_at=datetime.now(timezone.utc),
     )
 

@@ -198,6 +198,24 @@ async def _auto_init_schema_and_admin():
                 """
             ))
 
+        # sanctioned_printers (printer-control allowlist, matched on printer name).
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS sanctioned_printers (
+                    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    printer_name  VARCHAR(500) NOT NULL UNIQUE,
+                    label         VARCHAR(255),
+                    printer_type  VARCHAR(20),
+                    is_enabled    BOOLEAN NOT NULL DEFAULT true,
+                    notes         VARCHAR(1000),
+                    approved_by   UUID,
+                    approved_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            ))
+
         # Seed default admin if no users exist yet.
         # Uses ON CONFLICT to handle race conditions with multiple workers.
         async with _db.postgres_session_factory() as session:

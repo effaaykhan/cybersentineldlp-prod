@@ -8,6 +8,7 @@ from app.models.permission import Permission, RolePermission, UserPermission
 from app.models.user import User, UserRole
 from app.models.ip_allowlist import IPAllowlistEntry
 from app.models.sanctioned_usb_device import SanctionedUsbDevice
+from app.models.sanctioned_printer import SanctionedPrinter
 from app.models.endpoint import Endpoint
 from app.models.agent_log import AgentLog
 from app.models.device import Device

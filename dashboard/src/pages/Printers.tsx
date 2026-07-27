@@ -29,34 +29,12 @@ export default function Printers() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1.5">Enforce</p>
+      <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold tracking-tight text-cs-ink">Printers</h1>
-        <p className="mt-1 text-sm text-cs-ink-2 max-w-2xl">
-          The <strong>allowlist</strong> of printers permitted on endpoints, matched by name. When a
-          Printer Control policy runs in <span className="num">allowlist</span> scope, only sanctioned
-          printers are allowed — jobs to any other printer are cancelled.
-        </p>
+        {enforced
+          ? <span className="badge badge-success inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Enforcing</span>
+          : <span className="badge badge-warning inline-flex items-center gap-1"><ShieldAlert className="h-3.5 w-3.5" />Not enforced</span>}
       </div>
-
-      {enforced ? (
-        <div className="flex items-center gap-3 rounded-cs-card border border-[color-mix(in_srgb,var(--cs-ok)_30%,var(--cs-panel))] bg-[color-mix(in_srgb,var(--cs-ok)_10%,var(--cs-panel))] p-4">
-          <ShieldCheck className="h-5 w-5 text-cs-emerald shrink-0" />
-          <div className="text-sm text-cs-ink">
-            <strong>Allowlist enforcement is active.</strong> Print jobs to unsanctioned printers are
-            cancelled (or logged, in audit mode). Approve printers below to permit them.
-          </div>
-        </div>
-      ) : (
-        <div className="flex items-center gap-3 rounded-cs-card border border-[color-mix(in_srgb,var(--cs-med)_30%,var(--cs-panel))] bg-[color-mix(in_srgb,var(--cs-med)_10%,var(--cs-panel))] p-4">
-          <ShieldAlert className="h-5 w-5 text-cs-med shrink-0" />
-          <div className="text-sm text-cs-ink">
-            <strong>Allowlist not enforced.</strong> This list applies only when an active{' '}
-            <span className="num">Printer Control</span> policy is set to <span className="num">allowlist</span>{' '}
-            scope (Policies → New). Nothing is blocked by this list yet.
-          </div>
-        </div>
-      )}
 
       <ApproveForm onDone={invalidate} />
 

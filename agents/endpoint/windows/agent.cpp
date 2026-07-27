@@ -2169,6 +2169,21 @@ if (!shouldBlock) {
          return r;
      }
 
+     // Robust printer-name key: trim ends, collapse internal whitespace runs to a
+     // single space, uppercase. Makes allowlist matching tolerant of casing and
+     // stray spaces between the stored name and the live print-job printer name.
+     static std::string NormalizePrinter(const std::string& s) {
+         std::string t;
+         bool sawSpace = false, started = false;
+         for (unsigned char c : s) {
+             if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { sawSpace = true; continue; }
+             if (started && sawSpace) t += ' ';
+             sawSpace = false; started = true;
+             t += (char)std::toupper(c);
+         }
+         return t;
+     }
+
      // Booleans aren't handled by ExtractJsonValue, so scan for "key":true.
      static bool JsonBoolTrue(const std::string& json, const std::string& key) {
          return json.find("\"" + key + "\":true") != std::string::npos
@@ -2290,7 +2305,7 @@ if (!shouldBlock) {
                              if (name[k] == '\\' && k + 1 < name.size() && name[k + 1] == '\\') { un += '\\'; ++k; }
                              else un += name[k];
                          }
-                         if (!un.empty()) printers.insert(ToUpperStr(un));
+                         if (!un.empty()) printers.insert(NormalizePrinter(un));
                          p = q + 1;
                      }
                  }
@@ -2345,7 +2360,7 @@ if (!shouldBlock) {
              std::lock_guard<std::mutex> lock(printerPolicyMutex);
              mode = printerControlMode;
              scope = printerControlScope;
-             sanctioned = sanctionedPrinters.count(ToUpperStr(printerName)) > 0;
+             sanctioned = sanctionedPrinters.count(NormalizePrinter(printerName)) > 0;
          }
          bool matches = false;
          if (scope == "block_all")          matches = true;

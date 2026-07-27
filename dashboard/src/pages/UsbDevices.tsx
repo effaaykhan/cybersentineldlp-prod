@@ -30,35 +30,12 @@ export default function UsbDevices() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1.5">Enforce</p>
+      <div className="flex items-center gap-3">
         <h1 className="text-2xl font-bold tracking-tight text-cs-ink">USB Devices</h1>
-        <p className="mt-1 text-sm text-cs-ink-2 max-w-2xl">
-          The <strong>allowlist</strong> of USB storage devices permitted on endpoints, matched by
-          serial number. With USB device control enabled, only sanctioned devices are allowed —
-          every other device is blocked. Files copied to a sanctioned device are still content-inspected.
-        </p>
+        {enforced
+          ? <span className="badge badge-success inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Enforcing</span>
+          : <span className="badge badge-warning inline-flex items-center gap-1"><ShieldAlert className="h-3.5 w-3.5" />Not enforced</span>}
       </div>
-
-      {/* enforcement status */}
-      {enforced ? (
-        <div className="flex items-center gap-3 rounded-cs-card border border-[color-mix(in_srgb,var(--cs-ok)_30%,var(--cs-panel))] bg-[color-mix(in_srgb,var(--cs-ok)_10%,var(--cs-panel))] p-4">
-          <ShieldCheck className="h-5 w-5 text-cs-emerald shrink-0" />
-          <div className="text-sm text-cs-ink">
-            <strong>Device control is active.</strong> Unsanctioned USB storage devices are blocked
-            (or logged, in audit mode). Approve devices below to permit them.
-          </div>
-        </div>
-      ) : (
-        <div className="flex items-center gap-3 rounded-cs-card border border-[color-mix(in_srgb,var(--cs-med)_30%,var(--cs-panel))] bg-[color-mix(in_srgb,var(--cs-med)_10%,var(--cs-panel))] p-4">
-          <ShieldAlert className="h-5 w-5 text-cs-med shrink-0" />
-          <div className="text-sm text-cs-ink">
-            <strong>Device control is not enforced.</strong> This list is informational until you create
-            an active <span className="num">USB Device Control</span> policy (Policies → New). Nothing is
-            blocked yet.
-          </div>
-        </div>
-      )}
 
       <ApproveForm onDone={invalidate} />
 

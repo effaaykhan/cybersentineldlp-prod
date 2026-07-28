@@ -1209,6 +1209,8 @@ async def authorize_usb_device(
 class UsbAllowlistResponse(BaseModel):
     enforced: bool                 # an active usb_device_control policy exists
     mode: str                      # "enforce" | "audit" | "off"
+    access_mode: str               # "read_write" | "read_only" (USB STORAGE write access)
+    read_only: bool                # convenience flag: access_mode == "read_only"
     count: int
     serials: List[str]             # enabled sanctioned serial numbers
     devices: List[Dict[str, Any]]  # serial + vid/pid/model, for building device IDs
@@ -1244,6 +1246,13 @@ async def usb_allowlist(
     )).scalars().first()
     enforced = policy is not None
     mode = ((policy.config or {}).get("mode") or "enforce").lower() if enforced else "off"
+    # Read-only USB storage: independent of enforce/audit. When set, the agent flips
+    # the global StorageDevicePolicies\WriteProtect flag so USB storage mounts but
+    # writes fail — lets users read from a (sanctioned) drive but not copy data out.
+    access_mode = ((policy.config or {}).get("access_mode") or "read_write").lower() if enforced else "read_write"
+    if access_mode not in ("read_write", "read_only"):
+        access_mode = "read_write"
+    read_only = access_mode == "read_only"
 
     rows = (await db.execute(
         _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
@@ -1255,7 +1264,8 @@ async def usb_allowlist(
         "product_name": d.product_name,
     } for d in rows]
     return UsbAllowlistResponse(
-        enforced=enforced, mode=mode, count=len(devices),
+        enforced=enforced, mode=mode, access_mode=access_mode, read_only=read_only,
+        count=len(devices),
         serials=[d["serial_number"] for d in devices],
         devices=devices, generated_at=datetime.now(timezone.utc),
     )

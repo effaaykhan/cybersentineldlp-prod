@@ -2195,6 +2195,33 @@ if (!shouldBlock) {
      // Fetch the allowlist from the server and (a) cache it for offline connect
      // decisions, (b) program Device Installation Restrictions (Approach A).
      // Called every policy-sync cycle. Never throws.
+     // Read-only USB storage: flip the global StorageDevicePolicies\WriteProtect
+     // DWORD. WriteProtect=1 makes ALL removable storage mount read-only (writes
+     // fail with "media is write-protected"); 0 restores normal read/write. Takes
+     // effect on the next mount (replug). Requires admin — the agent runs as SYSTEM.
+     // Reconciled on every allowlist sync, so clearing the policy restores writes and
+     // never leaves an endpoint stuck read-only.
+     void ApplyUsbWriteProtect(bool readOnly) {
+         HKEY hKey;
+         LONG rc = RegCreateKeyExA(
+             HKEY_LOCAL_MACHINE,
+             "SYSTEM\\CurrentControlSet\\Control\\StorageDevicePolicies",
+             0, nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &hKey, nullptr);
+         if (rc != ERROR_SUCCESS) {
+             logger.Warning("USB WriteProtect: RegCreateKeyEx failed rc=" + std::to_string(rc));
+             return;
+         }
+         DWORD val = readOnly ? 1u : 0u;
+         rc = RegSetValueExA(hKey, "WriteProtect", 0, REG_DWORD,
+                             reinterpret_cast<const BYTE*>(&val), sizeof(val));
+         RegCloseKey(hKey);
+         if (rc == ERROR_SUCCESS)
+             logger.Info(std::string("USB storage WriteProtect = ") +
+                         (readOnly ? "1 (read-only)" : "0 (read/write)"));
+         else
+             logger.Warning("USB WriteProtect: RegSetValueEx failed rc=" + std::to_string(rc));
+     }
+
      void FetchUsbAllowlist() {
          try {
              if (!httpClient) return;
@@ -2211,6 +2238,7 @@ if (!shouldBlock) {
              }
              bool enforced = JsonBoolTrue(response, "enforced");
              std::string mode = config.ExtractJsonValue(response, "mode");
+             bool readOnly = JsonBoolTrue(response, "read_only");
 
              // Parse the "serials":[...] array (ExtractJsonValue can't do arrays).
              std::set<std::string> serials;
@@ -2259,10 +2287,14 @@ if (!shouldBlock) {
              // build may have written so approved devices recover, then leave the
              // kernel policy untouched. (ApplyUsbInstallRestrictions is retained for
              // a future revisit once the instance-id match is validated on hardware.)
-             std::string sig = std::string(enforced ? "1" : "0") + "|" + mode + "|";
+             std::string sig = std::string(enforced ? "1" : "0") + "|" + mode + "|" +
+                               (readOnly ? "ro" : "rw") + "|";
              for (const auto& s : serials) sig += s + ",";
              if (sig != lastAllowlistSig) {
                  ClearUsbInstallRestrictions();
+                 // Read-only USB storage (global WriteProtect). Reconciled here so a
+                 // policy flip either direction is applied within one sync cycle.
+                 ApplyUsbWriteProtect(readOnly);
                  lastAllowlistSig = sig;
              }
 

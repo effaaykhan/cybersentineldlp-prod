@@ -1,6 +1,6 @@
 'use client'
 
-import { ShieldCheck, ShieldAlert, Usb } from 'lucide-react'
+import { ShieldCheck, ShieldAlert, Usb, Pencil, Lock } from 'lucide-react'
 import { USBDeviceControlConfig } from '@/types/policy'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
 
 export default function USBDeviceControlForm({ config, onChange }: Props) {
   const mode = config.mode || 'enforce'
+  const accessMode = config.access_mode || 'read_write'
   return (
     <div className="space-y-4">
       <div className="rounded-cs-card border border-cs-hair bg-cs-panel p-4 flex items-start gap-3">
@@ -62,9 +63,49 @@ export default function USBDeviceControlForm({ config, onChange }: Props) {
         </div>
       </div>
 
+      <div>
+        <label className="text-sm font-semibold text-cs-ink mb-2 block">USB storage access</label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => onChange({ ...config, access_mode: 'read_write' })}
+            className={`text-left rounded-cs-card border p-4 transition ${
+              accessMode === 'read_write'
+                ? 'border-[color-mix(in_srgb,var(--cs-indigo)_45%,var(--cs-panel))] bg-cs-indigo-faint'
+                : 'border-cs-hair bg-cs-panel hover:border-cs-hair-2'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold text-cs-ink">
+              <Pencil className="h-4 w-4 text-cs-indigo" /> Read &amp; write
+            </div>
+            <p className="text-xs text-cs-ink-2 mt-1">
+              Allowed devices work normally (read and write).
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onChange({ ...config, access_mode: 'read_only' })}
+            className={`text-left rounded-cs-card border p-4 transition ${
+              accessMode === 'read_only'
+                ? 'border-[color-mix(in_srgb,var(--cs-indigo)_45%,var(--cs-panel))] bg-cs-indigo-faint'
+                : 'border-cs-hair bg-cs-panel hover:border-cs-hair-2'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold text-cs-ink">
+              <Lock className="h-4 w-4 text-cs-med" /> Read-only
+            </div>
+            <p className="text-xs text-cs-ink-2 mt-1">
+              USB storage mounts but writes are blocked — users can read files, not copy data out.
+              Applies to all removable storage on the endpoint.
+            </p>
+          </button>
+        </div>
+      </div>
+
       <p className="text-xs text-cs-muted">
         The endpoint agent enforces the decision on connect; content inspection of files copied to a
-        sanctioned device continues to apply.
+        sanctioned device continues to apply. Read-only takes effect when a device is (re)connected.
       </p>
     </div>
   )

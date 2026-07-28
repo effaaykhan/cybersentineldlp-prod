@@ -83,6 +83,9 @@ export interface USBDeviceConfig {
 export interface USBDeviceControlConfig {
   // enforce = block unsanctioned devices; audit = allow but log what would block
   mode: 'enforce' | 'audit'
+  // read_write = normal; read_only = USB storage mounts but writes are blocked
+  // (global WriteProtect on the endpoint). Independent of enforce/audit.
+  access_mode?: 'read_write' | 'read_only'
 }
 
 export interface PrinterControlConfig {

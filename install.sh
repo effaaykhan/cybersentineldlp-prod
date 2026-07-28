@@ -394,8 +394,22 @@ if [ "${AUTO_UPDATE:-1}" != "0" ]; then
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 cd "${INSTALL_DIR}" || exit 1
 echo "===== autopull \$(date -Is 2>/dev/null || date) ====="
-docker compose -f "${COMPOSE_FILE}" pull ${AP_SERVICES} 2>&1
-docker compose -f "${COMPOSE_FILE}" up -d ${AP_SERVICES} 2>&1
+# Retry the pull — large GHCR layers can drop mid-download ("unexpected EOF").
+# Completed layers are cached so each retry resumes. If it never completes we
+# skip up -d and leave the running containers untouched (no recreate onto a
+# half-pulled image); the next run retries.
+tries=0
+until docker compose -f "${COMPOSE_FILE}" pull ${AP_SERVICES}; do
+  tries=\$((tries+1))
+  if [ \$tries -ge 5 ]; then
+    echo "pull still failing after \$tries attempts — leaving containers as-is; will retry next run"
+    echo "===== done (pull failed) \$(date -Is 2>/dev/null || date) ====="
+    exit 1
+  fi
+  echo "pull interrupted — retry \$tries/5 in 30s (cached layers resume)"
+  sleep 30
+done
+docker compose -f "${COMPOSE_FILE}" up -d ${AP_SERVICES}
 echo "===== done \$(date -Is 2>/dev/null || date) ====="
 WRAP
     chmod +x "${AP_WRAPPER}"

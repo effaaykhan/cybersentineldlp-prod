@@ -258,3 +258,5 @@ update-summary.md
 
 # policy sync helper (root *.sh rule would hide it)
 !scripts/sync-policies.sh
+!scripts/policy-sync-cron.sh
+!scripts/install-policy-sync-cron.sh

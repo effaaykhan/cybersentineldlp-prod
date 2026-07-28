@@ -372,6 +372,55 @@ else
     c_yellow "      curl -fsSL ${RAW_BASE}/validate.sh -o ${INSTALL_DIR}/validate.sh && sudo bash ${INSTALL_DIR}/validate.sh"
 fi
 
+# ─── 8d. Auto-update (hourly image pull) ──────────────────────────────
+# Keeps this deployment current: an hourly cron pulls the latest manager +
+# dashboard images from GHCR (rebuilt by CI on every push) and recreates ONLY
+# those services when the image actually changed — the data tier is never
+# touched. Default ON so a fresh deploy stays up to date; disable with
+# AUTO_UPDATE=0 if you want pinned / manually-controlled updates (recommended
+# for production that must gate every change).
+#
+# NOTE: this does NOT enable the dev-policy mirror (DLP_SEED_EXPORTED_POLICIES);
+# that stays opt-in via install-mirror-autopull.sh, so client installs keep only
+# the curated default policies.
+if [ "${AUTO_UPDATE:-1}" != "0" ]; then
+    AP_WRAPPER="${INSTALL_DIR}/auto-pull.sh"
+    AP_LOG="/var/log/cybersentineldlp-autopull.log"
+    AP_SERVICES="${AUTO_UPDATE_SERVICES:-manager dashboard}"
+    AP_MINUTE="${AUTO_UPDATE_MINUTE:-37}"
+    say "Installing hourly auto-update (image pull) — disable with AUTO_UPDATE=0"
+    cat > "${AP_WRAPPER}" <<WRAP
+#!/usr/bin/env bash
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+cd "${INSTALL_DIR}" || exit 1
+echo "===== autopull \$(date -Is 2>/dev/null || date) ====="
+docker compose -f "${COMPOSE_FILE}" pull ${AP_SERVICES} 2>&1
+docker compose -f "${COMPOSE_FILE}" up -d ${AP_SERVICES} 2>&1
+echo "===== done \$(date -Is 2>/dev/null || date) ====="
+WRAP
+    chmod +x "${AP_WRAPPER}"
+    touch "${AP_LOG}"
+    _cron_tmp="$(mktemp)"
+    crontab -l 2>/dev/null | grep -vE "auto-pull\.sh|CyberSentinel DLP — auto-update" > "${_cron_tmp}" || true
+    grep -q '^MAILTO=' "${_cron_tmp}" || printf 'MAILTO=""\n' >> "${_cron_tmp}"
+    printf '%s\n%s %s\n' "# CyberSentinel DLP — auto-update (hourly image pull)" \
+        "${AP_MINUTE} * * * *" "${AP_WRAPPER} >> ${AP_LOG} 2>&1" >> "${_cron_tmp}"
+    crontab "${_cron_tmp}" && rm -f "${_cron_tmp}"
+    cat > /etc/logrotate.d/cybersentineldlp-autopull <<'ROT'
+/var/log/cybersentineldlp-autopull.log {
+    weekly
+    rotate 4
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+ROT
+    say "Auto-update installed (hourly at minute ${AP_MINUTE}). Log: ${AP_LOG}"
+else
+    say "Auto-update disabled (AUTO_UPDATE=0) — update manually: docker compose -f ${COMPOSE_FILE} pull && up -d"
+fi
+
 # ─── 9. Print connection details ──────────────────────────────────────
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
 
@@ -438,6 +487,10 @@ echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs -f manager"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} pull && \\"
 echo "    docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} up -d   # rolling update"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} down       # stop everything"
+if [ "${AUTO_UPDATE:-1}" != "0" ]; then
+echo "  tail -f /var/log/cybersentineldlp-autopull.log             # hourly auto-update log"
+echo "  crontab -e   # edit/disable the auto-update schedule (or reinstall with AUTO_UPDATE=0)"
+fi
 echo
 c_blue "Next: install agents on endpoints (run on Windows boxes):"
 echo "  powershell -ExecutionPolicy Bypass -Command \"irm ${RAW_BASE}/install-agent.ps1 | iex\""

@@ -1,28 +1,15 @@
-# Constraints file to prevent pip from auto-upgrading packages
-# This ensures tensorflow 2.15.0 doesn't get upgraded to 2.18.x
+# Constraints file to prevent pip from auto-upgrading key packages.
 
-# Pin numpy to prevent upgrades
+# Pin numpy (scikit-learn / pandas build against it)
 numpy==1.26.2
-
-# Pin ML frameworks to exact versions
-tensorflow==2.15.0
-# torch is pinned in requirements.txt with +cpu suffix
-# Cannot use +cpu in constraints as it causes pip conflicts
-# transformers bumped 4.36.0 → 4.38.2 during the SAST audit to patch
-# CVE-2024-3568 (RCE via TFPreTrainedModel.from_pretrained). 4.38.x is
-# still compatible with tensorflow 2.15.0.
-transformers==4.38.2
-spacy==3.7.2
 
 # Pin data science packages
 pandas==2.1.4
 scikit-learn==1.3.2
 
-# Prevent keras upgrade (tensorflow dependency)
-keras>=2.15.0,<2.16.0
-
-# Prevent protobuf issues
+# Keep protobuf in a safe range (transitive dep of grpc / google libs)
 protobuf>=3.20.3,<5.0.0
 
-# Prevent h5py issues
-h5py>=3.10.0,<3.12.0
+# NOTE: tensorflow / torch / transformers / spacy / keras / h5py pins were removed
+# along with those packages — they were imported nowhere and bloated the image
+# (~5GB unpacked). Re-add deliberately if a deep-learning model is ever introduced.

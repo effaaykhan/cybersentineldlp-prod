@@ -10,9 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libpq-dev \
-    wget \
-    pkg-config \
-    libhdf5-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,10 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 COPY constraints.txt .
 
-# Make pip resilient to flaky networks — the ML stack downloads include
-# tensorflow (~475MB) and torch (~800MB). A read-timeout on one chunk
-# used to abort the entire build and wipe ~3 minutes of progress.
-#
+# Make pip resilient to flaky networks (retry failed chunk downloads).
 #   PIP_DEFAULT_TIMEOUT=600 → 10 minutes before pip gives up on a read
 #   PIP_RETRIES=10          → automatic retry of failed downloads
 ENV PIP_DEFAULT_TIMEOUT=600 \
@@ -35,10 +29,9 @@ RUN pip install --no-cache-dir --upgrade pip==24.0 setuptools wheel && \
     pip install --no-cache-dir --constraint constraints.txt -r requirements.txt
 
 # Verify critical packages are installed correctly
-RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}')" && \
-    python -c "import tensorflow; print(f'TensorFlow version: {tensorflow.__version__}')" && \
-    python -c "import torch; print(f'PyTorch version: {torch.__version__}')" && \
-    python -c "import pandas; print(f'Pandas version: {pandas.__version__}')"
+RUN python -c "import numpy; print(f'NumPy {numpy.__version__}')" && \
+    python -c "import pandas; print(f'Pandas {pandas.__version__}')" && \
+    python -c "import sklearn; print(f'scikit-learn {sklearn.__version__}')"
 
 # Production stage
 FROM python:3.11-slim

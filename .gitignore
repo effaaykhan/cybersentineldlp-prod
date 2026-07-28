@@ -226,6 +226,9 @@ backend/
 cybersentineldlp-dlp-agent-windows/
 cybersentineldlp-dlp-server/
 
+# Agent build backups (build.sh writes cybersentineldlp_agent.exe.backup.<ts>)
+agents/endpoint/windows/*.exe.backup.*
+
 # Redis dumps
 dump.rdb
 

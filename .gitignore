@@ -260,3 +260,4 @@ update-summary.md
 !scripts/sync-policies.sh
 !scripts/policy-sync-cron.sh
 !scripts/install-policy-sync-cron.sh
+!scripts/install-mirror-autopull.sh

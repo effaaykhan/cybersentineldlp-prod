@@ -150,6 +150,11 @@ services:
       # to "development" in .env only for local debugging.
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - DEBUG=${DEBUG:-False}
+      # Policy seeding: also seed the .204 dev-server policy export when set to 1
+      # (mirror/test servers opt in via .env). Default 0 so client installs get
+      # only the curated default_policies.json. Must be listed here or .env can
+      # never reach the container (the seeder reads it via os.getenv).
+      - DLP_SEED_EXPORTED_POLICIES=${DLP_SEED_EXPORTED_POLICIES:-0}
 
       # OpenSearch
       - OPENSEARCH_HOST=opensearch

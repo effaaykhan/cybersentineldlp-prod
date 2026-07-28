@@ -483,6 +483,23 @@ async def _seed_default_policies():
                 return
             admin_id = admin_row[0]
 
+            # Optionally append the DEV-server (.204) policy export so a mirror
+            # server picks up policies created there. Applied ONLY when the target
+            # opts in via DLP_SEED_EXPORTED_POLICIES=1 (e.g. the .76 test server),
+            # so client installs still get only the curated default_policies.json.
+            # Same INSERT ... ON CONFLICT (name) DO NOTHING loop below, so it adds
+            # newly-created policies and never overwrites operator edits.
+            if os.getenv("DLP_SEED_EXPORTED_POLICIES", "0").lower() in ("1", "true", "yes"):
+                exported_file = Path(__file__).parent.parent / "data" / "exported_policies.json"
+                if exported_file.exists():
+                    try:
+                        extra = json.loads(exported_file.read_text())
+                        policies_data = policies_data + extra
+                        logger.info("Including exported (.204 mirror) policies in seed",
+                                    exported=len(extra))
+                    except Exception as _ee:
+                        logger.warning("Could not read exported_policies.json", error=str(_ee))
+
             inserted = 0
             for policy in policies_data:
                 _res = await session.execute(

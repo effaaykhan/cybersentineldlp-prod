@@ -171,6 +171,9 @@ models/checkpoints/
 !package.json
 !package-lock.json
 !tsconfig.json
+# Policy seed files (default = curated; exported = .204 mirror) must be tracked
+!server/data/default_policies.json
+!server/data/exported_policies.json
 *.parquet
 *.feather
 
@@ -252,3 +255,6 @@ samples/ml-training/*.csv
 # Local artifacts — not source, keep out of the repo
 cybersentinel-cloud-guard.zip
 update-summary.md
+
+# policy sync helper (root *.sh rule would hide it)
+!scripts/sync-policies.sh

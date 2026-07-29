@@ -238,6 +238,36 @@ endpoint's `agent_id`** across the change, so a migrated machine keeps its
 dashboard history instead of re-registering as a new agent. Just run the one-liner
 above on every endpoint — no manual cleanup of the old agent is needed.
 
+#### To update the agent (binary only):
+Use this to roll out a **new agent build** without a full reinstall. It fetches only
+the latest CI-compiled `cybersentineldlp_agent.exe`, verifies its SHA-256, stops the
+agent, swaps the binary in place, and restarts it — configuration, logs and the
+scheduled task are left untouched. (The agent `.exe` is rebuilt automatically by CI
+on every change, so this always pulls the newest binary.)
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/update-agent.ps1 | iex"
+```
+
+Run it in an **elevated** PowerShell. It is safe to re-run (skips if already up to
+date), verifies the hash before replacing (a corrupt download never clobbers a
+working binary), and keeps the previous binary as `cybersentineldlp_agent.exe.bak`.
+
+To confirm the update took, compare the installed binary's hash against the
+published one — `MATCH` means you're on the latest build:
+
+```powershell
+$exe = 'C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe'
+$installed = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpper()
+$published = (Invoke-WebRequest 'https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256' -UseBasicParsing).Content.Trim().Split()[0].ToUpper()
+if ($installed -eq $published) { 'MATCH - latest build' } else { 'MISMATCH - not updated' }
+```
+
+> **install vs update:** `install-agent.ps1` does a full (re)install — removes any
+> prior agent, writes config, registers the scheduled task, installs OCR deps.
+> `update-agent.ps1` only swaps the compiled binary and leaves everything else in
+> place. Use install for first setup / migration, update for routine build refreshes.
+
 #### To start the agent:
 ```powershell
 Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"

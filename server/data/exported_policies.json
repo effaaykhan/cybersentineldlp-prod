@@ -1714,6 +1714,32 @@
     }
   },
   {
+    "name": "application control policy",
+    "description": "",
+    "enabled": true,
+    "priority": 100,
+    "type": "application_control",
+    "severity": "medium",
+    "config": {
+      "mode": "allowlist",
+      "applications": [
+        "chrome.exe",
+        "msedge.exe"
+      ],
+      "channels": [
+        "network"
+      ],
+      "exceptions": {}
+    },
+    "conditions": {
+      "match": "all",
+      "rules": []
+    },
+    "actions": {
+      "log": {}
+    }
+  },
+  {
     "name": "pqc_test",
     "description": "",
     "enabled": true,

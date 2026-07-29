@@ -1722,17 +1722,10 @@
     "severity": "medium",
     "config": {
       "mode": "allowlist",
-      "applications": [
-        "chrome.exe",
-        "msedge.exe"
-      ],
-      "channels": [
-        "network"
-      ],
+      "applications": [],
+      "channels": [],
       "exceptions": {
-        "applications": [
-          "curl.exe"
-        ]
+        "applications": []
       }
     },
     "conditions": {
@@ -1778,6 +1771,26 @@
     },
     "actions": {
       "alert": {}
+    }
+  },
+  {
+    "name": "wireless control policy",
+    "description": "",
+    "enabled": true,
+    "priority": 100,
+    "type": "wireless_transfer_control",
+    "severity": "medium",
+    "config": {
+      "mode": "enforce",
+      "block_bluetooth_file_transfer": true,
+      "block_nearby_sharing": true
+    },
+    "conditions": {
+      "match": "all",
+      "rules": []
+    },
+    "actions": {
+      "log": {}
     }
   }
 ]

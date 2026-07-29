@@ -13,6 +13,7 @@ export type PolicyType =
   | 'printer_control'
   | 'application_control'
   | 'wireless_transfer_control'
+  | 'network_share_control'
   | 'google_drive_local_monitoring'
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
@@ -88,6 +89,18 @@ export interface USBDeviceControlConfig {
   // read_write = normal; read_only = USB storage mounts but writes are blocked
   // (global WriteProtect on the endpoint). Independent of enforce/audit.
   access_mode?: 'read_write' | 'read_only'
+}
+
+export interface NetworkShareControlConfig {
+  // block_all = block every copy to a network share; content_aware = block only
+  // Confidential/Restricted files. Exceptions apply in both modes.
+  mode: 'block_all' | 'content_aware'
+  exceptions: {
+    shares?: string[]       // UNC prefixes always allowed, e.g. \\fileserver\public
+    users?: string[]        // users / groups exempt
+    paths?: string[]        // source path prefixes exempt
+    file_types?: string[]   // extensions exempt (no leading dot)
+  }
 }
 
 export interface WirelessTransferControlConfig {
@@ -215,6 +228,7 @@ export type PolicyConfig =
   | USBDeviceControlConfig
   | ApplicationControlConfig
   | WirelessTransferControlConfig
+  | NetworkShareControlConfig
   | PrinterControlConfig
   | PrintContentConfig
   | USBTransferConfig

@@ -1423,6 +1423,67 @@ async def application_control(
     )
 
 
+# ── Network file-share transfer control ───────────────────────────────────
+# Allow/block copying files to network file shares (mapped network drives; UNC
+# resolved via WNetGetConnection). Two modes: block_all (block every copy to a
+# share) or content_aware (block only Confidential/Restricted). Exceptions exempt
+# specific shares/servers, users, source paths, or file types. Agent enforces
+# locally on the network-drive watcher — same fetch-and-enforce model as the others.
+class NetworkSharePolicyResponse(BaseModel):
+    enforced: bool                        # an active network_share_control policy exists
+    mode: str                             # "block_all" | "content_aware" | "off"
+    exception_shares: List[str]           # UNC prefixes always allowed (lowercased)
+    exception_users: List[str]            # users/groups exempt (lowercased)
+    exception_paths: List[str]            # source path prefixes exempt (case preserved)
+    exception_file_types: List[str]       # extensions exempt (no leading dot)
+    generated_at: datetime
+
+
+@router.get("/{agent_id}/network-share-policy", response_model=NetworkSharePolicyResponse)
+async def network_share_policy(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    The network-share transfer-control policy the endpoint enforces locally. Agent
+    watches mapped network drives; for a file copied to a share (not matching an
+    exception) it blocks (block_all) or classifies + blocks if sensitive
+    (content_aware). Requires X-Agent-Key (backward-compatible: no key -> allowed).
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "network_share_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    if not policy:
+        return NetworkSharePolicyResponse(
+            enforced=False, mode="off",
+            exception_shares=[], exception_users=[], exception_paths=[],
+            exception_file_types=[], generated_at=datetime.now(timezone.utc),
+        )
+    cfg = policy.config or {}
+    mode = (cfg.get("mode") or "block_all").lower()
+    if mode not in ("block_all", "content_aware"):
+        mode = "block_all"
+    exc = cfg.get("exceptions") or {}
+    return NetworkSharePolicyResponse(
+        enforced=True, mode=mode,
+        exception_shares=_lc_list(exc.get("shares")),
+        exception_users=_lc_list(exc.get("users")),
+        exception_paths=[str(p).strip() for p in (exc.get("paths") or []) if str(p).strip()],
+        exception_file_types=[str(t).strip().lower().lstrip(".") for t in (exc.get("file_types") or []) if str(t).strip()],
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 # ── Wireless / Bluetooth transfer control ─────────────────────────────────
 # Block file transfer over Bluetooth (Object Push / File Transfer profiles) and
 # Wi-Fi Direct / Nearby Sharing, while leaving audio (headphones) + input (HID)

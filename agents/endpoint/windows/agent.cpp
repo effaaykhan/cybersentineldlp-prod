@@ -1880,6 +1880,18 @@ static ClassificationResult Classify(const std::string& content,
     // audio/HID devices working. Reconciled each sync via a change signature.
     std::string lastWirelessSig;
 
+    // ── NETWORK FILE-SHARE TRANSFER CONTROL ────────────────────────────────
+    // Synced from GET /agents/{id}/network-share-policy. The network-drive watcher
+    // (hardware-validated follow-up) will enforce IsNetworkShareBlocked() on files
+    // copied to mapped network drives. All values lowercase except paths.
+    std::atomic<bool> netShareEnforced{false};
+    std::string netShareMode;                        // "block_all" | "content_aware" | "off"
+    std::set<std::string> netShareExceptShares;      // lowercase UNC prefixes
+    std::set<std::string> netShareExceptUsers;       // lowercase
+    std::vector<std::string> netShareExceptPaths;    // lowercase source-path prefixes
+    std::set<std::string> netShareExceptTypes;       // lowercase extensions (no dot)
+    std::mutex netShareMutex;
+
     // Screen-capture classification detail. classifyText (run on the content-scan
     // thread) stashes the most recent SENSITIVE screen verdict's score + matched
     // data-type labels here; the screen_capture event callback reads them back so
@@ -2566,6 +2578,58 @@ if (!shouldBlock) {
          } catch (...) {
              logger.Error("FetchWirelessPolicy failed");
          }
+     }
+
+     // Fetch the network file-share transfer-control policy each sync.
+     void FetchNetworkSharePolicy() {
+         try {
+             if (!httpClient) return;
+             auto [status, response] = httpClient->Get(
+                 "/agents/" + config.agentId + "/network-share-policy");
+             if (status != 200) return;   // keep last-known on error/outage
+             bool enforced    = JsonBoolTrue(response, "enforced");
+             std::string mode = ToLower(config.ExtractJsonValue(response, "mode"));
+             auto lc = [](std::vector<std::string> v) { for (auto& s : v) s = ToLower(s); return v; };
+             auto shares = lc(ParseJsonStrArray(response, "exception_shares"));
+             auto users  = lc(ParseJsonStrArray(response, "exception_users"));
+             auto paths  = lc(ParseJsonStrArray(response, "exception_paths"));
+             auto types  = lc(ParseJsonStrArray(response, "exception_file_types"));
+             {
+                 std::lock_guard<std::mutex> lock(netShareMutex);
+                 netShareMode = mode;
+                 netShareExceptShares = std::set<std::string>(shares.begin(), shares.end());
+                 netShareExceptUsers  = std::set<std::string>(users.begin(), users.end());
+                 netShareExceptPaths  = paths;
+                 netShareExceptTypes  = std::set<std::string>(types.begin(), types.end());
+             }
+             netShareEnforced.store(enforced);
+             logger.Info("Network share control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " except_shares=" + std::to_string(shares.size()));
+         } catch (...) {
+             logger.Error("FetchNetworkSharePolicy failed");
+         }
+     }
+
+     // Decision for a file copied to a network share. Returns true = BLOCK. destUnc =
+     // the resolved \\server\share of the destination drive; isSensitive = content
+     // classification (used only in content_aware mode). Any exception match allows.
+     bool IsNetworkShareBlocked(const std::string& destUnc, const std::string& sourcePath,
+                                const std::string& userName, const std::string& fileExt,
+                                bool isSensitive) {
+         if (!netShareEnforced.load()) return false;
+         std::string unc = ToLower(destUnc), src = ToLower(sourcePath),
+                     usr = ToLower(userName), ext = ToLower(fileExt);
+         if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+         std::lock_guard<std::mutex> lock(netShareMutex);
+         if (!usr.empty() && netShareExceptUsers.count(usr)) return false;
+         if (!ext.empty() && netShareExceptTypes.count(ext)) return false;
+         for (const auto& pfx : netShareExceptShares)
+             if (!pfx.empty() && unc.rfind(pfx, 0) == 0) return false;
+         for (const auto& pfx : netShareExceptPaths)
+             if (!pfx.empty() && src.rfind(pfx, 0) == 0) return false;
+         if (netShareMode == "content_aware") return isSensitive;   // block only sensitive
+         return true;                                               // block_all
      }
 
      // True if the printer is a NETWORK printer (shared/IP), false if local
@@ -4353,6 +4417,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              FetchApplicationControl();
              // Refresh the wireless / Bluetooth transfer-control policy too.
              FetchWirelessPolicy();
+             // Refresh the network file-share transfer-control policy too.
+             FetchNetworkSharePolicy();
          } catch (const std::exception& e) {
              logger.Error(std::string("Failed to sync policies: ") + e.what());
          } catch (...) {

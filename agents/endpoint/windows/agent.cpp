@@ -4106,6 +4106,16 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  else                         logger.Info(msg);
              };
 
+             // Managed-application file control for the network channel: block an
+             // upload when application_control disallows the acting process. When no
+             // application_control policy is active IsAppActionAllowed() returns true,
+             // so this is a no-op and existing exfil behaviour is unchanged.
+             nemCfg.appAction = [this](const std::string& proc,
+                                       const std::string& path,
+                                       const std::string& ext) {
+                 return !IsAppActionAllowed("network", proc, GetUsername(), path, ext);
+             };
+
              if (NetworkExfilMonitor::Start(nemCfg)) {
                  logger.Info("Network Exfiltration Monitor started");
              } else {

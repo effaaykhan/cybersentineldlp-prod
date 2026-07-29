@@ -22,6 +22,7 @@
  #include <wbemidl.h>
  #include <shlobj.h>
  #include <comdef.h>
+ #include <winnetwk.h>   // WNetGetConnectionA — resolve mapped drive -> UNC (needs -lmpr)
  
  #include <iostream>
  #include <fstream>
@@ -2603,6 +2604,7 @@ if (!shouldBlock) {
                  netShareExceptTypes  = std::set<std::string>(types.begin(), types.end());
              }
              netShareEnforced.store(enforced);
+             if (enforced) allowEvents.store(true);   // let the watcher emit audit events
              logger.Info("Network share control: enforced=" + std::string(enforced ? "true" : "false") +
                          " mode=" + (mode.empty() ? "off" : mode) +
                          " except_shares=" + std::to_string(shares.size()));
@@ -3685,6 +3687,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          workerThreads.emplace_back(&DLPAgent::FileSystemMonitor, this);
         // workerThreads.emplace_back(&DLPAgent::RemovableDriveMonitor, this);
          workerThreads.emplace_back(&DLPAgent::UsbFileTransferMonitor, this);
+         // Network file-share transfer monitor (audit mode).
+         workerThreads.emplace_back(&DLPAgent::NetworkShareTransferMonitor, this);
          workerThreads.emplace_back(&DLPAgent::MonitorUSBTransferDirectories, this);
 
          // ── Screen Capture Monitor ──
@@ -8197,6 +8201,115 @@ if (shouldMonitor) {
         }
         
         logger.Info("USB file transfer monitoring stopped");
+    }
+
+    // Resolve a mapped network drive ("Z:") to its UNC (\\server\share).
+    std::string ResolveDriveUnc(const std::string& drivePath) {
+        char remote[1024]; DWORD len = sizeof(remote);
+        if (WNetGetConnectionA(drivePath.c_str(), remote, &len) == NO_ERROR)
+            return std::string(remote);
+        return drivePath;
+    }
+
+    // Network file-share transfer monitor — AUDIT ONLY. Polls mapped network drives
+    // (DRIVE_REMOTE); on a NEW file it evaluates IsNetworkShareBlocked() and, if it
+    // would block, LOGS + raises an event but NEVER deletes. Pre-existing files are
+    // ignored (recorded on first sight). Enforcement (quarantine/delete) is a
+    // validated follow-up, so this build cannot cause data loss.
+    void NetworkShareTransferMonitor() {
+        logger.Info("Network share transfer monitoring started (AUDIT mode — no deletion)");
+        std::map<std::string, std::set<std::string>> seenByDrive;
+        std::set<std::string> knownDrives;
+        while (running) {
+            if (!netShareEnforced.load()) {
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                continue;
+            }
+            try {
+                DWORD mask = GetLogicalDrives();
+                std::set<std::string> current;
+                for (char L = 'A'; L <= 'Z'; ++L) {
+                    if (!(mask & (1u << (L - 'A')))) continue;
+                    std::string drive = std::string(1, L) + ":";
+                    if (GetDriveTypeA((drive + "\\").c_str()) != DRIVE_REMOTE) continue;
+                    current.insert(drive);
+                    std::vector<std::pair<std::string, std::string>> files;
+                    try { ScanDirectoryRecursiveUSB(drive, drive, files); } catch (...) { continue; }
+                    if (knownDrives.find(drive) == knownDrives.end()) {
+                        std::set<std::string> existing;
+                        for (auto& f : files) existing.insert(f.second);   // pre-existing: never act
+                        seenByDrive[drive] = existing;
+                        knownDrives.insert(drive);
+                        logger.Info("[NETSHARE] Watching " + drive + " -> " + ResolveDriveUnc(drive) +
+                                    " (" + std::to_string(existing.size()) + " existing ignored)");
+                        continue;
+                    }
+                    auto& seen = seenByDrive[drive];
+                    std::string unc = ResolveDriveUnc(drive);
+                    for (auto& f : files) {
+                        if (seen.count(f.second)) continue;
+                        seen.insert(f.second);
+                        HandleNetworkShareNewFile(drive, unc, f.first, f.second);
+                    }
+                }
+                for (auto it = knownDrives.begin(); it != knownDrives.end();) {
+                    if (!current.count(*it)) { seenByDrive.erase(*it); it = knownDrives.erase(it); }
+                    else ++it;
+                }
+            } catch (...) {
+                logger.Debug("Network share monitor iteration error");
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+        }
+        logger.Info("Network share transfer monitoring stopped");
+    }
+
+    void HandleNetworkShareNewFile(const std::string& drive, const std::string& unc,
+                                   const std::string& fileName, const std::string& relPath) {
+        try {
+            std::string fullPath = drive + "\\" + relPath;
+            std::string ext;
+            size_t dot = fileName.find_last_of('.');
+            if (dot != std::string::npos) ext = fileName.substr(dot + 1);
+            char uname[256]; DWORD un = sizeof(uname);
+            std::string username = GetUserNameA(uname, &un) ? std::string(uname) : "";
+
+            bool contentAware;
+            { std::lock_guard<std::mutex> lock(netShareMutex); contentAware = (netShareMode == "content_aware"); }
+
+            bool isSensitive = false;
+            std::string level = "n/a";
+            if (contentAware) {
+                PolicyEvaluationResult r = EvaluatePolicyRealtime(fileName, fullPath, unc, "network_share_transfer");
+                level = r.classificationLevel;
+                isSensitive = (level == "Confidential" || level == "Restricted");
+            }
+
+            if (!IsNetworkShareBlocked(unc, fullPath, username, ext, isSensitive)) return;   // allowed / exception
+
+            logger.Warning("NETSHARE_WOULD_BLOCK user=" + username + " dest=" + unc +
+                           " file=" + relPath + " level=" + level + " (AUDIT — not deleted)");
+            JsonBuilder json;
+            json.AddString("event_id", GenerateUUID());
+            json.AddString("event_type", "network_share_transfer");
+            json.AddString("severity", "high");
+            json.AddString("agent_id", config.agentId);
+            json.AddString("source_type", "endpoint");
+            json.AddString("action", "audit");                 // would block; nothing deleted in this build
+            json.AddString("block_reason", "network_share_control");
+            json.AddString("destination_type", "network_share");
+            json.AddString("destination", unc);
+            json.AddString("file_name", fileName);
+            json.AddString("file_path", fullPath);
+            json.AddString("classification_level", level);
+            json.AddString("user_email", username);
+            json.AddString("description",
+                           "File copy to network share would be blocked by policy (audit): " + relPath);
+            json.AddString("timestamp", GetCurrentTimestampISO());
+            SendEvent(json.Build());
+        } catch (...) {
+            logger.Debug("HandleNetworkShareNewFile error");
+        }
     }
 
     void MarkExistingUSBFilesAsProcessed(const std::string& drivePath) {

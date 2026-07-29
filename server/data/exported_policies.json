@@ -1729,7 +1729,11 @@
       "channels": [
         "network"
       ],
-      "exceptions": {}
+      "exceptions": {
+        "applications": [
+          "curl.exe"
+        ]
+      }
     },
     "conditions": {
       "match": "all",

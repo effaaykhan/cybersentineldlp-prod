@@ -2428,12 +2428,12 @@ if (!shouldBlock) {
              {
                  std::lock_guard<std::mutex> lock(appControlMutex);
                  appControlMode = mode;
-                 appControlApps.assign(apps.begin(), apps.end());
-                 appControlChannels.assign(chans.begin(), chans.end());
-                 appControlExceptApps.assign(exApps.begin(), exApps.end());
-                 appControlExceptUsers.assign(exUsers.begin(), exUsers.end());
-                 appControlExceptPaths = exPaths;
-                 appControlExceptTypes.assign(exTypes.begin(), exTypes.end());
+                 appControlApps        = std::set<std::string>(apps.begin(), apps.end());
+                 appControlChannels    = std::set<std::string>(chans.begin(), chans.end());
+                 appControlExceptApps  = std::set<std::string>(exApps.begin(), exApps.end());
+                 appControlExceptUsers = std::set<std::string>(exUsers.begin(), exUsers.end());
+                 appControlExceptPaths = exPaths;   // vector<string>
+                 appControlExceptTypes = std::set<std::string>(exTypes.begin(), exTypes.end());
              }
              appControlEnforced.store(enforced);
              logger.Info("Application control: enforced=" + std::string(enforced ? "true" : "false") +

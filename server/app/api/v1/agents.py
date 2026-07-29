@@ -1423,6 +1423,61 @@ async def application_control(
     )
 
 
+# ── Wireless / Bluetooth transfer control ─────────────────────────────────
+# Block file transfer over Bluetooth (Object Push / File Transfer profiles) and
+# Wi-Fi Direct / Nearby Sharing, while leaving audio (headphones) + input (HID)
+# devices working. The agent applies the OS-level disables locally and reconciles
+# them each sync — same fetch-and-enforce model as the other device controls.
+class WirelessPolicyResponse(BaseModel):
+    enforced: bool                        # an active wireless_transfer_control policy exists
+    mode: str                             # "enforce" | "audit" | "off"
+    block_bluetooth_file_transfer: bool   # block Bluetooth OPP/FTP (audio/HID stay allowed)
+    block_nearby_sharing: bool            # block Wi-Fi Direct / Windows Nearby Sharing
+    generated_at: datetime
+
+
+@router.get("/{agent_id}/wireless-policy", response_model=WirelessPolicyResponse)
+async def wireless_policy(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    The wireless-transfer control policy the endpoint enforces locally. Agent, in
+    enforce mode, disables Bluetooth file-transfer profiles (audio/HID untouched)
+    and/or Wi-Fi Direct / Nearby Sharing; in audit mode it logs "would block" only.
+    Requires X-Agent-Key (backward-compatible: no key -> allowed).
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "wireless_transfer_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    if not policy:
+        return WirelessPolicyResponse(
+            enforced=False, mode="off",
+            block_bluetooth_file_transfer=False, block_nearby_sharing=False,
+            generated_at=datetime.now(timezone.utc),
+        )
+    cfg = policy.config or {}
+    mode = (cfg.get("mode") or "enforce").lower()
+    if mode not in ("enforce", "audit"):
+        mode = "enforce"
+    return WirelessPolicyResponse(
+        enforced=True, mode=mode,
+        block_bluetooth_file_transfer=bool(cfg.get("block_bluetooth_file_transfer", True)),
+        block_nearby_sharing=bool(cfg.get("block_nearby_sharing", True)),
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
 async def evaluate_policy_realtime(
     agent_id: str,

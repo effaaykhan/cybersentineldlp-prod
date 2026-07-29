@@ -41,7 +41,7 @@ _LOOPBACK = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128"
 _AGENT_HEARTBEAT = re.compile(r"^/api/v1/agents/[^/]+/heartbeat/?$")
 _AGENT_SYNC = re.compile(r"^/api/v1/agents/[^/]+/(policies/sync|policy/evaluate|device/authorize)/?$")
 _AGENT_UNREG = re.compile(r"^/api/v1/agents/[^/]+/unregister/?$")
-_AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/(usb-allowlist|printer-policy|application-control)/?$")
+_AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/(usb-allowlist|printer-policy|application-control|wireless-policy)/?$")
 
 
 def bump_ip_allowlist_cache() -> None:

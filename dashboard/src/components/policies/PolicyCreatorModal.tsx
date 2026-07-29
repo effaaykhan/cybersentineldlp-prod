@@ -10,6 +10,7 @@ import {
   USBDeviceControlConfig,
   PrinterControlConfig,
   ApplicationControlConfig,
+  WirelessTransferControlConfig,
   PrintContentConfig,
   USBTransferConfig,
   FileTransferConfig,
@@ -25,6 +26,7 @@ import USBTransferPolicyForm from './USBTransferPolicyForm'
 import USBDeviceControlForm from './USBDeviceControlForm'
 import PrinterControlForm from './PrinterControlForm'
 import ApplicationControlForm from './ApplicationControlForm'
+import WirelessTransferControlForm from './WirelessTransferControlForm'
 import PrintContentForm from './PrintContentForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
@@ -89,7 +91,7 @@ const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in PO
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
@@ -176,6 +178,9 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
     case 'application_control':
       return { mode: 'allowlist', applications: [], channels: [], exceptions: {} } as ApplicationControlConfig
 
+    case 'wireless_transfer_control':
+      return { mode: 'enforce', block_bluetooth_file_transfer: true, block_nearby_sharing: true } as WirelessTransferControlConfig
+
     case 'print_content_prevention':
       return { mode: 'enforce', levels: ['Confidential', 'Restricted'] } as PrintContentConfig
 
@@ -235,7 +240,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -670,6 +675,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'application_control' && (
                   <ApplicationControlForm
                     config={config as ApplicationControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'wireless_transfer_control' && (
+                  <WirelessTransferControlForm
+                    config={config as WirelessTransferControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

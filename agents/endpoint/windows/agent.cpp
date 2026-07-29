@@ -1874,6 +1874,12 @@ static ClassificationResult Classify(const std::string& content,
     std::set<std::string> appControlExceptTypes;        // extensions, no leading dot
     std::mutex appControlMutex;
 
+    // ── WIRELESS / BLUETOOTH TRANSFER CONTROL ──────────────────────────────
+    // Synced from GET /agents/{id}/wireless-policy. Blocks Bluetooth file transfer
+    // (the built-in fsquirt wizard) + Wi-Fi Direct / Nearby Sharing while leaving
+    // audio/HID devices working. Reconciled each sync via a change signature.
+    std::string lastWirelessSig;
+
     // Screen-capture classification detail. classifyText (run on the content-scan
     // thread) stashes the most recent SENSITIVE screen verdict's score + matched
     // data-type labels here; the screen_capture event callback reads them back so
@@ -2470,6 +2476,94 @@ if (!shouldBlock) {
          bool listed = appControlApps.count(proc) > 0;
          if (appControlMode == "blocklist") return !listed;   // block listed apps
          return listed;                                       // allowlist: allow only listed
+     }
+
+     // ── Wireless / Bluetooth transfer control ──────────────────────────────
+     // Set (block=true) or clear an Image File Execution Options "Debugger" that
+     // prevents <exeName> from launching. Used to block the built-in Bluetooth file
+     // transfer wizard (fsquirt.exe) without touching audio/HID profiles.
+     void SetIFEODebugger(const std::string& exeName, bool block) {
+         std::string sub = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
+                           "Image File Execution Options\\" + exeName;
+         if (block) {
+             HKEY k;
+             if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
+                 // cmd /c exit swallows the launch and returns immediately, so the
+                 // target never runs. cmd.exe is always present.
+                 const char* dbg = "\"C:\\Windows\\System32\\cmd.exe\" /c exit";
+                 RegSetValueExA(k, "Debugger", 0, REG_SZ,
+                                reinterpret_cast<const BYTE*>(dbg), (DWORD)strlen(dbg) + 1);
+                 RegCloseKey(k);
+             }
+         } else {
+             HKEY k;
+             if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                 RegDeleteValueA(k, "Debugger");
+                 RegCloseKey(k);
+             }
+         }
+     }
+
+     // Set a policy DWORD under HKLM when `set`, else delete it (restore default).
+     void SetPolicyDword(const std::string& sub, const std::string& name, DWORD value, bool set) {
+         HKEY k;
+         if (set) {
+             if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
+                 RegSetValueExA(k, name.c_str(), 0, REG_DWORD,
+                                reinterpret_cast<const BYTE*>(&value), sizeof(value));
+                 RegCloseKey(k);
+             }
+         } else {
+             if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                 RegDeleteValueA(k, name.c_str());
+                 RegCloseKey(k);
+             }
+         }
+     }
+
+     // Apply/reconcile the wireless-transfer controls. Reconciled both ways so
+     // clearing the policy restores the channels. NOTE: covers the built-in
+     // Bluetooth file wizard + the Nearby Sharing/CDP policy; validate on hardware.
+     void ApplyWirelessControls(bool enforce, bool blockBt, bool blockNearby) {
+         // Bluetooth file transfer — block the fsquirt.exe send/receive wizard.
+         // Audio (A2DP/HFP) and input (HID) profiles are untouched, so headphones,
+         // keyboards and mice keep working.
+         SetIFEODebugger("fsquirt.exe", enforce && blockBt);
+
+         // Wi-Fi Direct / Nearby Sharing — disable the Connected Devices Platform
+         // policy the feature relies on.
+         SetPolicyDword("SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+                        "EnableCdp", 0, enforce && blockNearby);
+     }
+
+     // Fetch the wireless-transfer control policy each sync + reconcile enforcement.
+     void FetchWirelessPolicy() {
+         try {
+             if (!httpClient) return;
+             auto [status, response] = httpClient->Get(
+                 "/agents/" + config.agentId + "/wireless-policy");
+             if (status != 200) return;   // keep last-known on error/outage
+             bool enforced    = JsonBoolTrue(response, "enforced");
+             std::string mode = ToLower(config.ExtractJsonValue(response, "mode"));
+             bool blockBt     = JsonBoolTrue(response, "block_bluetooth_file_transfer");
+             bool blockNearby = JsonBoolTrue(response, "block_nearby_sharing");
+             bool enforce     = enforced && mode == "enforce";   // audit => don't apply
+
+             std::string sig = std::string(enforce ? "1" : "0") +
+                               (blockBt ? "b" : "-") + (blockNearby ? "n" : "-");
+             if (sig != lastWirelessSig) {
+                 ApplyWirelessControls(enforce, blockBt, blockNearby);
+                 lastWirelessSig = sig;
+             }
+             logger.Info("Wireless control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " bt_file_transfer=" + std::string(blockBt ? "block" : "allow") +
+                         " nearby_sharing=" + std::string(blockNearby ? "block" : "allow"));
+         } catch (...) {
+             logger.Error("FetchWirelessPolicy failed");
+         }
      }
 
      // True if the printer is a NETWORK printer (shared/IP), false if local
@@ -4255,6 +4349,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              FetchPrinterPolicy();
              // Refresh the managed-application file-control policy too.
              FetchApplicationControl();
+             // Refresh the wireless / Bluetooth transfer-control policy too.
+             FetchWirelessPolicy();
          } catch (const std::exception& e) {
              logger.Error(std::string("Failed to sync policies: ") + e.what());
          } catch (...) {

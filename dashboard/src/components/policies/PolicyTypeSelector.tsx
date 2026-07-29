@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer, AppWindow } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer, AppWindow, Bluetooth } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -61,6 +61,12 @@ const policyTypes: Array<{
     label: 'Application Control',
     description: 'Allow or block file actions (USB, upload, print…) by the application doing them, with exceptions',
     icon: AppWindow
+  },
+  {
+    type: 'wireless_transfer_control',
+    label: 'Bluetooth & Wireless Control',
+    description: 'Block file transfer over Bluetooth and Wi-Fi Direct / Nearby Sharing — headphones, keyboard and mouse keep working',
+    icon: Bluetooth
   },
   {
     type: 'classification_aware_policy',

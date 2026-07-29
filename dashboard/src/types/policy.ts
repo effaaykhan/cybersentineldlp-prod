@@ -12,6 +12,7 @@ export type PolicyType =
   | 'usb_device_control'
   | 'printer_control'
   | 'application_control'
+  | 'wireless_transfer_control'
   | 'google_drive_local_monitoring'
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
@@ -87,6 +88,13 @@ export interface USBDeviceControlConfig {
   // read_write = normal; read_only = USB storage mounts but writes are blocked
   // (global WriteProtect on the endpoint). Independent of enforce/audit.
   access_mode?: 'read_write' | 'read_only'
+}
+
+export interface WirelessTransferControlConfig {
+  // enforce = apply the OS-level disables; audit = log "would block" only
+  mode: 'enforce' | 'audit'
+  block_bluetooth_file_transfer: boolean   // block Bluetooth OPP/FTP; audio + HID stay allowed
+  block_nearby_sharing: boolean            // block Wi-Fi Direct / Windows Nearby Sharing
 }
 
 export interface ApplicationControlConfig {
@@ -206,6 +214,7 @@ export type PolicyConfig =
   | USBDeviceConfig
   | USBDeviceControlConfig
   | ApplicationControlConfig
+  | WirelessTransferControlConfig
   | PrinterControlConfig
   | PrintContentConfig
   | USBTransferConfig

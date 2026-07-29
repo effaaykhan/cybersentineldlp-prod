@@ -11,6 +11,7 @@ export type PolicyType =
   | 'usb_file_transfer_monitoring'
   | 'usb_device_control'
   | 'printer_control'
+  | 'application_control'
   | 'google_drive_local_monitoring'
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
@@ -86,6 +87,20 @@ export interface USBDeviceControlConfig {
   // read_write = normal; read_only = USB storage mounts but writes are blocked
   // (global WriteProtect on the endpoint). Independent of enforce/audit.
   access_mode?: 'read_write' | 'read_only'
+}
+
+export interface ApplicationControlConfig {
+  // allowlist = only the managed apps may perform the action (block the rest)
+  // blocklist = the managed apps are blocked from the action (allow the rest)
+  mode: 'allowlist' | 'blocklist'
+  applications: string[]          // managed app executables, e.g. "chrome.exe"
+  channels: string[]              // actions covered: usb | network | email | print | cloud; empty = all
+  exceptions: {
+    applications?: string[]       // exe names always allowed
+    users?: string[]              // users / groups exempt
+    paths?: string[]              // path prefixes exempt
+    file_types?: string[]         // extensions exempt (no leading dot)
+  }
 }
 
 export interface PrinterControlConfig {
@@ -190,6 +205,7 @@ export type PolicyConfig =
   | FileTransferConfig
   | USBDeviceConfig
   | USBDeviceControlConfig
+  | ApplicationControlConfig
   | PrinterControlConfig
   | PrintContentConfig
   | USBTransferConfig

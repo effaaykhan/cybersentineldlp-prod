@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer, AppWindow } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -55,6 +55,12 @@ const policyTypes: Array<{
     label: 'Printer Control',
     description: 'Manage how local and network printers operate — block all, network, or local printing',
     icon: Printer
+  },
+  {
+    type: 'application_control',
+    label: 'Application Control',
+    description: 'Allow or block file actions (USB, upload, print…) by the application doing them, with exceptions',
+    icon: AppWindow
   },
   {
     type: 'classification_aware_policy',

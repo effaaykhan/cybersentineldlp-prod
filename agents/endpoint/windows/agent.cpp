@@ -1859,6 +1859,21 @@ static ClassificationResult Classify(const std::string& content,
     std::string printContentMode;                       // "enforce" | "audit" | "off" (guarded by printerPolicyMutex)
     std::mutex printerPolicyMutex;
 
+    // ── MANAGED-APPLICATION FILE CONTROL (allow/block an action by acting app) ──
+    // Synced from GET /agents/{id}/application-control. A covered channel handler
+    // calls IsAppActionAllowed() with the acting process, user, path and file type;
+    // any exception match allows, otherwise allowlist blocks non-listed apps and
+    // blocklist blocks listed apps. All values stored lowercase.
+    std::atomic<bool> appControlEnforced{false};
+    std::string appControlMode;                         // "allowlist" | "blocklist" | "off"
+    std::set<std::string> appControlApps;               // managed app exe names
+    std::set<std::string> appControlChannels;           // covered channels; empty = all
+    std::set<std::string> appControlExceptApps;
+    std::set<std::string> appControlExceptUsers;
+    std::vector<std::string> appControlExceptPaths;     // path prefixes
+    std::set<std::string> appControlExceptTypes;        // extensions, no leading dot
+    std::mutex appControlMutex;
+
     // Screen-capture classification detail. classifyText (run on the content-scan
     // thread) stashes the most recent SENSITIVE screen verdict's score + matched
     // data-type labels here; the screen_capture event callback reads them back so
@@ -2363,6 +2378,98 @@ if (!shouldBlock) {
          } catch (...) {
              logger.Error("FetchPrinterPolicy failed");
          }
+     }
+
+     // Parse a top-level JSON string array  "key":["a","b"]  into a vector,
+     // JSON-backslash-unescaped. (Same limitation as the printers parse: assumes
+     // no ']' or escaped '"' inside the values — fine for exe names/paths/types.)
+     std::vector<std::string> ParseJsonStrArray(const std::string& resp, const std::string& key) {
+         std::vector<std::string> out;
+         size_t ap = resp.find("\"" + key + "\"");
+         if (ap == std::string::npos) return out;
+         size_t lb = resp.find('[', ap);
+         size_t rb = (lb == std::string::npos) ? std::string::npos : resp.find(']', lb);
+         if (lb == std::string::npos || rb == std::string::npos) return out;
+         std::string arr = resp.substr(lb + 1, rb - lb - 1);
+         size_t p = 0;
+         while ((p = arr.find('"', p)) != std::string::npos) {
+             size_t q = arr.find('"', p + 1);
+             if (q == std::string::npos) break;
+             std::string s = arr.substr(p + 1, q - p - 1), un; un.reserve(s.size());
+             for (size_t k = 0; k < s.size(); ++k) {
+                 if (s[k] == '\\' && k + 1 < s.size() && s[k + 1] == '\\') { un += '\\'; ++k; }
+                 else un += s[k];
+             }
+             if (!un.empty()) out.push_back(un);
+             p = q + 1;
+         }
+         return out;
+     }
+
+     // Fetch the managed-application file-control policy. Called each sync.
+     void FetchApplicationControl() {
+         try {
+             if (!httpClient) return;
+             auto [status, response] = httpClient->Get(
+                 "/agents/" + config.agentId + "/application-control");
+             if (status != 200) return;   // keep last-known on error/outage
+             bool enforced = JsonBoolTrue(response, "enforced");
+             std::string mode = ToLower(config.ExtractJsonValue(response, "mode"));
+             auto lcvec = [](std::vector<std::string> v) {
+                 for (auto& s : v) s = ToLower(s);
+                 return v;
+             };
+             auto apps    = lcvec(ParseJsonStrArray(response, "applications"));
+             auto chans   = lcvec(ParseJsonStrArray(response, "channels"));
+             auto exApps  = lcvec(ParseJsonStrArray(response, "exception_applications"));
+             auto exUsers = lcvec(ParseJsonStrArray(response, "exception_users"));
+             auto exPaths = lcvec(ParseJsonStrArray(response, "exception_paths"));
+             auto exTypes = lcvec(ParseJsonStrArray(response, "exception_file_types"));
+             {
+                 std::lock_guard<std::mutex> lock(appControlMutex);
+                 appControlMode = mode;
+                 appControlApps.assign(apps.begin(), apps.end());
+                 appControlChannels.assign(chans.begin(), chans.end());
+                 appControlExceptApps.assign(exApps.begin(), exApps.end());
+                 appControlExceptUsers.assign(exUsers.begin(), exUsers.end());
+                 appControlExceptPaths = exPaths;
+                 appControlExceptTypes.assign(exTypes.begin(), exTypes.end());
+             }
+             appControlEnforced.store(enforced);
+             logger.Info("Application control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " apps=" + std::to_string(apps.size()) +
+                         " channels=" + std::to_string(chans.size()));
+         } catch (...) {
+             logger.Error("FetchApplicationControl failed");
+         }
+     }
+
+     // Local verdict for the managed-application file control. Returns true if the
+     // action is ALLOWED, false if it must be BLOCKED. A channel handler calls this
+     // with the acting process exe, current user, target path and file extension.
+     // Any single exception match allows; otherwise allowlist allows only listed
+     // apps and blocklist blocks listed apps. Fail-open when no policy is active.
+     bool IsAppActionAllowed(const std::string& channel, const std::string& processName,
+                             const std::string& userName, const std::string& filePath,
+                             const std::string& fileExt) {
+         if (!appControlEnforced.load()) return true;
+         std::string ch = ToLower(channel), proc = ToLower(processName),
+                     usr = ToLower(userName), ext = ToLower(fileExt), path = ToLower(filePath);
+         if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+         std::lock_guard<std::mutex> lock(appControlMutex);
+         // 1) channel coverage — empty list means "all channels"
+         if (!appControlChannels.empty() && appControlChannels.count(ch) == 0) return true;
+         // 2) exceptions — any match allows
+         if (!proc.empty() && appControlExceptApps.count(proc)) return true;
+         if (!usr.empty() && appControlExceptUsers.count(usr)) return true;
+         if (!ext.empty()  && appControlExceptTypes.count(ext)) return true;
+         for (const auto& pfx : appControlExceptPaths)
+             if (!pfx.empty() && path.rfind(pfx, 0) == 0) return true;
+         // 3) mode
+         bool listed = appControlApps.count(proc) > 0;
+         if (appControlMode == "blocklist") return !listed;   // block listed apps
+         return listed;                                       // allowlist: allow only listed
      }
 
      // True if the printer is a NETWORK printer (shared/IP), false if local
@@ -4136,6 +4243,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              FetchUsbAllowlist();
              // Refresh the printer device-control policy on the same cadence.
              FetchPrinterPolicy();
+             // Refresh the managed-application file-control policy too.
+             FetchApplicationControl();
          } catch (const std::exception& e) {
              logger.Error(std::string("Failed to sync policies: ") + e.what());
          } catch (...) {

@@ -9,6 +9,7 @@ import {
   USBDeviceConfig,
   USBDeviceControlConfig,
   PrinterControlConfig,
+  ApplicationControlConfig,
   PrintContentConfig,
   USBTransferConfig,
   FileTransferConfig,
@@ -23,6 +24,7 @@ import USBDevicePolicyForm from './USBDevicePolicyForm'
 import USBTransferPolicyForm from './USBTransferPolicyForm'
 import USBDeviceControlForm from './USBDeviceControlForm'
 import PrinterControlForm from './PrinterControlForm'
+import ApplicationControlForm from './ApplicationControlForm'
 import PrintContentForm from './PrintContentForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
@@ -87,7 +89,7 @@ const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in PO
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
@@ -171,6 +173,9 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
     case 'printer_control':
       return { mode: 'enforce', scope: 'block_network' } as PrinterControlConfig
 
+    case 'application_control':
+      return { mode: 'allowlist', applications: [], channels: [], exceptions: {} } as ApplicationControlConfig
+
     case 'print_content_prevention':
       return { mode: 'enforce', levels: ['Confidential', 'Restricted'] } as PrintContentConfig
 
@@ -230,7 +235,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -658,6 +663,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'printer_control' && (
                   <PrinterControlForm
                     config={config as PrinterControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'application_control' && (
+                  <ApplicationControlForm
+                    config={config as ApplicationControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

@@ -1346,6 +1346,83 @@ async def printer_policy(
     )
 
 
+# ── Managed-application file control ──────────────────────────────────────
+# Allow/block a file ACTION (copy to USB, upload, email, print, …) based on the
+# APPLICATION performing it. The endpoint returns the managed-app list, the mode,
+# the channels it covers, and the exception sets (apps / users / paths / file
+# types). The agent knows the acting process + user + path + type locally, so it
+# enforces the verdict on the endpoint — same fetch-and-enforce model as USB
+# device control and printer control.
+class ApplicationControlResponse(BaseModel):
+    enforced: bool                       # an active application_control policy exists
+    mode: str                            # "allowlist" (only managed apps) | "blocklist" (managed apps blocked) | "off"
+    applications: List[str]              # managed application exe names (lowercased)
+    channels: List[str]                  # channels covered; empty = all channels
+    exception_applications: List[str]    # exe names always allowed
+    exception_users: List[str]           # users/groups exempt
+    exception_paths: List[str]           # path prefixes exempt
+    exception_file_types: List[str]      # extensions exempt (no leading dot)
+    generated_at: datetime
+
+
+def _lc_list(v):
+    return [str(x).strip().lower() for x in (v or []) if str(x).strip()]
+
+
+@router.get("/{agent_id}/application-control", response_model=ApplicationControlResponse)
+async def application_control(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    The managed-application file-control policy the endpoint enforces locally.
+    Agent applies, for an action on <channel> by process P (user U, path F, type T):
+      1. if channels is non-empty and <channel> not in channels -> not covered, ALLOW;
+      2. if P in exception_applications, or U in exception_users, or F starts with any
+         exception_paths, or T in exception_file_types -> exempt, ALLOW;
+      3. else mode == "allowlist": BLOCK if P not in applications;
+              mode == "blocklist": BLOCK if P in applications.
+    Requires X-Agent-Key (backward-compatible: no key -> allowed).
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "application_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    if not policy:
+        return ApplicationControlResponse(
+            enforced=False, mode="off", applications=[], channels=[],
+            exception_applications=[], exception_users=[], exception_paths=[],
+            exception_file_types=[], generated_at=datetime.now(timezone.utc),
+        )
+
+    cfg = policy.config or {}
+    mode = (cfg.get("mode") or "allowlist").lower()
+    if mode not in ("allowlist", "blocklist"):
+        mode = "allowlist"
+    exc = cfg.get("exceptions") or {}
+    return ApplicationControlResponse(
+        enforced=True,
+        mode=mode,
+        applications=_lc_list(cfg.get("applications")),
+        channels=_lc_list(cfg.get("channels")),
+        exception_applications=_lc_list(exc.get("applications")),
+        exception_users=_lc_list(exc.get("users")),
+        # paths keep their case (Windows is case-insensitive; the agent lowercases at compare)
+        exception_paths=[str(p).strip() for p in (exc.get("paths") or []) if str(p).strip()],
+        exception_file_types=[str(t).strip().lower().lstrip(".") for t in (exc.get("file_types") or []) if str(t).strip()],
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
 async def evaluate_policy_realtime(
     agent_id: str,

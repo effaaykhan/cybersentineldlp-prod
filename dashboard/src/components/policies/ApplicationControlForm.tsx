@@ -95,7 +95,7 @@ export default function ApplicationControlForm({ config, onChange }: Props) {
         </label>
         <textarea
           rows={2}
-          value={fromList(config.applications)}
+          defaultValue={fromList(config.applications)}
           onChange={(e) => onChange({ ...config, applications: toList(e.target.value) })}
           placeholder="chrome.exe, MyLineOfBusinessApp.exe"
           className="w-full rounded-cs-input border border-cs-hair bg-cs-panel px-3 py-2 text-sm text-cs-ink placeholder:text-cs-muted"
@@ -135,7 +135,7 @@ export default function ApplicationControlForm({ config, onChange }: Props) {
           <div>
             <label className="text-xs font-medium text-cs-ink-2 mb-1 block">Applications</label>
             <input
-              value={fromList(exceptions.applications)}
+              defaultValue={fromList(exceptions.applications)}
               onChange={(e) => setExc('applications', e.target.value)}
               placeholder="viewer.exe"
               className="w-full rounded-cs-input border border-cs-hair bg-cs-bg px-3 py-2 text-sm text-cs-ink placeholder:text-cs-muted"
@@ -144,7 +144,7 @@ export default function ApplicationControlForm({ config, onChange }: Props) {
           <div>
             <label className="text-xs font-medium text-cs-ink-2 mb-1 block">Users / groups</label>
             <input
-              value={fromList(exceptions.users)}
+              defaultValue={fromList(exceptions.users)}
               onChange={(e) => setExc('users', e.target.value)}
               placeholder="DOMAIN\\admin"
               className="w-full rounded-cs-input border border-cs-hair bg-cs-bg px-3 py-2 text-sm text-cs-ink placeholder:text-cs-muted"
@@ -153,7 +153,7 @@ export default function ApplicationControlForm({ config, onChange }: Props) {
           <div>
             <label className="text-xs font-medium text-cs-ink-2 mb-1 block">Paths / destinations</label>
             <input
-              value={fromList(exceptions.paths)}
+              defaultValue={fromList(exceptions.paths)}
               onChange={(e) => setExc('paths', e.target.value)}
               placeholder="C:\\Public\\"
               className="w-full rounded-cs-input border border-cs-hair bg-cs-bg px-3 py-2 text-sm text-cs-ink placeholder:text-cs-muted"
@@ -162,7 +162,7 @@ export default function ApplicationControlForm({ config, onChange }: Props) {
           <div>
             <label className="text-xs font-medium text-cs-ink-2 mb-1 block">File types</label>
             <input
-              value={fromList(exceptions.file_types)}
+              defaultValue={fromList(exceptions.file_types)}
               onChange={(e) => setExc('file_types', e.target.value)}
               placeholder="txt, log"
               className="w-full rounded-cs-input border border-cs-hair bg-cs-bg px-3 py-2 text-sm text-cs-ink placeholder:text-cs-muted"

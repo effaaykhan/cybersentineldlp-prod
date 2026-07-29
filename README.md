@@ -5,6 +5,7 @@ Data Loss Prevention (DLP) is the practice of detecting and preventing unauthori
 ## Key Features
 
 - **Endpoint Monitoring** — File system, USB transfers, clipboard, screen capture, and print job monitoring on Windows and Linux
+- **Device & Application Control** — Whitelist USB storage devices (by serial number) and printers, set USB storage to read-only (reads allowed, writes blocked), and allow/block file actions (network upload, print) by the **acting application** — with exceptions for apps, users, paths, and file types
 - **Kernel-Level Enforcement** — Windows minifilter driver intercepts file operations at the IRP level for tamper-proof blocking
 - **Content Classification** — 20+ detection patterns with Luhn checksum validation, SHA-256 fingerprinting, keyword matching, and Shannon entropy analysis
 - **Deep Content Inspection** — reads inside binary documents (PDF/DOCX/XLSX/PPTX), expands archives (zip/tar/gz/7z) with zip-bomb limits, and **OCRs scanned PDFs and images** (Tesseract) so a photographed secret is caught like a typed one. Content that cannot be inspected is never treated as clean — policy decides.

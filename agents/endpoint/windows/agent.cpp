@@ -2482,18 +2482,16 @@ if (!shouldBlock) {
      // Set (block=true) or clear an Image File Execution Options "Debugger" that
      // prevents <exeName> from launching. Used to block the built-in Bluetooth file
      // transfer wizard (fsquirt.exe) without touching audio/HID profiles.
-     void SetIFEODebugger(const std::string& exeName, bool block) {
+     void SetIFEODebugger(const std::string& exeName, const std::string& debuggerValue, bool block) {
          std::string sub = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
                            "Image File Execution Options\\" + exeName;
          if (block) {
              HKEY k;
              if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
                                  REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
-                 // cmd /c exit swallows the launch and returns immediately, so the
-                 // target never runs. cmd.exe is always present.
-                 const char* dbg = "\"C:\\Windows\\System32\\cmd.exe\" /c exit";
                  RegSetValueExA(k, "Debugger", 0, REG_SZ,
-                                reinterpret_cast<const BYTE*>(dbg), (DWORD)strlen(dbg) + 1);
+                                reinterpret_cast<const BYTE*>(debuggerValue.c_str()),
+                                (DWORD)debuggerValue.size() + 1);
                  RegCloseKey(k);
              }
          } else {
@@ -2527,10 +2525,14 @@ if (!shouldBlock) {
      // clearing the policy restores the channels. NOTE: covers the built-in
      // Bluetooth file wizard + the Nearby Sharing/CDP policy; validate on hardware.
      void ApplyWirelessControls(bool enforce, bool blockBt, bool blockNearby) {
-         // Bluetooth file transfer — block the fsquirt.exe send/receive wizard.
-         // Audio (A2DP/HFP) and input (HID) profiles are untouched, so headphones,
-         // keyboards and mice keep working.
-         SetIFEODebugger("fsquirt.exe", enforce && blockBt);
+         // Bluetooth file transfer — redirect the fsquirt.exe wizard (via IFEO) to
+         // THIS agent with --blocked-launch, so each attempt is logged + raised as a
+         // dashboard event and fsquirt never runs. Audio (A2DP/HFP) and input (HID)
+         // profiles are untouched, so headphones, keyboards and mice keep working.
+         char selfPath[MAX_PATH] = {0};
+         GetModuleFileNameA(nullptr, selfPath, MAX_PATH);
+         std::string dbg = std::string("\"") + selfPath + "\" --blocked-launch";
+         SetIFEODebugger("fsquirt.exe", dbg, enforce && blockBt);
 
          // Wi-Fi Direct / Nearby Sharing — disable the Connected Devices Platform
          // policy the feature relies on.
@@ -9277,7 +9279,66 @@ void ShowUsage() {
     std::cout << "  cybersentineldlp_agent.exe --bg\n\n";
 }
  
+// Invoked when Windows launches us in place of fsquirt.exe (the Bluetooth file
+// transfer wizard) via the IFEO Debugger set by the wireless-control policy. That
+// means a user tried a Bluetooth file transfer while it is blocked. Log it + raise
+// a dashboard event, then return WITHOUT running fsquirt so the transfer is blocked.
+// Runs briefly as the user who launched fsquirt; must never hang or crash.
+int HandleBlockedLaunch(int argc, char* argv[]) {
+    try {
+        // Everything after --blocked-launch is the original fsquirt path + args.
+        std::string attempt;
+        for (int i = 1; i < argc; i++) {
+            if (std::string(argv[i]) == "--blocked-launch") {
+                for (int j = i + 1; j < argc; j++) { if (!attempt.empty()) attempt += " "; attempt += argv[j]; }
+                break;
+            }
+        }
+        char uname[256]; DWORD un = sizeof(uname);
+        std::string username = GetUserNameA(uname, &un) ? std::string(uname) : "unknown";
+
+        // Local audit line (best-effort — may be unwritable for a standard user).
+        try {
+            Logger logger;
+            logger.Warning("BLUETOOTH_TRANSFER_BLOCKED user=" + username +
+                           " attempt=" + (attempt.empty() ? "fsquirt" : attempt));
+        } catch (...) {}
+
+        // Dashboard event (the reliable audit record — HTTP needs no file perms).
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);   // GenerateUUID -> CoCreateGuid
+        AgentConfig cfg(ExeRelativePath("agent_config.json"));
+        JsonBuilder json;
+        json.AddString("event_id", GenerateUUID());
+        json.AddString("event_type", "bluetooth_file_transfer");
+        json.AddString("event_subtype", "bluetooth_file_transfer");
+        json.AddString("severity", "high");
+        json.AddString("agent_id", cfg.agentId);
+        json.AddString("source_type", "endpoint");
+        json.AddString("action", "blocked");
+        json.AddString("block_reason", "wireless_control");
+        json.AddString("destination_type", "bluetooth");
+        json.AddString("user_email", username);
+        json.AddString("description",
+                       "Bluetooth file transfer blocked by wireless control policy (user " + username + ")");
+        try {
+            HttpClient client(cfg.serverUrl);
+            client.Post("/events", json.Build());
+        } catch (...) {}
+        CoUninitialize();
+    } catch (...) {}
+    return 0;   // never run fsquirt
+}
+
 int main(int argc, char* argv[]) {
+    // Blocked-launch hook: we were run in place of fsquirt.exe (Bluetooth file
+    // transfer) because the wireless policy blocks it. Log + emit an event, then
+    // exit without running fsquirt. Handle this BEFORE any normal startup.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--blocked-launch") {
+            return HandleBlockedLaunch(argc, argv);
+        }
+    }
+
     // Check for help flag
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];

@@ -791,16 +791,15 @@
       "rules": [
         {
           "field": "event_type",
-          "operator": "in",
           "value": [
             "network_exfil",
             "network_transfer",
             "network_upload"
-          ]
+          ],
+          "operator": "in"
         },
         {
           "field": "transfer_method",
-          "operator": "in",
           "value": [
             "ftp",
             "sftp",
@@ -816,7 +815,16 @@
             "webdav",
             "rsync",
             "cloud_cli"
-          ]
+          ],
+          "operator": "in"
+        },
+        {
+          "field": "classification_level",
+          "value": [
+            "Confidential",
+            "Restricted"
+          ],
+          "operator": "in"
         }
       ]
     },

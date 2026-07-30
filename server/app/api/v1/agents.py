@@ -1167,10 +1167,12 @@ async def authorize_usb_device(
     if enforced:
         mode = ((policy.config or {}).get("mode") or "enforce").lower()
 
-    # Match against the enabled allowlist by each exception's chosen attribute:
-    # serial / manufacturer / device_id (vid:pid) / model. A device is sanctioned if
-    # it matches ANY enabled exception on that exception's attribute (case-insensitive).
+    # Match against the enabled registry by each exception's chosen attribute:
+    # serial / manufacturer / device_id (vid:pid) / model (case-insensitive). A
+    # device is sanctioned if it matches an ANY enabled allow row; an explicit deny
+    # row wins over any allow (e.g. allow a whole vendor but disallow one bad serial).
     sanctioned = False
+    explicitly_denied = False
     rows = (await db.execute(
         _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
     )).scalars().all()
@@ -1178,22 +1180,38 @@ async def authorize_usb_device(
     dev_mfg = (request.manufacturer or "").strip().lower()
     dev_model = (request.product_name or "").strip().lower()
     dev_devid = ((request.vendor_id or "").strip() + ":" + (request.product_id or "").strip()).lower()
-    for r in rows:
+
+    def _row_matches(r) -> bool:
         mt = (getattr(r, "match_type", None) or "serial")
         mv = getattr(r, "match_value", None) or (r.serial_number if mt == "serial" else None)
         mv = (mv or "").strip().lower()
         if not mv:
-            continue
-        if ((mt == "serial" and dev_serial and mv == dev_serial) or
+            return False
+        return ((mt == "serial" and dev_serial and mv == dev_serial) or
                 (mt == "manufacturer" and dev_mfg and mv == dev_mfg) or
                 (mt == "device_id" and dev_devid != ":" and mv == dev_devid) or
-                (mt == "model" and dev_model and mv == dev_model)):
-            sanctioned = True
+                (mt == "model" and dev_model and mv == dev_model))
+
+    for r in rows:
+        if not _row_matches(r):
+            continue
+        if (getattr(r, "decision", None) or "allow") == "deny":
+            explicitly_denied = True   # deny overrides any allow
             break
+        sanctioned = True
+    if explicitly_denied:
+        sanctioned = False
 
     would_block = False
     if not enforced:
         action, reason = "allow", "USB device control not enabled — monitoring only"
+    elif explicitly_denied:
+        # Admin explicitly disallowed this device — block even in audit mode is
+        # inconsistent with audit semantics, so honour mode but flag would_block.
+        if mode == "audit":
+            action, would_block, reason = "allow", True, "Device is explicitly disallowed — would be blocked (audit mode)"
+        else:
+            action, reason = "block", "Device is explicitly disallowed by admin"
     elif sanctioned:
         action, reason = "allow", "Device is sanctioned"
     else:
@@ -1273,6 +1291,10 @@ async def usb_allowlist(
     rows = (await db.execute(
         _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
     )).scalars().all()
+    # Only ALLOW rows feed the agent's sanctioned sets — deny rows must never leak
+    # into the offline allow lists (they mean the opposite).
+    allow_rows = [d for d in rows if (getattr(d, "decision", None) or "allow") == "allow"]
+
     devices = [{
         "serial_number": d.serial_number,
         "vendor_id": d.vendor_id,
@@ -1281,12 +1303,12 @@ async def usb_allowlist(
         "manufacturer": d.manufacturer,
         "match_type": (getattr(d, "match_type", None) or "serial"),
         "match_value": getattr(d, "match_value", None),
-    } for d in rows]
+    } for d in allow_rows]
 
     def _mv(mt: str) -> List[str]:
-        # each row's match value (fall back to serial for legacy serial rows).
+        # each allow row's match value (fall back to serial for legacy serial rows).
         out = []
-        for d in rows:
+        for d in allow_rows:
             row_mt = (getattr(d, "match_type", None) or "serial")
             if row_mt != mt:
                 continue

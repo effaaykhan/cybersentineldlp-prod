@@ -186,6 +186,8 @@ async def _auto_init_schema_and_admin():
                     serial_number VARCHAR(255),
                     match_type    VARCHAR(20) NOT NULL DEFAULT 'serial',
                     match_value   VARCHAR(255),
+                    decision      VARCHAR(10) NOT NULL DEFAULT 'allow',
+                    alias         VARCHAR(255),
                     label         VARCHAR(255),
                     vendor_id     VARCHAR(16),
                     product_id    VARCHAR(16),
@@ -208,6 +210,10 @@ async def _auto_init_schema_and_admin():
             for _stmt in (
                 "ALTER TABLE sanctioned_usb_devices ADD COLUMN IF NOT EXISTS match_type  VARCHAR(20) NOT NULL DEFAULT 'serial'",
                 "ALTER TABLE sanctioned_usb_devices ADD COLUMN IF NOT EXISTS match_value VARCHAR(255)",
+                # allow | deny — 'deny' is an explicit disallow that overrides any allow.
+                "ALTER TABLE sanctioned_usb_devices ADD COLUMN IF NOT EXISTS decision VARCHAR(10) NOT NULL DEFAULT 'allow'",
+                # optional friendly name for quick identification.
+                "ALTER TABLE sanctioned_usb_devices ADD COLUMN IF NOT EXISTS alias VARCHAR(255)",
                 "UPDATE sanctioned_usb_devices SET match_value = serial_number WHERE match_value IS NULL AND serial_number IS NOT NULL",
                 "ALTER TABLE sanctioned_usb_devices ALTER COLUMN serial_number DROP NOT NULL",
                 "ALTER TABLE sanctioned_usb_devices DROP CONSTRAINT IF EXISTS sanctioned_usb_devices_serial_number_key",

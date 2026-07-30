@@ -35,6 +35,11 @@ class SanctionedUsbDevice(Base):
     # A device is authorized iff it matches ANY enabled row on that row's attribute.
     match_type = Column(String(20), nullable=False, default="serial", server_default="serial")
     match_value = Column(String(255), nullable=True)
+    # allow  -> sanctioned (permitted when device control is enforced)
+    # deny   -> explicitly disallowed; overrides any matching allow row.
+    decision = Column(String(10), nullable=False, default="allow", server_default="allow")
+    # Optional friendly name so an admin can identify the device at a glance.
+    alias = Column(String(255), nullable=True)
     # serial_number is now just one possible match attribute (nullable for the
     # manufacturer/device_id/model exception types); kept for display too.
     serial_number = Column(String(255), nullable=True)

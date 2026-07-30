@@ -1197,6 +1197,77 @@
     }
   },
   {
+    "name": "Clipboard policy MacOS",
+    "description": "",
+    "enabled": true,
+    "priority": 100,
+    "type": "clipboard_monitoring",
+    "severity": "medium",
+    "config": {
+      "patterns": {
+        "predefined": [
+          "ssn",
+          "credit_card",
+          "email",
+          "phone",
+          "api_key",
+          "private_key",
+          "aadhaar",
+          "pan",
+          "ifsc",
+          "indian_bank_account",
+          "indian_phone",
+          "upi_id",
+          "micr",
+          "indian_dob",
+          "source_code_content",
+          "api_key_in_code",
+          "database_connection_string"
+        ],
+        "custom": []
+      },
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "any",
+      "rules": [
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9_-]{32,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {}
+    }
+  },
+  {
     "name": "File Monitoring Linux(Block/Quarantine)",
     "description": "",
     "enabled": true,
@@ -1735,6 +1806,25 @@
       "exceptions": {
         "applications": []
       }
+    },
+    "conditions": {
+      "match": "all",
+      "rules": []
+    },
+    "actions": {
+      "log": {}
+    }
+  },
+  {
+    "name": "network share control",
+    "description": "",
+    "enabled": true,
+    "priority": 100,
+    "type": "network_share_control",
+    "severity": "medium",
+    "config": {
+      "mode": "content_aware",
+      "exceptions": {}
     },
     "conditions": {
       "match": "all",

@@ -8260,7 +8260,9 @@ if (shouldMonitor) {
                         continue;
                     }
                     std::vector<std::pair<std::string, std::string>> files;
-                    try { ScanDirectoryRecursiveUSB(root, root, files); } catch (...) { continue; }
+                    try { ScanDirectoryRecursiveUSB(root, root, files); }
+                    catch (const std::exception& e) { logger.Debug(std::string("[NETSHARE] rescan ") + drive + " failed: " + e.what()); continue; }
+                    catch (...) { continue; }
                     auto& seen = seenByDrive[drive];
                     for (auto& f : files) {
                         if (seen.count(f.second)) continue;
@@ -8296,6 +8298,7 @@ if (shouldMonitor) {
             if (dot != std::string::npos) ext = fileName.substr(dot + 1);
             char uname[256]; DWORD un = sizeof(uname);
             std::string username = GetUserNameA(uname, &un) ? std::string(uname) : "";
+            logger.Info("[NETSHARE] new file: " + relPath + " -> " + unc + " (evaluating)");
 
             bool contentAware;
             { std::lock_guard<std::mutex> lock(netShareMutex); contentAware = (netShareMode == "content_aware"); }
@@ -8308,7 +8311,11 @@ if (shouldMonitor) {
                 isSensitive = (level == "Confidential" || level == "Restricted");
             }
 
-            if (!IsNetworkShareBlocked(unc, fullPath, username, ext, isSensitive)) return;   // allowed / exception
+            bool wouldBlock = IsNetworkShareBlocked(unc, fullPath, username, ext, isSensitive);
+            logger.Info("[NETSHARE] " + relPath + ": mode=" + (contentAware ? "content_aware" : "block_all") +
+                        " level=" + level + " sensitive=" + std::string(isSensitive ? "yes" : "no") +
+                        " -> " + std::string(wouldBlock ? "WOULD_BLOCK" : "allow"));
+            if (!wouldBlock) return;   // allowed / exception
 
             logger.Warning("NETSHARE_WOULD_BLOCK user=" + username + " dest=" + unc +
                            " file=" + relPath + " level=" + level + " (AUDIT — not deleted)");

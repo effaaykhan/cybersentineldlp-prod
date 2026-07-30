@@ -1226,10 +1226,16 @@ export default function Events() {
                         </div>
                       )}
 
-                    {event.usb && (
+                    {(event.manufacturer || event.product_name || event.device_name ||
+                      event.serial_number || event.usb?.manufacturer || event.usb?.product_name) && (
                       <p className="mt-2 text-sm text-cs-ink-2">
-                        <strong>USB:</strong> {event.usb.vendor} {event.usb.product}
-                        {event.usb.serial && <span className="font-mono tabular-nums"> ({event.usb.serial})</span>}
+                        <strong>USB:</strong>{' '}
+                        {[event.manufacturer || event.usb?.manufacturer,
+                          event.product_name || event.usb?.product_name || event.device_name || event.usb?.device_name]
+                          .filter(Boolean).join(' ') || '—'}
+                        {(event.serial_number || event.usb?.serial_number) && (
+                          <span className="font-mono tabular-nums"> ({event.serial_number || event.usb?.serial_number})</span>
+                        )}
                       </p>
                     )}
 

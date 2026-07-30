@@ -1,9 +1,35 @@
 import { useState, useEffect } from 'react'
-import { Search, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Filter } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Filter, Usb } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import { searchEvents } from '@/lib/api'
 import { formatDateTimeIST, formatAgentLabel } from '@/lib/utils'
+
+// USB device metadata rides on an event both as top-level keys and mirrored
+// under a nested `usb` object (server DLPEvent uses extra="allow"). Read either.
+type UsbInfo = {
+  manufacturer?: string; model?: string; serial?: string
+  vid?: string; pid?: string; volumeLabel?: string; driveLetter?: string; deviceName?: string
+}
+function usbInfo(ev: any): UsbInfo | null {
+  const u = ev?.usb || {}
+  const pick = (a: any, b: any) => ((a ?? b) || undefined)
+  const info: UsbInfo = {
+    manufacturer: pick(ev?.manufacturer, u.manufacturer),
+    model: pick(ev?.product_name, u.product_name),
+    serial: pick(ev?.serial_number, u.serial_number),
+    vid: pick(ev?.vendor_id, u.vendor_id),
+    pid: pick(ev?.product_id, u.product_id),
+    volumeLabel: pick(ev?.volume_label, u.volume_label),
+    driveLetter: pick(ev?.drive_letter, u.drive_letter),
+    deviceName: pick(ev?.device_name, u.device_name),
+  }
+  const has = info.manufacturer || info.model || info.serial || info.vid || info.volumeLabel || info.deviceName
+  return has ? info : null
+}
+const usbSummary = (i: UsbInfo) =>
+  [i.manufacturer, i.model || i.deviceName].filter(Boolean).join(' ') || i.deviceName || i.serial || 'USB device'
+const usbVidPid = (i: UsbInfo) => (i.vid || i.pid ? `${i.vid || '????'}:${i.pid || '????'}` : null)
 
 const SEVERITY_OPTIONS = ['info', 'low', 'medium', 'high', 'critical']
 const EVENT_TYPES = ['file_transfer', 'clipboard', 'usb', 'google_drive', 'onedrive', 'email', 'network', 'process']
@@ -141,11 +167,53 @@ export default function LogExplorer() {
                           ? formatAgentLabel(ev.agent_name, ev.agent_code)
                           : (ev.agent_id ? formatAgentLabel(undefined, undefined) : '-')}
                       </td>
-                      <td className="px-4 py-3 text-gray-300 truncate max-w-xs">{ev.file_name || ev.description || ev.title || '-'}</td>
+                      <td className="px-4 py-3 text-gray-300 truncate max-w-xs">
+                        {(() => {
+                          const u = usbInfo(ev)
+                          if (u && (ev.event_type || '').toLowerCase() === 'usb') {
+                            return (
+                              <span className="inline-flex items-center gap-1.5">
+                                <Usb className="h-3.5 w-3.5 text-gray-500 shrink-0" />
+                                <span className="text-white">{usbSummary(u)}</span>
+                                {u.serial && <span className="text-gray-500 font-mono text-xs">· {u.serial}</span>}
+                              </span>
+                            )
+                          }
+                          return ev.file_name || ev.description || ev.title || '-'
+                        })()}
+                      </td>
                     </tr>
                     {expanded && (
                       <tr key={`${ev.id || i}-detail`} className="border-b border-gray-700/50">
-                        <td colSpan={6} className="px-4 py-3">
+                        <td colSpan={6} className="px-4 py-3 space-y-3">
+                          {(() => {
+                            const u = usbInfo(ev)
+                            if (!u) return null
+                            const fields: [string, string | null | undefined][] = [
+                              ['Manufacturer', u.manufacturer],
+                              ['Model', u.model || u.deviceName],
+                              ['Serial Number', u.serial],
+                              ['VID:PID', usbVidPid(u)],
+                              ['Volume Label', u.volumeLabel],
+                              ['Drive Letter', u.driveLetter],
+                            ]
+                            const shown = fields.filter(([, v]) => v)
+                            return (
+                              <div className="rounded-lg border border-gray-700 bg-[#232629] p-3">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1.5">
+                                  <Usb className="h-3.5 w-3.5" /> USB Device
+                                </div>
+                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-2">
+                                  {shown.map(([k, v]) => (
+                                    <div key={k}>
+                                      <div className="text-[11px] uppercase tracking-wide text-gray-500">{k}</div>
+                                      <div className="text-sm text-gray-200 font-mono break-all">{v}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )
+                          })()}
                           <pre className="p-3 bg-[#2a2d2f] rounded text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
                             {JSON.stringify(ev, null, 2)}
                           </pre>

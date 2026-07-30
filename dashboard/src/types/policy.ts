@@ -95,6 +95,9 @@ export interface NetworkShareControlConfig {
   // block_all = block every copy to a network share; content_aware = block only
   // Confidential/Restricted files. Exceptions apply in both modes.
   mode: 'block_all' | 'content_aware'
+  // audit = log + raise an event only (never deletes); block = quarantine then
+  // delete the flagged file off the share. Defaults to audit.
+  action?: 'audit' | 'block'
   exceptions: {
     shares?: string[]       // UNC prefixes always allowed, e.g. \\fileserver\public
     users?: string[]        // users / groups exempt

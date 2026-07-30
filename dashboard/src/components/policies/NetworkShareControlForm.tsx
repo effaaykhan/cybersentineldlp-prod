@@ -1,6 +1,6 @@
 'use client'
 
-import { FolderInput, Ban, ScanText } from 'lucide-react'
+import { FolderInput, Ban, ScanText, Eye, ShieldCheck } from 'lucide-react'
 import { NetworkShareControlConfig } from '@/types/policy'
 
 interface Props {
@@ -17,6 +17,7 @@ function fromList(list?: string[]): string {
 
 export default function NetworkShareControlForm({ config, onChange }: Props) {
   const mode = config.mode || 'block_all'
+  const action = config.action || 'audit'
   const exceptions = config.exceptions || {}
 
   const setExc = (key: keyof NonNullable<NetworkShareControlConfig['exceptions']>, value: string) =>
@@ -68,6 +69,46 @@ export default function NetworkShareControlForm({ config, onChange }: Props) {
             </div>
             <p className="text-xs text-cs-ink-2 mt-1">
               Allow copies, but inspect content and block only Confidential / Restricted files.
+            </p>
+          </button>
+        </div>
+      </div>
+
+      {/* Action: audit vs enforce */}
+      <div>
+        <label className="text-sm font-semibold text-cs-ink mb-2 block">Action on a match</label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => onChange({ ...config, action: 'audit' })}
+            className={`text-left rounded-cs-card border p-4 transition ${
+              action === 'audit'
+                ? 'border-[color-mix(in_srgb,var(--cs-indigo)_45%,var(--cs-panel))] bg-cs-indigo-faint'
+                : 'border-cs-hair bg-cs-panel hover:border-cs-hair-2'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold text-cs-ink">
+              <Eye className="h-4 w-4 text-cs-med" /> Audit (log only)
+            </div>
+            <p className="text-xs text-cs-ink-2 mt-1">
+              Record an event but never delete. Use to validate the rule before enforcing.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onChange({ ...config, action: 'block' })}
+            className={`text-left rounded-cs-card border p-4 transition ${
+              action === 'block'
+                ? 'border-[color-mix(in_srgb,var(--cs-indigo)_45%,var(--cs-panel))] bg-cs-indigo-faint'
+                : 'border-cs-hair bg-cs-panel hover:border-cs-hair-2'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold text-cs-ink">
+              <ShieldCheck className="h-4 w-4 text-cs-emerald" /> Enforce (quarantine + remove)
+            </div>
+            <p className="text-xs text-cs-ink-2 mt-1">
+              Quarantine a copy, then remove the file from the share. Only enable after auditing.
             </p>
           </button>
         </div>

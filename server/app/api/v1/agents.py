@@ -1432,6 +1432,7 @@ async def application_control(
 class NetworkSharePolicyResponse(BaseModel):
     enforced: bool                        # an active network_share_control policy exists
     mode: str                             # "block_all" | "content_aware" | "off"
+    action: str                           # "audit" (log/event only) | "block" (quarantine + delete)
     exception_shares: List[str]           # UNC prefixes always allowed (lowercased)
     exception_users: List[str]            # users/groups exempt (lowercased)
     exception_paths: List[str]            # source path prefixes exempt (case preserved)
@@ -1465,7 +1466,7 @@ async def network_share_policy(
 
     if not policy:
         return NetworkSharePolicyResponse(
-            enforced=False, mode="off",
+            enforced=False, mode="off", action="audit",
             exception_shares=[], exception_users=[], exception_paths=[],
             exception_file_types=[], generated_at=datetime.now(timezone.utc),
         )
@@ -1473,9 +1474,13 @@ async def network_share_policy(
     mode = (cfg.get("mode") or "block_all").lower()
     if mode not in ("block_all", "content_aware"):
         mode = "block_all"
+    # Default to audit so enabling a policy never deletes until the admin opts in.
+    action = (cfg.get("action") or "audit").lower()
+    if action not in ("audit", "block"):
+        action = "audit"
     exc = cfg.get("exceptions") or {}
     return NetworkSharePolicyResponse(
-        enforced=True, mode=mode,
+        enforced=True, mode=mode, action=action,
         exception_shares=_lc_list(exc.get("shares")),
         exception_users=_lc_list(exc.get("users")),
         exception_paths=[str(p).strip() for p in (exc.get("paths") or []) if str(p).strip()],

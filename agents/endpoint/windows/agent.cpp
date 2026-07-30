@@ -1887,6 +1887,7 @@ static ClassificationResult Classify(const std::string& content,
     // copied to mapped network drives. All values lowercase except paths.
     std::atomic<bool> netShareEnforced{false};
     std::string netShareMode;                        // "block_all" | "content_aware" | "off"
+    std::string netShareAction;                      // "audit" (log/event only) | "block" (quarantine+delete)
     std::set<std::string> netShareExceptShares;      // lowercase UNC prefixes
     std::set<std::string> netShareExceptUsers;       // lowercase
     std::vector<std::string> netShareExceptPaths;    // lowercase source-path prefixes
@@ -2590,6 +2591,8 @@ if (!shouldBlock) {
              if (status != 200) return;   // keep last-known on error/outage
              bool enforced    = JsonBoolTrue(response, "enforced");
              std::string mode = ToLower(config.ExtractJsonValue(response, "mode"));
+             std::string action = ToLower(config.ExtractJsonValue(response, "action"));
+             if (action != "block") action = "audit";   // default safe
              auto lc = [](std::vector<std::string> v) { for (auto& s : v) s = ToLower(s); return v; };
              auto shares = lc(ParseJsonStrArray(response, "exception_shares"));
              auto users  = lc(ParseJsonStrArray(response, "exception_users"));
@@ -2598,15 +2601,16 @@ if (!shouldBlock) {
              {
                  std::lock_guard<std::mutex> lock(netShareMutex);
                  netShareMode = mode;
+                 netShareAction = action;
                  netShareExceptShares = std::set<std::string>(shares.begin(), shares.end());
                  netShareExceptUsers  = std::set<std::string>(users.begin(), users.end());
                  netShareExceptPaths  = paths;
                  netShareExceptTypes  = std::set<std::string>(types.begin(), types.end());
              }
              netShareEnforced.store(enforced);
-             if (enforced) allowEvents.store(true);   // let the watcher emit audit events
+             if (enforced) allowEvents.store(true);   // let the watcher emit events
              logger.Info("Network share control: enforced=" + std::string(enforced ? "true" : "false") +
-                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " mode=" + (mode.empty() ? "off" : mode) + " action=" + action +
                          " except_shares=" + std::to_string(shares.size()));
          } catch (...) {
              logger.Error("FetchNetworkSharePolicy failed");
@@ -8267,7 +8271,8 @@ if (shouldMonitor) {
                     for (auto& f : files) {
                         if (seen.count(f.second)) continue;
                         seen.insert(f.second);
-                        HandleNetworkShareNewFile(drive, unc, f.first, f.second);
+                        if (HandleNetworkShareNewFile(drive, unc, f.first, f.second))
+                            seen.erase(f.second);   // removed from share; re-detect a later re-copy
                     }
                 }
                 // Log the drive inventory once, and again whenever it changes — this
@@ -8289,7 +8294,32 @@ if (shouldMonitor) {
         logger.Info("Network share transfer monitoring stopped");
     }
 
-    void HandleNetworkShareNewFile(const std::string& drive, const std::string& unc,
+    // Quarantine (copy to a local quarantine folder) then remove a file from the
+    // share. Returns true only if the file is gone from the share afterwards. Never
+    // deletes without a successful quarantine copy first, so it can't lose data.
+    bool QuarantineNetworkShareFile(const std::string& srcPath, const std::string& fileName) {
+        try {
+            std::string base = (config.GetQuarantine().enabled && !config.GetQuarantine().folder.empty())
+                               ? config.GetQuarantine().folder : std::string("C:\\Quarantine");
+            std::string qdir = base + "\\network_share";
+            std::error_code ec;
+            fs::create_directories(qdir, ec);
+            std::string ts = GetCurrentTimestampISO();
+            for (auto& c : ts) if (c == ':' || c == '.' || c == '+') c = '-';
+            std::string dest = qdir + "\\" + fileName + "_" + ts;
+            fs::copy_file(srcPath, dest, fs::copy_options::overwrite_existing, ec);
+            if (ec) { logger.Warning("[NETSHARE] quarantine copy failed: " + ec.message() + " — leaving file in place"); return false; }
+            fs::remove(srcPath, ec);
+            return !fs::exists(srcPath);
+        } catch (const std::exception& e) {
+            logger.Warning(std::string("[NETSHARE] quarantine error: ") + e.what());
+            return false;
+        }
+    }
+
+    // Returns true if the file was removed from the share (enforce path), so the
+    // caller can drop it from the seen-set and re-detect a later re-copy.
+    bool HandleNetworkShareNewFile(const std::string& drive, const std::string& unc,
                                    const std::string& fileName, const std::string& relPath) {
         try {
             std::string fullPath = drive + "\\" + relPath;
@@ -8315,17 +8345,29 @@ if (shouldMonitor) {
             logger.Info("[NETSHARE] " + relPath + ": mode=" + (contentAware ? "content_aware" : "block_all") +
                         " level=" + level + " sensitive=" + std::string(isSensitive ? "yes" : "no") +
                         " -> " + std::string(wouldBlock ? "WOULD_BLOCK" : "allow"));
-            if (!wouldBlock) return;   // allowed / exception
+            if (!wouldBlock) return false;   // allowed / exception
 
-            logger.Warning("NETSHARE_WOULD_BLOCK user=" + username + " dest=" + unc +
-                           " file=" + relPath + " level=" + level + " (AUDIT — not deleted)");
+            std::string action;
+            { std::lock_guard<std::mutex> lock(netShareMutex); action = netShareAction; }
+            bool enforce = (action == "block");
+            bool removed = false;
+            if (enforce) {
+                removed = QuarantineNetworkShareFile(fullPath, fileName);
+                logger.Warning("NETSHARE_BLOCKED user=" + username + " dest=" + unc + " file=" + relPath +
+                               " level=" + level +
+                               (removed ? " (quarantined + removed)" : " (remove FAILED — left in place)"));
+            } else {
+                logger.Warning("NETSHARE_WOULD_BLOCK user=" + username + " dest=" + unc +
+                               " file=" + relPath + " level=" + level + " (AUDIT — not deleted)");
+            }
+
             JsonBuilder json;
             json.AddString("event_id", GenerateUUID());
             json.AddString("event_type", "network_share_transfer");
             json.AddString("severity", "high");
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "endpoint");
-            json.AddString("action", "audit");                 // would block; nothing deleted in this build
+            json.AddString("action", enforce ? (removed ? "blocked" : "block_failed") : "audit");
             json.AddString("block_reason", "network_share_control");
             json.AddString("destination_type", "network_share");
             json.AddString("destination", unc);
@@ -8334,11 +8376,15 @@ if (shouldMonitor) {
             json.AddString("classification_level", level);
             json.AddString("user_email", username);
             json.AddString("description",
-                           "File copy to network share would be blocked by policy (audit): " + relPath);
+                           (enforce ? (removed ? std::string("Blocked — removed from share: ")
+                                               : std::string("Block FAILED — left in place: "))
+                                    : std::string("Would be blocked (audit): ")) + relPath);
             json.AddString("timestamp", GetCurrentTimestampISO());
             SendEvent(json.Build());
+            return removed;
         } catch (...) {
             logger.Debug("HandleNetworkShareNewFile error");
+            return false;
         }
     }
 

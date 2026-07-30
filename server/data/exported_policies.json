@@ -1824,7 +1824,7 @@
     "severity": "medium",
     "config": {
       "mode": "content_aware",
-      "action": "audit",
+      "action": "block",
       "exceptions": {}
     },
     "conditions": {

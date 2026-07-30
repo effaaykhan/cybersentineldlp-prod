@@ -8220,6 +8220,7 @@ if (shouldMonitor) {
         logger.Info("Network share transfer monitoring started (AUDIT mode — no deletion)");
         std::map<std::string, std::set<std::string>> seenByDrive;
         std::set<std::string> knownDrives;
+        std::string lastDriveDiag;
         while (running) {
             if (!netShareEnforced.load()) {
                 std::this_thread::sleep_for(std::chrono::seconds(3));
@@ -8228,29 +8229,51 @@ if (shouldMonitor) {
             try {
                 DWORD mask = GetLogicalDrives();
                 std::set<std::string> current;
+                std::string diag;   // inventory of drives THIS agent process can see
                 for (char L = 'A'; L <= 'Z'; ++L) {
                     if (!(mask & (1u << (L - 'A')))) continue;
                     std::string drive = std::string(1, L) + ":";
-                    if (GetDriveTypeA((drive + "\\").c_str()) != DRIVE_REMOTE) continue;
+                    UINT dt = GetDriveTypeA((drive + "\\").c_str());
+                    diag += drive + "=" + std::to_string(dt) + " ";
+                    if (dt != DRIVE_REMOTE) continue;          // 4 = mapped network drive
                     current.insert(drive);
-                    std::vector<std::pair<std::string, std::string>> files;
-                    try { ScanDirectoryRecursiveUSB(drive, drive, files); } catch (...) { continue; }
+                    std::string unc = ResolveDriveUnc(drive);
+                    std::string root = drive + "\\";
                     if (knownDrives.find(drive) == knownDrives.end()) {
+                        // Log detection FIRST so we know the agent sees the drive even
+                        // if the initial index fails.
+                        logger.Info("[NETSHARE] Watching " + drive + " -> " + unc);
+                        std::vector<std::pair<std::string, std::string>> files;
+                        try {
+                            ScanDirectoryRecursiveUSB(root, root, files);
+                        } catch (const std::exception& e) {
+                            logger.Warning(std::string("[NETSHARE] cannot index ") + drive + ": " + e.what());
+                        } catch (...) {
+                            logger.Warning("[NETSHARE] cannot index " + drive + " (unknown error)");
+                        }
                         std::set<std::string> existing;
                         for (auto& f : files) existing.insert(f.second);   // pre-existing: never act
                         seenByDrive[drive] = existing;
                         knownDrives.insert(drive);
-                        logger.Info("[NETSHARE] Watching " + drive + " -> " + ResolveDriveUnc(drive) +
-                                    " (" + std::to_string(existing.size()) + " existing ignored)");
+                        logger.Info("[NETSHARE] " + drive + " indexed (" +
+                                    std::to_string(existing.size()) + " existing ignored)");
                         continue;
                     }
+                    std::vector<std::pair<std::string, std::string>> files;
+                    try { ScanDirectoryRecursiveUSB(root, root, files); } catch (...) { continue; }
                     auto& seen = seenByDrive[drive];
-                    std::string unc = ResolveDriveUnc(drive);
                     for (auto& f : files) {
                         if (seen.count(f.second)) continue;
                         seen.insert(f.second);
                         HandleNetworkShareNewFile(drive, unc, f.first, f.second);
                     }
+                }
+                // Log the drive inventory once, and again whenever it changes — this
+                // reveals whether the agent's session even sees a mapped network drive
+                // (per-session/token mapping visibility).
+                if (diag != lastDriveDiag) {
+                    logger.Info("[NETSHARE] drives visible to agent: " + (diag.empty() ? std::string("(none)") : diag));
+                    lastDriveDiag = diag;
                 }
                 for (auto it = knownDrives.begin(); it != knownDrives.end();) {
                     if (!current.count(*it)) { seenByDrive.erase(*it); it = knownDrives.erase(it); }

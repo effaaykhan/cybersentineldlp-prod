@@ -1724,7 +1724,7 @@
   {
     "name": "application control policy",
     "description": "",
-    "enabled": true,
+    "enabled": false,
     "priority": 100,
     "type": "application_control",
     "severity": "medium",

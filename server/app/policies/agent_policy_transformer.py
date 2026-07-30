@@ -14,17 +14,25 @@ from app.models.policy import Policy
 
 
 POLICY_PLATFORM_SUPPORT: Dict[str, List[str]] = {
-    "clipboard_monitoring": ["windows"],
-    "file_system_monitoring": ["windows", "linux"],
-    "file_transfer_monitoring": ["windows", "linux"],
-    "usb_device_monitoring": ["windows"],
-    "usb_file_transfer_monitoring": ["windows"],
+    # The Linux and macOS endpoint agents implement the same channels as the
+    # Windows C++ agent (clipboard, file, USB and network-exfil monitoring).
+    # Excluding a platform here meant that agent's bundle carried only file
+    # policies, so it had no server-issued action/paths for USB, clipboard or
+    # network and fell back to hardcoded local defaults — enforcing things no
+    # policy asked for. macOS must be listed too, or a macOS agent's sync returns
+    # only the platform-agnostic control policies and none of the monitoring ones
+    # (i.e. it "can't fetch its policies"). The build_bundle() normaliser folds
+    # "darwin" (macOS uname) onto "macos".
+    "clipboard_monitoring": ["windows", "linux", "macos"],
+    "file_system_monitoring": ["windows", "linux", "macos"],
+    "file_transfer_monitoring": ["windows", "linux", "macos"],
+    "usb_device_monitoring": ["windows", "linux", "macos"],
+    "usb_file_transfer_monitoring": ["windows", "linux", "macos"],
     "google_drive_local_monitoring": ["windows"],
     # Network exfiltration prevention — the endpoint agent hooks outbound
     # transfers (ftp/scp/http/python-server/…) and calls the real-time evaluate
-    # endpoint before allowing them. Windows-only, matching the platform scope
-    # of the shipping C++ agent.
-    "network_exfiltration_prevention": ["windows"],
+    # endpoint before allowing them.
+    "network_exfiltration_prevention": ["windows", "linux", "macos"],
 }
 
 POLICY_CAPABILITY_MAP: Dict[str, str] = {
@@ -51,6 +59,10 @@ class AgentPolicyTransformer:
         agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         platform_key = (platform or "windows").lower()
+        # macOS agents may report their platform as "darwin" (uname -s) or "osx";
+        # fold those onto the canonical "macos" used in POLICY_PLATFORM_SUPPORT.
+        if platform_key in ("darwin", "osx", "mac", "mac_os", "mac-os"):
+            platform_key = "macos"
         capability_flags = {k: bool(v) for k, v in (capabilities or {}).items()}
 
         filtered: List[Policy] = [

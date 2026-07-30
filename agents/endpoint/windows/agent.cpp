@@ -1845,7 +1845,10 @@ static ClassificationResult Classify(const std::string& content,
     // blocks UNSANCTIONED storage devices.
     std::atomic<bool> usbDeviceControlEnforced{false};  // an active usb_device_control policy exists
     std::string usbDeviceControlMode;                   // "enforce" | "audit" | "off"
-    std::set<std::string> sanctionedUsbSerials;         // enabled allowlist serials (UPPERCASE)
+    std::set<std::string> sanctionedUsbSerials;         // match_type=serial (UPPERCASE)
+    std::set<std::string> sanctionedUsbManufacturers;   // match_type=manufacturer (lowercase)
+    std::set<std::string> sanctionedUsbDeviceIds;       // match_type=device_id "vid:pid" (lowercase)
+    std::set<std::string> sanctionedUsbModels;          // match_type=model product name (lowercase)
     std::mutex usbAllowlistMutex;
     std::string lastAllowlistSig;                       // skip registry churn when unchanged
 
@@ -2294,10 +2297,20 @@ if (!shouldBlock) {
                  }
              }
 
+             // Additional exception attributes (manufacturer / device_id "vid:pid" /
+             // model), lowercased for case-insensitive matching.
+             auto lc = [](std::vector<std::string> v) { for (auto& s : v) s = ToLower(s); return v; };
+             auto mfgs   = lc(ParseJsonStrArray(response, "manufacturers"));
+             auto devids = lc(ParseJsonStrArray(response, "device_ids"));
+             auto models = lc(ParseJsonStrArray(response, "models"));
+
              {
                  std::lock_guard<std::mutex> lock(usbAllowlistMutex);
                  usbDeviceControlMode = mode;
                  sanctionedUsbSerials = serials;
+                 sanctionedUsbManufacturers = std::set<std::string>(mfgs.begin(), mfgs.end());
+                 sanctionedUsbDeviceIds     = std::set<std::string>(devids.begin(), devids.end());
+                 sanctionedUsbModels        = std::set<std::string>(models.begin(), models.end());
              }
              usbDeviceControlEnforced.store(enforced);
 
@@ -2886,7 +2899,14 @@ if (!shouldBlock) {
              {
                  std::lock_guard<std::mutex> lock(usbAllowlistMutex);
                  mode = usbDeviceControlMode;
-                 sanctioned = !serialUp.empty() && sanctionedUsbSerials.count(serialUp) > 0;
+                 std::string mfg = ToLower(details.manufacturer);
+                 std::string model = ToLower(details.productName);
+                 std::string devid = ToLower(vid) + ":" + ToLower(pid);
+                 sanctioned =
+                     (!serialUp.empty() && sanctionedUsbSerials.count(serialUp) > 0) ||
+                     (!mfg.empty()      && sanctionedUsbManufacturers.count(mfg) > 0) ||
+                     (devid != ":"      && sanctionedUsbDeviceIds.count(devid) > 0) ||
+                     (!model.empty()    && sanctionedUsbModels.count(model) > 0);
              }
              if (!usbDeviceControlEnforced.load() || mode != "enforce")
                  action = "allow";

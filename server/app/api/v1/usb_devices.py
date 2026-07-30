@@ -30,14 +30,36 @@ DEVICE_CONTROL_TYPE = "usb_device_control"
 
 
 class DeviceApprove(BaseModel):
-    serial_number: str = Field(..., min_length=1, max_length=255,
-                               description="Device serial number — the match key")
+    # How this exception matches. Default 'serial' keeps old callers working.
+    match_type: str = Field("serial", pattern="^(serial|manufacturer|device_id|model)$",
+                            description="serial | manufacturer | device_id (vid:pid) | model")
+    # The value to match. Optional: if omitted it's derived from the matching field
+    # below (serial_number / manufacturer / vendor_id+product_id / product_name).
+    match_value: Optional[str] = Field(None, max_length=255)
+    serial_number: Optional[str] = Field(None, max_length=255,
+                                         description="Device serial (match key when match_type=serial)")
     label: Optional[str] = Field(None, max_length=255)
     vendor_id: Optional[str] = Field(None, max_length=16)
     product_id: Optional[str] = Field(None, max_length=16)
     product_name: Optional[str] = Field(None, max_length=255)
     manufacturer: Optional[str] = Field(None, max_length=255)
     notes: Optional[str] = Field(None, max_length=1000)
+
+    def resolved_match_value(self) -> Optional[str]:
+        """The value to match on, explicit or derived from the relevant field."""
+        if self.match_value and self.match_value.strip():
+            return self.match_value.strip()
+        if self.match_type == "serial":
+            return (self.serial_number or "").strip() or None
+        if self.match_type == "manufacturer":
+            return (self.manufacturer or "").strip() or None
+        if self.match_type == "device_id":
+            vid = (self.vendor_id or "").strip()
+            pid = (self.product_id or "").strip()
+            return f"{vid}:{pid}" if (vid or pid) else None
+        if self.match_type == "model":
+            return (self.product_name or "").strip() or None
+        return None
 
 
 class DeviceUpdate(BaseModel):
@@ -49,6 +71,8 @@ class DeviceUpdate(BaseModel):
 def _device_out(d: SanctionedUsbDevice) -> dict:
     return {
         "id": str(d.id),
+        "match_type": getattr(d, "match_type", None) or "serial",
+        "match_value": getattr(d, "match_value", None),
         "serial_number": d.serial_number,
         "label": d.label,
         "vendor_id": d.vendor_id,
@@ -100,18 +124,27 @@ async def approve_device(
     current_user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Approve (sanction) a device by serial number. Idempotent: re-approving an
-    existing serial updates its details and re-enables it."""
-    serial = body.serial_number.strip()
-    if not serial:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "serial_number is required")
+    """Approve (sanction) a USB exception by serial, manufacturer, device_id
+    (vid:pid) or model. Idempotent per (match_type, match_value): re-approving the
+    same exception updates its details and re-enables it."""
+    match_type = body.match_type
+    match_value = body.resolved_match_value()
+    if not match_value:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"a match value is required for match_type '{match_type}'",
+        )
 
     existing = (await db.execute(
-        select(SanctionedUsbDevice).where(SanctionedUsbDevice.serial_number == serial)
+        select(SanctionedUsbDevice).where(
+            SanctionedUsbDevice.match_type == match_type,
+            SanctionedUsbDevice.match_value == match_value,
+        )
     )).scalar_one_or_none()
 
     if existing:
         existing.label = body.label or existing.label
+        existing.serial_number = body.serial_number or existing.serial_number
         existing.vendor_id = body.vendor_id or existing.vendor_id
         existing.product_id = body.product_id or existing.product_id
         existing.product_name = body.product_name or existing.product_name
@@ -122,11 +155,14 @@ async def approve_device(
         existing.approved_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(existing)
-        logger.info("usb_device_reapproved", serial=serial, user=current_user.username)
+        logger.info("usb_device_reapproved", match_type=match_type, match_value=match_value,
+                    user=current_user.username)
         return _device_out(existing)
 
     dev = SanctionedUsbDevice(
-        serial_number=serial,
+        match_type=match_type,
+        match_value=match_value,
+        serial_number=body.serial_number,
         label=body.label,
         vendor_id=body.vendor_id,
         product_id=body.product_id,
@@ -138,7 +174,8 @@ async def approve_device(
     db.add(dev)
     await db.commit()
     await db.refresh(dev)
-    logger.info("usb_device_approved", serial=serial, user=current_user.username)
+    logger.info("usb_device_approved", match_type=match_type, match_value=match_value,
+                user=current_user.username)
     return _device_out(dev)
 
 

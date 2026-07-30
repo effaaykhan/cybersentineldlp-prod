@@ -7,11 +7,25 @@ import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import {
   listDevices, seenDevices, approveDevice, updateDevice, revokeDevice,
-  type SanctionedDevice, type SeenDevice,
+  type SanctionedDevice, type SeenDevice, type UsbMatchType,
 } from '@/lib/usb-devices-api'
 
 const fmt = (s?: string | null) => (s ? new Date(s).toLocaleString() : '—')
 const vidpid = (v?: string | null, p?: string | null) => (v || p ? `${v || '????'}:${p || '????'}` : '—')
+
+const MATCH_LABEL: Record<UsbMatchType, string> = {
+  serial: 'Serial',
+  manufacturer: 'Manufacturer',
+  device_id: 'Device ID',
+  model: 'Model',
+}
+// Per match-type UI hints for the approve form's single value field.
+const MATCH_FIELD: Record<UsbMatchType, { label: string; placeholder: string; scope: string }> = {
+  serial:       { label: 'Serial number',        placeholder: 'e.g. 0123456789ABCDEF', scope: 'one specific device' },
+  manufacturer: { label: 'Manufacturer',         placeholder: 'e.g. SanDisk',          scope: 'every device from this vendor' },
+  device_id:    { label: 'Device ID (VID:PID)',  placeholder: 'e.g. 0781:5567',        scope: 'every device of this model/type' },
+  model:        { label: 'Model (product name)', placeholder: 'e.g. Cruzer Blade',     scope: 'every device with this product name' },
+}
 
 export default function UsbDevices() {
   const qc = useQueryClient()
@@ -42,9 +56,9 @@ export default function UsbDevices() {
       {/* Sanctioned devices */}
       <Section title="Sanctioned devices" count={devicesQ.data?.count || 0}>
         {(devicesQ.data?.devices.length || 0) === 0 ? (
-          <Empty text="No devices approved yet. Approve one by serial above, or from the seen list below." />
+          <Empty text="No devices approved yet. Approve one above, or from the seen list below." />
         ) : (
-          <Table headers={['Serial', 'Label', 'Device', 'VID:PID', 'Status', 'Approved', '']}>
+          <Table headers={['Match', 'Label', 'Device', 'VID:PID', 'Status', 'Approved', '']}>
             {devicesQ.data!.devices.map((d) => (
               <SanctionedRow key={d.id} d={d} onChange={invalidate} />
             ))}
@@ -128,7 +142,10 @@ function SanctionedRow({ d, onChange }: { d: SanctionedDevice; onChange: () => v
   })
   return (
     <tr className="border-b border-cs-hair last:border-0">
-      <td className="px-3 py-2 num text-cs-ink">{d.serial_number}</td>
+      <td className="px-3 py-2 text-cs-ink whitespace-nowrap">
+        <span className="badge badge-info mr-2">{MATCH_LABEL[d.match_type] || d.match_type}</span>
+        <span className="num">{d.match_value || d.serial_number || '—'}</span>
+      </td>
       <td className="px-3 py-2 text-cs-ink-2">{d.label || '—'}</td>
       <td className="px-3 py-2 text-cs-ink-2">{d.product_name || '—'}{d.manufacturer ? ` (${d.manufacturer})` : ''}</td>
       <td className="px-3 py-2 num text-cs-muted">{vidpid(d.vendor_id, d.product_id)}</td>
@@ -182,30 +199,67 @@ function SeenRow({ s, onApproved }: { s: SeenDevice; onApproved: () => void }) {
 }
 
 function ApproveForm({ onDone }: { onDone: () => void }) {
-  const [serial, setSerial] = useState('')
+  const [matchType, setMatchType] = useState<UsbMatchType>('serial')
+  const [value, setValue] = useState('')
   const [label, setLabel] = useState('')
+  const hint = MATCH_FIELD[matchType]
+
+  // Also populate the natural display field so the sanctioned table renders the
+  // device nicely; device_id "vid:pid" is split into VID/PID.
+  const buildBody = () => {
+    const v = value.trim()
+    const body: Parameters<typeof approveDevice>[0] = {
+      match_type: matchType,
+      match_value: v,
+      label: label.trim() || undefined,
+    }
+    if (matchType === 'serial') body.serial_number = v
+    else if (matchType === 'manufacturer') body.manufacturer = v
+    else if (matchType === 'model') body.product_name = v
+    else if (matchType === 'device_id') {
+      const [vid, pid] = v.split(':')
+      body.vendor_id = (vid || '').trim() || undefined
+      body.product_id = (pid || '').trim() || undefined
+    }
+    return body
+  }
+
   const approve = useMutation({
-    mutationFn: () => approveDevice({ serial_number: serial.trim(), label: label.trim() || undefined }),
-    onSuccess: () => { setSerial(''); setLabel(''); onDone(); toast.success('Device approved') },
+    mutationFn: () => approveDevice(buildBody()),
+    onSuccess: () => { setValue(''); setLabel(''); onDone(); toast.success('Exception approved') },
     onError: (e: any) => toast.error(extractErrorDetail(e, 'Approve failed')),
   })
   return (
     <div className="rounded-cs-card border border-cs-hair bg-cs-panel p-4">
-      <div className="flex items-center gap-2 text-sm font-semibold text-cs-ink mb-3">
-        <Plus className="h-4 w-4 text-cs-indigo" /> Approve a device by serial
+      <div className="flex items-center gap-2 text-sm font-semibold text-cs-ink mb-1">
+        <Plus className="h-4 w-4 text-cs-indigo" /> Approve a USB exception
       </div>
+      <p className="text-xs text-cs-muted mb-3">
+        Allow by serial (one device), manufacturer (a whole vendor), device ID (a model/type) or model name.
+        This matches <span className="font-medium text-cs-ink-2">{hint.scope}</span>.
+      </p>
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex-1 min-w-[220px]">
-          <label className="text-xs text-cs-ink-2 mb-1 block">Serial number</label>
-          <input className="input text-sm num" value={serial} onChange={(e) => setSerial(e.target.value)}
-            placeholder="e.g. 0123456789ABCDEF" />
+        <div className="min-w-[150px]">
+          <label className="text-xs text-cs-ink-2 mb-1 block">Match by</label>
+          <select className="input text-sm" value={matchType}
+            onChange={(e) => setMatchType(e.target.value as UsbMatchType)}>
+            <option value="serial">Serial number</option>
+            <option value="manufacturer">Manufacturer</option>
+            <option value="device_id">Device ID (VID:PID)</option>
+            <option value="model">Model name</option>
+          </select>
         </div>
-        <div className="flex-1 min-w-[180px]">
+        <div className="flex-1 min-w-[220px]">
+          <label className="text-xs text-cs-ink-2 mb-1 block">{hint.label}</label>
+          <input className="input text-sm num" value={value} onChange={(e) => setValue(e.target.value)}
+            placeholder={hint.placeholder} />
+        </div>
+        <div className="flex-1 min-w-[160px]">
           <label className="text-xs text-cs-ink-2 mb-1 block">Label (optional)</label>
           <input className="input text-sm" value={label} onChange={(e) => setLabel(e.target.value)}
             placeholder="e.g. Finance dept #3" />
         </div>
-        <button className="btn btn-primary" disabled={approve.isPending || !serial.trim()}
+        <button className="btn btn-primary" disabled={approve.isPending || !value.trim()}
           onClick={() => approve.mutate()}>
           {approve.isPending ? 'Approving…' : 'Approve'}
         </button>

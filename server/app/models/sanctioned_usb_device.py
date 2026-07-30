@@ -4,9 +4,11 @@ endpoints.
 
 Enforcement posture is STRICT ALLOWLIST (default-deny): when USB device control
 is enabled (a usb_device_control policy), a removable storage device is allowed
-only if its SERIAL NUMBER has an enabled row here; every other device is blocked.
-Device identity is matched on ``serial_number`` alone (VID/PID/model are stored
-for display and enrolment context only).
+only if it matches an enabled row here; every other device is blocked. A row
+matches on its ``match_type`` — ``serial`` (a single device), ``manufacturer``
+(a whole vendor), ``device_id`` ("vid:pid", a model/type) or ``model`` (product
+name) — against ``match_value``. A device is authorized iff it matches ANY
+enabled row on that row's attribute.
 """
 from datetime import datetime, timezone
 
@@ -25,10 +27,19 @@ class SanctionedUsbDevice(Base):
     __tablename__ = "sanctioned_usb_devices"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # The match key. A device is authorized iff its serial matches an enabled row.
-    serial_number = Column(String(255), nullable=False, unique=True)
+    # How this exception matches a connected device:
+    #   serial       -> match_value == device serial number (default, unique device)
+    #   manufacturer -> match_value == device manufacturer  (a whole vendor)
+    #   device_id    -> match_value == "vid:pid"            (a device model/type)
+    #   model        -> match_value == device product name  (a model by name)
+    # A device is authorized iff it matches ANY enabled row on that row's attribute.
+    match_type = Column(String(20), nullable=False, default="serial", server_default="serial")
+    match_value = Column(String(255), nullable=True)
+    # serial_number is now just one possible match attribute (nullable for the
+    # manufacturer/device_id/model exception types); kept for display too.
+    serial_number = Column(String(255), nullable=True)
     label = Column(String(255), nullable=True)          # e.g. "Finance dept #3"
-    # Captured for display / enrolment context; NOT used for matching.
+    # Captured for display / enrolment context.
     vendor_id = Column(String(16), nullable=True)
     product_id = Column(String(16), nullable=True)
     product_name = Column(String(255), nullable=True)

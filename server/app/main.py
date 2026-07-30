@@ -183,7 +183,9 @@ async def _auto_init_schema_and_admin():
                 """
                 CREATE TABLE IF NOT EXISTS sanctioned_usb_devices (
                     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    serial_number VARCHAR(255) NOT NULL UNIQUE,
+                    serial_number VARCHAR(255),
+                    match_type    VARCHAR(20) NOT NULL DEFAULT 'serial',
+                    match_value   VARCHAR(255),
                     label         VARCHAR(255),
                     vendor_id     VARCHAR(16),
                     product_id    VARCHAR(16),
@@ -197,6 +199,21 @@ async def _auto_init_schema_and_admin():
                 )
                 """
             ))
+            # Extend existing installs to match on manufacturer / device_id (VID:PID)
+            # / model, not just serial. Idempotent: add columns, backfill serial rows,
+            # relax the serial NOT-NULL/unique (non-serial exceptions have no serial),
+            # and enforce uniqueness on (match_type, match_value) instead. Run each
+            # statement separately — asyncpg's execute() won't take a multi-statement
+            # string here.
+            for _stmt in (
+                "ALTER TABLE sanctioned_usb_devices ADD COLUMN IF NOT EXISTS match_type  VARCHAR(20) NOT NULL DEFAULT 'serial'",
+                "ALTER TABLE sanctioned_usb_devices ADD COLUMN IF NOT EXISTS match_value VARCHAR(255)",
+                "UPDATE sanctioned_usb_devices SET match_value = serial_number WHERE match_value IS NULL AND serial_number IS NOT NULL",
+                "ALTER TABLE sanctioned_usb_devices ALTER COLUMN serial_number DROP NOT NULL",
+                "ALTER TABLE sanctioned_usb_devices DROP CONSTRAINT IF EXISTS sanctioned_usb_devices_serial_number_key",
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_sanctioned_usb_match ON sanctioned_usb_devices (match_type, match_value)",
+            ):
+                await conn.execute(text(_stmt))
 
         # sanctioned_printers (printer-control allowlist, matched on printer name).
         async with _db.postgres_engine.begin() as conn:

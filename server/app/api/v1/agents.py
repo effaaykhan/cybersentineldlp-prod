@@ -1167,16 +1167,29 @@ async def authorize_usb_device(
     if enforced:
         mode = ((policy.config or {}).get("mode") or "enforce").lower()
 
-    # Serial match against the enabled allowlist.
+    # Match against the enabled allowlist by each exception's chosen attribute:
+    # serial / manufacturer / device_id (vid:pid) / model. A device is sanctioned if
+    # it matches ANY enabled exception on that exception's attribute (case-insensitive).
     sanctioned = False
-    if serial:
-        row = (await db.execute(
-            _select(SanctionedUsbDevice).where(
-                SanctionedUsbDevice.serial_number == serial,
-                SanctionedUsbDevice.is_enabled.is_(True),
-            )
-        )).scalar_one_or_none()
-        sanctioned = row is not None
+    rows = (await db.execute(
+        _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
+    )).scalars().all()
+    dev_serial = serial.lower()
+    dev_mfg = (request.manufacturer or "").strip().lower()
+    dev_model = (request.product_name or "").strip().lower()
+    dev_devid = ((request.vendor_id or "").strip() + ":" + (request.product_id or "").strip()).lower()
+    for r in rows:
+        mt = (getattr(r, "match_type", None) or "serial")
+        mv = getattr(r, "match_value", None) or (r.serial_number if mt == "serial" else None)
+        mv = (mv or "").strip().lower()
+        if not mv:
+            continue
+        if ((mt == "serial" and dev_serial and mv == dev_serial) or
+                (mt == "manufacturer" and dev_mfg and mv == dev_mfg) or
+                (mt == "device_id" and dev_devid != ":" and mv == dev_devid) or
+                (mt == "model" and dev_model and mv == dev_model)):
+            sanctioned = True
+            break
 
     would_block = False
     if not enforced:
@@ -1212,7 +1225,10 @@ class UsbAllowlistResponse(BaseModel):
     access_mode: str               # "read_write" | "read_only" (USB STORAGE write access)
     read_only: bool                # convenience flag: access_mode == "read_only"
     count: int
-    serials: List[str]             # enabled sanctioned serial numbers
+    serials: List[str]             # enabled sanctioned serials (match_type=serial), UPPERCASE
+    manufacturers: List[str]       # allowed manufacturers (match_type=manufacturer), lowercase
+    device_ids: List[str]          # allowed "vid:pid" (match_type=device_id), lowercase
+    models: List[str]              # allowed product names (match_type=model), lowercase
     devices: List[Dict[str, Any]]  # serial + vid/pid/model, for building device IDs
     generated_at: datetime
 
@@ -1262,11 +1278,31 @@ async def usb_allowlist(
         "vendor_id": d.vendor_id,
         "product_id": d.product_id,
         "product_name": d.product_name,
+        "manufacturer": d.manufacturer,
+        "match_type": (getattr(d, "match_type", None) or "serial"),
+        "match_value": getattr(d, "match_value", None),
     } for d in rows]
+
+    def _mv(mt: str) -> List[str]:
+        # each row's match value (fall back to serial for legacy serial rows).
+        out = []
+        for d in rows:
+            row_mt = (getattr(d, "match_type", None) or "serial")
+            if row_mt != mt:
+                continue
+            v = getattr(d, "match_value", None) or (d.serial_number if mt == "serial" else None)
+            if v and v.strip():
+                out.append(v.strip())
+        return out
+
     return UsbAllowlistResponse(
         enforced=enforced, mode=mode, access_mode=access_mode, read_only=read_only,
         count=len(devices),
-        serials=[d["serial_number"] for d in devices],
+        # serials UPPERCASE (agent compares serials in upper); the rest lowercase.
+        serials=[s.upper() for s in _mv("serial")],
+        manufacturers=[s.lower() for s in _mv("manufacturer")],
+        device_ids=[s.lower() for s in _mv("device_id")],
+        models=[s.lower() for s in _mv("model")],
         devices=devices, generated_at=datetime.now(timezone.utc),
     )
 

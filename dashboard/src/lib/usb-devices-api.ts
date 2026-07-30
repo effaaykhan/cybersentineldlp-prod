@@ -1,8 +1,12 @@
 import apiClient from './api'
 
+export type UsbMatchType = 'serial' | 'manufacturer' | 'device_id' | 'model'
+
 export interface SanctionedDevice {
   id: string
-  serial_number: string
+  match_type: UsbMatchType
+  match_value?: string | null
+  serial_number?: string | null
   label?: string | null
   vendor_id?: string | null
   product_id?: string | null
@@ -34,7 +38,9 @@ export interface DeviceListResponse {
 }
 
 export interface ApproveBody {
-  serial_number: string
+  match_type?: UsbMatchType
+  match_value?: string
+  serial_number?: string
   label?: string
   vendor_id?: string
   product_id?: string

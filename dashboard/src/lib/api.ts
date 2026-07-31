@@ -139,6 +139,8 @@ export type Agent = {
   version?: string
   hostname?: string
   os_version?: string
+  /** Logged-in user on the endpoint, reported by the agent. */
+  username?: string | null
   capabilities?: Record<string, boolean>
   /** True if heartbeat within ``AGENT_TIMEOUT_SECONDS``. Mirrors
    *  ``lifecycle_status === 'active'``. */

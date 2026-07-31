@@ -173,6 +173,11 @@ class Agent(AgentBase):
     # the response so legacy Mongo docs that haven't been backfilled yet
     # don't fail validation.
     agent_code: Optional[int] = Field(None, description="Short numeric ID for UI display")
+    # Endpoint inventory — reported by the agent, optional so legacy docs
+    # (registered before these were captured) still validate.
+    hostname: Optional[str] = Field(None, description="Endpoint hostname")
+    os_version: Optional[str] = Field(None, description="Precise OS name/build, e.g. 'Windows 11 Pro 23H2 (Build 22631.4460)'")
+    username: Optional[str] = Field(None, description="Logged-in user on the endpoint")
     # TODO: Implement agent resume functionality so agents can resume instead of creating new entries
     # Status field removed - agents are considered active if they've sent heartbeat within timeout period
     last_seen: datetime = Field(..., description="Last heartbeat timestamp")
@@ -383,6 +388,14 @@ async def register_agent(
     body = await request.json()
     provided_agent_id = body.get("agent_id")
     capabilities = body.get("capabilities") or {}
+    # Endpoint inventory details reported by the agent. These are optional so
+    # older agents (which never sent them) keep registering unchanged; when
+    # present they let the UI show precise OS build, hostname and the
+    # logged-in user. ``hostname`` falls back to the agent name so the column
+    # is never blank for agents that omit it.
+    reported_os_version = body.get("os_version") or None
+    reported_hostname = body.get("hostname") or agent.name
+    reported_username = body.get("username") or None
     now = datetime.now(timezone.utc)
 
     # Use the agent's self-assigned ID if provided (C++ agent sends UUID).
@@ -414,6 +427,7 @@ async def register_agent(
         update_fields = {
             "ip_address": agent.ip_address,
             "version": agent.version,
+            "hostname": reported_hostname,
             "last_seen": now,
             "capabilities": capabilities,
             "api_key": api_key,
@@ -425,6 +439,13 @@ async def register_agent(
             "is_deleted": False,
             "decommissioned": False,
         }
+        # Only overwrite os_version / username when the agent actually
+        # reported them, so a re-register from an older agent that omits
+        # these fields never blanks out values captured on a prior run.
+        if reported_os_version:
+            update_fields["os_version"] = reported_os_version
+        if reported_username:
+            update_fields["username"] = reported_username
         if existing.get("is_deleted") or existing.get("decommissioned"):
             logger.info(
                 "Re-registration revived a removed/decommissioned agent",
@@ -445,6 +466,10 @@ async def register_agent(
             {"_id": existing["_id"]},
             update_ops,
         )
+        # Mirror the persisted changes onto the in-memory doc so the
+        # registration response echoes the values we just wrote (hostname,
+        # os_version, username, ip, version) instead of the pre-update state.
+        existing.update(update_fields)
         # Re-registering legacy agent without agent_code → backfill now.
         agent_code = existing.get("agent_code")
         if not isinstance(agent_code, int):
@@ -462,6 +487,9 @@ async def register_agent(
             "agent_code": agent_code,
             "name": agent.name,
             "os": agent.os,
+            "os_version": reported_os_version,
+            "hostname": reported_hostname,
+            "username": reported_username,
             "ip_address": agent.ip_address,
             "version": agent.version,
             "last_seen": now,
@@ -524,6 +552,12 @@ class HeartbeatRequest(BaseModel):
     timestamp: Optional[str] = Field(None, description="Agent timestamp (ISO format)")
     status: Optional[str] = Field(None, description="Agent status")
     ip_address: Optional[str] = Field(None, description="Current IP address")
+    # Endpoint inventory refresh — lets the logged-in user / OS build stay
+    # current between agent restarts (a user can log off/on without the agent
+    # re-registering). Optional so agents that omit them change nothing.
+    os_version: Optional[str] = Field(None, description="Precise OS name/build")
+    hostname: Optional[str] = Field(None, description="Endpoint hostname")
+    username: Optional[str] = Field(None, description="Currently logged-in user")
     policy_version: Optional[str] = Field(None, description="Agent policy bundle version")
     policy_sync_status: Optional[str] = Field(None, description="Most recent policy sync status")
     policy_last_synced_at: Optional[str] = Field(None, description="ISO timestamp for last policy sync")
@@ -591,6 +625,12 @@ async def agent_heartbeat(
 
     if heartbeat and heartbeat.ip_address:
         update_data["ip_address"] = heartbeat.ip_address
+    if heartbeat and heartbeat.os_version:
+        update_data["os_version"] = heartbeat.os_version
+    if heartbeat and heartbeat.hostname:
+        update_data["hostname"] = heartbeat.hostname
+    if heartbeat and heartbeat.username:
+        update_data["username"] = heartbeat.username
     if heartbeat and heartbeat.policy_version is not None:
         update_data["policy_version"] = heartbeat.policy_version
     if heartbeat and heartbeat.policy_sync_status is not None:

@@ -171,6 +171,10 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      return expanded;
  }
  
+ // Single source of truth for the DLP agent build version reported to the
+ // server at registration/heartbeat and shown on the Agents page.
+ static const char* AGENT_VERSION = "1.0.0";
+
  std::string GetHostname() {
      char buffer[256];
      DWORD size = sizeof(buffer);
@@ -187,6 +191,60 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          return std::string(buffer);
      }
      return "unknown";
+ }
+
+ // Read a REG_SZ value from HKLM. Returns "" if missing/not a string.
+ static std::string RegReadStringHKLM(const char* subkey, const char* value) {
+     char buf[512];
+     DWORD size = sizeof(buf);
+     if (RegGetValueA(HKEY_LOCAL_MACHINE, subkey, value,
+                      RRF_RT_REG_SZ, nullptr, buf, &size) == ERROR_SUCCESS) {
+         return std::string(buf);
+     }
+     return "";
+ }
+
+ // Read a REG_DWORD value from HKLM. Returns 0 if missing/not a dword.
+ static DWORD RegReadDwordHKLM(const char* subkey, const char* value) {
+     DWORD data = 0;
+     DWORD size = sizeof(data);
+     if (RegGetValueA(HKEY_LOCAL_MACHINE, subkey, value,
+                      RRF_RT_REG_DWORD, nullptr, &data, &size) == ERROR_SUCCESS) {
+         return data;
+     }
+     return 0;
+ }
+
+ // Precise, human-readable OS name + build for endpoint inventory, e.g.
+ //   "Windows 11 Pro 23H2 (Build 22631.4460)"
+ // Sourced from HKLM\...\CurrentVersion rather than GetVersionEx() (which is
+ // capped/shimmed by the app manifest and reports the wrong build). Microsoft
+ // never updated the registry ProductName to "Windows 11", so we correct it
+ // ourselves: any build >= 22000 is Windows 11.
+ std::string GetOSVersion() {
+     const char* CV = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+     std::string product = RegReadStringHKLM(CV, "ProductName");      // "Windows 10 Pro"
+     std::string display = RegReadStringHKLM(CV, "DisplayVersion");   // "23H2"
+     if (display.empty()) display = RegReadStringHKLM(CV, "ReleaseId"); // older builds
+     std::string build   = RegReadStringHKLM(CV, "CurrentBuildNumber"); // "22631"
+     DWORD ubr = RegReadDwordHKLM(CV, "UBR");                          // 4460
+
+     long buildNum = 0;
+     try { buildNum = std::stol(build); } catch (...) { buildNum = 0; }
+     if (buildNum >= 22000) {
+         size_t pos = product.find("Windows 10");
+         if (pos != std::string::npos) product.replace(pos, 10, "Windows 11");
+     }
+     if (product.empty()) product = "Windows";
+
+     std::string result = product;
+     if (!display.empty()) result += " " + display;
+     if (!build.empty()) {
+         result += " (Build " + build;
+         if (ubr) result += "." + std::to_string(ubr);
+         result += ")";
+     }
+     return result;
  }
  
  std::string GetRealIPAddress() {
@@ -4358,9 +4416,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              json.AddString("name", config.agentName);
              json.AddString("hostname", GetHostname());
              json.AddString("os", "windows");
-             json.AddString("os_version", "Windows 10");
+             json.AddString("os_version", GetOSVersion());
+             json.AddString("username", GetUsername());
              json.AddString("ip_address", GetRealIPAddress());
-             json.AddString("version", "1.0.0");
+             json.AddString("version", AGENT_VERSION);
              
              auto [status, response] = httpClient->Post("/agents", json.Build());
              
@@ -5226,6 +5285,11 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              JsonBuilder json;
              json.AddString("timestamp", GetCurrentTimestampISO());
              json.AddString("ip_address", GetRealIPAddress());
+             // Keep endpoint inventory live — a user can log off/on without the
+             // agent restarting, so refresh the logged-in user and OS build on
+             // every heartbeat (the server only overwrites when non-empty).
+             json.AddString("username", GetUsername());
+             json.AddString("os_version", GetOSVersion());
              if (!activePolicyVersion.empty()) {
                  json.AddString("policy_version", activePolicyVersion);
              }

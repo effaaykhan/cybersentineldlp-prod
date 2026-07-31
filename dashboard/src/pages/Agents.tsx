@@ -197,6 +197,8 @@ export default function Agents() {
                 <th>Agent ID</th>
                 <th>Name</th>
                 <th>OS</th>
+                <th>User</th>
+                <th>Version</th>
                 <th>IP Address</th>
                 <th>Last Seen</th>
                 <th>Registered</th>
@@ -206,7 +208,7 @@ export default function Agents() {
             <tbody>
               {filteredAgents.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12">
+                  <td colSpan={10} className="text-center py-12">
                     <Server className="h-12 w-12 text-cs-muted-2 mx-auto mb-3" />
                     <p className="text-cs-ink-2 font-medium">
                       {filter === 'all' ? 'No agents registered' : `No ${TIER_BADGE[filter].label.toLowerCase()} agents`}
@@ -255,12 +257,29 @@ export default function Agents() {
                         </div>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
-                        <div className="flex items-center gap-2">
-                          <span>{agent.os}</span>
+                        <div>
+                          <div className="text-cs-ink capitalize">{agent.os || '—'}</div>
                           {agent.os_version && (
-                            <span className="text-xs text-cs-muted">{agent.os_version}</span>
+                            <div
+                              className="text-xs text-cs-muted"
+                              title={agent.os_version}
+                            >
+                              {agent.os_version}
+                            </div>
                           )}
                         </div>
+                      </td>
+                      <td onClick={() => handleAgentClick(agent.agent_id)}>
+                        {agent.username ? (
+                          <span className="text-sm text-cs-ink-2">{agent.username}</span>
+                        ) : (
+                          <span className="text-xs text-cs-muted">—</span>
+                        )}
+                      </td>
+                      <td onClick={() => handleAgentClick(agent.agent_id)}>
+                        <code className="num text-xs text-cs-ink-2">
+                          {agent.version || '—'}
+                        </code>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         <code className="num text-xs text-cs-ink-2">{agent.ip_address}</code>

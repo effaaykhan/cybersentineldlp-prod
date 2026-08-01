@@ -1,0 +1,4 @@
+
+# The prebuilt Linux agent is a binary artifact: never apply text or EOL
+# conversion to it, or the checked-out file will not match its .sha256 sidecar.
+agents/endpoint/linux/dist/cybersentineldlp-agent binary

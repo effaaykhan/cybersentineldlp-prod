@@ -266,3 +266,10 @@ update-summary.md
 !scripts/policy-sync-cron.sh
 !scripts/install-policy-sync-cron.sh
 !scripts/install-mirror-autopull.sh
+
+# The prebuilt Linux agent is a published artifact, not build scratch: the
+# client installer downloads it straight from the repo. The blanket dist/ rule
+# above would hide it. Both lines are required — git will not re-include a file
+# whose parent directory is excluded.
+!agents/endpoint/linux/dist/
+!agents/endpoint/linux/dist/**

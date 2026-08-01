@@ -1,4 +1,13 @@
-# CyberSentinel DLP - Linux Agent Requirements
-requests==2.31.0
-watchdog==3.0.0
-python-dateutil==2.8.2
+# CyberSentinel DLP - Linux Agent runtime dependencies.
+#
+# The agent is deliberately thin on third-party code: everything else it needs
+# (proc/netlink parsing, hashing, archive inspection, sqlite, subprocess
+# control) comes from the standard library. Keep it that way — every dependency
+# added here has to install cleanly on every endpoint in the fleet.
+#
+# Ranges rather than pins: agent.py is version-tolerant against both, and hard
+# pins age badly across the Python versions in a mixed fleet (Debian 11's 3.9
+# through Ubuntu 25.04's 3.13). Upper bounds guard against major-version breaks.
+
+requests>=2.31,<3
+watchdog>=4.0,<7

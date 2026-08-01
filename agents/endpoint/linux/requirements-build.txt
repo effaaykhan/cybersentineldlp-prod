@@ -1,0 +1,16 @@
+# CyberSentinel DLP - Linux Agent BUILD-time dependencies.
+#
+# These are needed only to produce the executable. They are not part of the
+# agent and are not present on an endpoint once the build tree is removed.
+#
+# Kept separate from requirements.txt so that:
+#   * an air-gapped site can pre-download exactly this set for a build host and
+#     leave the endpoints with no toolchain at all (--prebuilt-binary), and
+#   * the runtime dependency list stays an honest statement of what actually
+#     ends up inside the binary.
+#
+# 6.11 is the floor because that is where Python 3.13 support landed; anything
+# older fails to build against the interpreter Ubuntu 25.04 ships. The upper
+# bound guards against a major-version change to the bootloader or spec format.
+
+pyinstaller>=6.11,<8

@@ -16,10 +16,20 @@ User=root
 Group=root
 
 WorkingDirectory=__INSTALL_DIR__
-ExecStart=__VENV_DIR__/bin/python __INSTALL_DIR__/agent.py --config __CONFIG_FILE__
+
+# The agent is a single self-contained executable: the Python runtime, requests,
+# watchdog, agent.py, policy_cache.py and print_monitor.py are all inside it.
+# There is no interpreter or virtualenv path to reference, which is what makes
+# this unit byte-identical on every endpoint in the fleet.
+#
+# A onefile binary unpacks itself into __RUN_DIR__ on each start and removes
+# that copy on clean exit. A SIGKILL — or the crash Restart=always exists to
+# handle — leaves it behind, so sweep stale copies rather than letting them
+# accumulate one restart at a time.
+ExecStartPre=-/bin/sh -c 'rm -rf __RUN_DIR__/_MEI*'
+ExecStart=__BIN_PATH__ --config __CONFIG_FILE__
 
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=CYBERSENTINEL_LOG_FILE=__LOG_DIR__/agent.log
 Environment=CYBERSENTINEL_LOG_LEVEL=INFO
 

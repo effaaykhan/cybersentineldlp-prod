@@ -9,7 +9,11 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/cybersentinel/agent"
-VENV_DIR="/opt/cybersentinel/venv"
+BUILD_DIR="/opt/cybersentinel/build"
+RUN_DIR="/opt/cybersentinel/run"
+# Left over from installs that predate the single-executable build. Removed
+# here too so an uninstall does not leave ~50 MB of orphaned virtualenv behind.
+LEGACY_VENV="/opt/cybersentinel/venv"
 CONFIG_DIR="/etc/cybersentinel"
 LOG_DIR="/var/log/cybersentinel"
 QUARANTINE_DIR="/opt/cybersentinel/quarantine"
@@ -47,9 +51,9 @@ systemctl daemon-reload
 systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
 echo "  service removed"
 
-rm -rf "$INSTALL_DIR" "$VENV_DIR"
+rm -rf "$INSTALL_DIR" "$BUILD_DIR" "$RUN_DIR" "$LEGACY_VENV"
 rm -f /etc/sysctl.d/99-cybersentinel-inotify.conf
-echo "  code and virtualenv removed"
+echo "  executable, unpack directory and any build tree removed"
 
 if [ "$PURGE" -eq 1 ]; then
   # Quarantine can hold the only remaining copy of a file the agent pulled out

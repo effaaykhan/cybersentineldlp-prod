@@ -11,6 +11,14 @@
 #
 #   ./rollout.sh --server-url http://10.0.0.5:55000/api/v1 --hosts-file fleet.txt
 #
+# By default every target builds its own executable, which needs a Python build
+# toolchain and PyPI access on each one. For a fleet it is usually better to
+# build once and ship the binary:
+#
+#   sudo ./install.sh --build-only
+#   ./rollout.sh --server-url ... --hosts-file fleet.txt \
+#                --prebuilt-binary /opt/cybersentinel/build/dist/cybersentineldlp-agent
+#
 # Requires passwordless sudo on the targets, or run as root there.
 
 set -euo pipefail
@@ -21,6 +29,7 @@ HOSTS_FILE=""
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15"
 PARALLEL=4
 EXTRA_ARGS=""
+PREBUILT_BINARY=""
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -34,6 +43,9 @@ Usage: ./rollout.sh --server-url URL (--hosts LIST | --hosts-file PATH) [options
   --parallel N         Concurrent installs (default: $PARALLEL)
   --ssh-opts "..."     Extra ssh options
   --extra "..."        Extra flags forwarded to install.sh
+  --prebuilt-binary P  Ship this already-built executable instead of building
+                       on every target. The targets then need no Python and no
+                       build toolchain. Build it with: install.sh --build-only
   -h, --help           Show this help
 
 Each host registers as its own agent: install.sh never copies identity, so
@@ -49,12 +61,33 @@ while [ $# -gt 0 ]; do
     --parallel)   PARALLEL="${2:-}";   shift 2 ;;
     --ssh-opts)   SSH_OPTS="${2:-}";   shift 2 ;;
     --extra)      EXTRA_ARGS="${2:-}"; shift 2 ;;
+    --prebuilt-binary) PREBUILT_BINARY="${2:-}"; shift 2 ;;
     -h|--help)    usage; exit 0 ;;
     *)            usage >&2; echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
 [ -n "$SERVER_URL" ] || { usage >&2; echo "ERROR: --server-url is required." >&2; exit 1; }
+
+# Which files each target needs depends on whether it builds or just installs.
+# Getting this list wrong fails on the target's preflight check rather than
+# here, which is a slow and confusing way to find out.
+if [ -n "$PREBUILT_BINARY" ]; then
+  [ -f "$PREBUILT_BINARY" ] || { echo "ERROR: no such file: $PREBUILT_BINARY" >&2; exit 1; }
+  PAYLOAD=("$PREBUILT_BINARY" "$SRC_DIR/install.sh" "$SRC_DIR/uninstall.sh"
+           "$SRC_DIR/cybersentineldlp-agent.service")
+  REMOTE_INSTALL_ARGS="--prebuilt-binary \"\$HOME/.cybersentinel-deploy/$(basename "$PREBUILT_BINARY")\""
+else
+  PAYLOAD=("$SRC_DIR/agent.py" "$SRC_DIR/policy_cache.py" "$SRC_DIR/print_monitor.py"
+           "$SRC_DIR/agent_launcher.py" "$SRC_DIR/install.sh" "$SRC_DIR/uninstall.sh"
+           "$SRC_DIR/requirements.txt" "$SRC_DIR/requirements-build.txt"
+           "$SRC_DIR/cybersentineldlp-agent.service")
+  REMOTE_INSTALL_ARGS=""
+fi
+
+for f in "${PAYLOAD[@]}"; do
+  [ -f "$f" ] || { echo "ERROR: missing file needed for rollout: $f" >&2; exit 1; }
+done
 
 TARGETS=()
 if [ -n "$HOSTS" ]; then
@@ -84,12 +117,10 @@ deploy_one() {
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "$target" "rm -rf ~/.cybersentinel-deploy && mkdir -p ~/.cybersentinel-deploy" || return 1
     # shellcheck disable=SC2086
-    scp $SSH_OPTS -q "$SRC_DIR/agent.py" "$SRC_DIR/install.sh" "$SRC_DIR/uninstall.sh" \
-        "$SRC_DIR/requirements.txt" "$SRC_DIR/cybersentineldlp-agent.service" \
-        "$target:~/.cybersentinel-deploy/" || return 1
+    scp $SSH_OPTS -q "${PAYLOAD[@]}" "$target:~/.cybersentinel-deploy/" || return 1
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "$target" \
-      "cd ~/.cybersentinel-deploy && chmod +x install.sh uninstall.sh && sudo ./install.sh --server-url '$SERVER_URL' $EXTRA_ARGS" || return 1
+      "cd ~/.cybersentinel-deploy && chmod +x install.sh uninstall.sh && sudo ./install.sh --server-url '$SERVER_URL' $REMOTE_INSTALL_ARGS $EXTRA_ARGS" || return 1
   } >"$log" 2>&1
 
   return $?

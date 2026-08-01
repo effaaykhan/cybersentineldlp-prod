@@ -510,6 +510,23 @@ if grep -q '__[A-Z_]*__' "$UNIT_PATH"; then
   die "Unit file still contains unsubstituted placeholders — check $SRC_DIR/cybersentineldlp-agent.service."
 fi
 
+# systemd does not reject a directive it does not recognise — it logs "Unknown
+# key" and carries on, so a misplaced setting looks installed while doing
+# nothing. StartLimitIntervalSec was in [Service] here and was being dropped
+# exactly that way. Fail on it rather than ship a unit whose hardening is
+# decorative.
+if command -v systemd-analyze >/dev/null 2>&1; then
+  VERIFY_OUT="$(systemd-analyze verify "$UNIT_PATH" 2>&1 || true)"
+  if printf '%s' "$VERIFY_OUT" | grep -q 'Unknown key'; then
+    printf '\n%s\n' "$VERIFY_OUT" >&2
+    die "The unit contains directives this systemd silently ignores (see 'Unknown key' above)."
+  fi
+  if [ -n "$VERIFY_OUT" ]; then
+    printf '%s\n' "$VERIFY_OUT" | sed 's/^/      /' >&2
+  fi
+  ok "Unit accepted by systemd-analyze"
+fi
+
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
 ok "$UNIT_PATH (enabled at boot)"

@@ -210,6 +210,7 @@ manual_*.ps1
 !deploy-ubuntu.sh
 !validate.sh
 !rollout.sh
+!install_agent.sh
 
 # Ignore analysis and status files
 *_ANALYSIS.md

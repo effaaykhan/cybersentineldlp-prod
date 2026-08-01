@@ -6,6 +6,13 @@ Documentation=https://github.com/effaaykhan/cybersentineldlp-prod
 After=network-online.target
 Wants=network-online.target
 
+# Belongs in [Unit], not [Service]: systemd moved the start-rate-limit keys and
+# silently ignores them in [Service], logging only "Unknown key ... ignoring".
+# A security agent should keep trying rather than latch into 'failed' after a
+# few bad starts (e.g. the manager unreachable during a reboot). RestartSec=10
+# already bounds this to roughly six attempts a minute.
+StartLimitIntervalSec=0
+
 [Service]
 Type=simple
 # Root is required, not cosmetic: process suspension/termination (SIGSTOP /
@@ -41,10 +48,8 @@ TimeoutStopSec=30
 
 Restart=always
 RestartSec=10
-# A security agent should keep trying rather than latch into 'failed' after a
-# few bad starts (e.g. manager unreachable during a reboot). RestartSec already
-# bounds this to ~6 attempts/minute.
-StartLimitIntervalSec=0
+# NB: the matching StartLimitIntervalSec=0 is in [Unit] above, where systemd
+# actually reads it.
 
 # One inotify watch per monitored directory plus open file handles during
 # content inspection; the default 1024 is easily exhausted on a busy endpoint.

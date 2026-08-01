@@ -102,8 +102,25 @@ def _install_config():
     elif not cfg.get("agent_name"):
         cfg["agent_name"] = socket.gethostname()
 
-    cfg.setdefault("heartbeat_interval", 30)
-    cfg.setdefault("policy_sync_interval", 60)
+    # Intervals are settable so the bootstrap installer can prompt for them
+    # without hand-writing JSON of its own. An unset or unparseable value keeps
+    # whatever is already there, then falls back to the default.
+    for key, env, default in (("heartbeat_interval", "CS_HEARTBEAT_INTERVAL", 30),
+                              ("policy_sync_interval", "CS_POLICY_SYNC_INTERVAL", 60)):
+        raw = os.environ.get(env, "").strip()
+        if raw:
+            try:
+                value = int(raw)
+            except ValueError:
+                print("  ! %s is not a number (%r); ignoring." % (env, raw),
+                      file=sys.stderr)
+            else:
+                if value > 0:
+                    cfg[key] = value
+                else:
+                    print("  ! %s must be positive (got %d); ignoring."
+                          % (env, value), file=sys.stderr)
+        cfg.setdefault(key, default)
 
     quar = dict(cfg.get("quarantine") or {})
     quar.setdefault("enabled", True)

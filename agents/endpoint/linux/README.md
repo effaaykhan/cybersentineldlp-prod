@@ -4,7 +4,52 @@ Builds the agent into **one self-contained executable** and installs it as a
 **systemd service** that starts at boot, restarts on failure, and logs to
 journald. One command per endpoint.
 
-## Quick start
+There are two entry points, and which one you want depends on who is running it:
+
+| | Script | Who runs it | Needs |
+|---|---|---|---|
+| **Client endpoints** | `install_agent.sh` (repo root) | The person installing on a workstation | Nothing but `curl` — it fetches the executable from GitHub |
+| **Build / packaging** | `install.sh` (this directory) | You, to produce the executable | The source tree and a Python toolchain |
+
+## Client install (the one-liner)
+
+This is the Linux counterpart of `install-agent.ps1`. It is the **only** file a
+client machine needs; the executable, its checksum and the systemd unit are all
+fetched from the repo.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install_agent.sh | sudo bash
+```
+
+Unattended, for imaging or config management:
+
+```bash
+curl -fsSL .../install_agent.sh | sudo bash -s -- \
+     --server-host dlp.corp.local --agent-name web-01 --yes
+```
+
+It prompts for the server, agent name and intervals (reading from `/dev/tty`,
+so prompts still work through the pipe), removes any previous agent while
+carrying its identity forward, verifies the downloaded binary's SHA-256 against
+the sidecar in the repo and **refuses to install on a mismatch**, then installs
+and starts the service.
+
+### Publishing what it downloads
+
+`install_agent.sh` expects these in the repo. Regenerate them whenever the agent
+changes:
+
+```bash
+sudo ./install.sh --build-only
+cp /opt/cybersentinel/build/dist/cybersentineldlp-agent agents/endpoint/linux/dist/
+cd agents/endpoint/linux/dist
+sha256sum cybersentineldlp-agent > cybersentineldlp-agent.sha256
+```
+
+Without the `.sha256` sidecar the installer warns loudly and continues; with a
+mismatched one it exits `2` and installs nothing.
+
+## Build / packaging
 
 ```bash
 sudo ./install.sh --server-url http://192.168.2.204:55000/api/v1

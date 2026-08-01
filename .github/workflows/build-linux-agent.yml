@@ -49,45 +49,49 @@ jobs:
 
       - name: Freeze agent into a single executable (Debian 11 → glibc 2.31 floor)
         run: |
-          docker run --rm -v "${{ github.workspace }}:/src" \
-            -w /src/agents/endpoint/linux python:3.11-bullseye \
-            bash -euo pipefail -c '
-              python -m pip install --no-cache-dir --upgrade pip
-              python -m pip install --no-cache-dir -r requirements.txt -r requirements-build.txt
-
-              # Stage only the four modules that make up the agent, exactly like
-              # install.sh, so PyInstaller cannot scoop up anything else.
-              rm -rf /tmp/stage /tmp/out /tmp/work /tmp/spec
-              mkdir -p /tmp/stage
-              cp agent.py policy_cache.py print_monitor.py agent_launcher.py /tmp/stage/
-
-              # Same flags as install.sh --build-only. --hidden-import forces in
-              # policy_cache/print_monitor (the agent does not import them) and
-              # watchdog's inotify backend (chosen at runtime, invisible to static
-              # analysis). --runtime-tmpdir is intentionally omitted here: install.sh
-              # bakes an install-specific /opt path, but a published binary must
-              # extract to the system default so it runs anywhere.
-              cd /tmp/stage
-              pyinstaller \
-                --onefile \
-                --name cybersentineldlp-agent \
-                --distpath /tmp/out \
-                --workpath /tmp/work \
-                --specpath /tmp/spec \
-                --paths /tmp/stage \
-                --hidden-import agent \
-                --hidden-import policy_cache \
-                --hidden-import print_monitor \
-                --hidden-import watchdog.observers.inotify \
-                --hidden-import watchdog.observers.inotify_buffer \
-                --hidden-import watchdog.observers.polling \
-                --exclude-module tkinter \
-                --noupx --clean --noconfirm --log-level WARN \
-                agent_launcher.py
-
-              install -m 0755 /tmp/out/cybersentineldlp-agent \
-                /src/agents/endpoint/linux/dist/cybersentineldlp-agent
-            '
+          # Write the in-container build to a file first via a QUOTED heredoc
+          # (<<'BUILD' = fully literal), then run that file inside a Debian 11
+          # image. This avoids embedding the script in `bash -c '...'`, where a
+          # single apostrophe in a comment (e.g. "watchdog's") would close the
+          # quote early and break the whole step. Recipe matches
+          # install.sh --build-only, minus --runtime-tmpdir: install.sh bakes an
+          # install-only /opt path, but a published binary must extract to the
+          # default temp so it runs anywhere. The hidden imports force in
+          # policy_cache and print_monitor (the agent never imports them) plus
+          # the watchdog inotify backend (chosen at runtime, invisible to static
+          # analysis).
+          cat > "$RUNNER_TEMP/build_agent.sh" <<'BUILD'
+          set -euo pipefail
+          python -m pip install --no-cache-dir --upgrade pip
+          python -m pip install --no-cache-dir -r requirements.txt -r requirements-build.txt
+          rm -rf /tmp/stage /tmp/out /tmp/work /tmp/spec
+          mkdir -p /tmp/stage
+          cp agent.py policy_cache.py print_monitor.py agent_launcher.py /tmp/stage/
+          cd /tmp/stage
+          pyinstaller \
+            --onefile \
+            --name cybersentineldlp-agent \
+            --distpath /tmp/out \
+            --workpath /tmp/work \
+            --specpath /tmp/spec \
+            --paths /tmp/stage \
+            --hidden-import agent \
+            --hidden-import policy_cache \
+            --hidden-import print_monitor \
+            --hidden-import watchdog.observers.inotify \
+            --hidden-import watchdog.observers.inotify_buffer \
+            --hidden-import watchdog.observers.polling \
+            --exclude-module tkinter \
+            --noupx --clean --noconfirm --log-level WARN \
+            agent_launcher.py
+          install -m 0755 /tmp/out/cybersentineldlp-agent \
+            /src/agents/endpoint/linux/dist/cybersentineldlp-agent
+          BUILD
+          docker run --rm \
+            -v "${{ github.workspace }}:/src" \
+            -v "$RUNNER_TEMP/build_agent.sh:/build_agent.sh:ro" \
+            -w /src/agents/endpoint/linux \
+            python:3.11-bullseye bash /build_agent.sh
           # The container runs as root; take ownership back so the git steps below
           # (running as the runner user) can stage the file cleanly.
           sudo chown "$(id -u):$(id -g)" agents/endpoint/linux/dist/cybersentineldlp-agent

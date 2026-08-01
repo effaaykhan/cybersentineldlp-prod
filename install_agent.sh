@@ -40,6 +40,9 @@ main() {
 # Configuration
 # ---------------------------------------------------------------------------
 
+# Where the executable, its checksum and the unit file are fetched from. It has
+# to be a repo that actually publishes them — the client downloads straight from
+# it — so installing from a fork means passing --repo rather than editing this.
 GITHUB_REPO="effaaykhan/cybersentineldlp-prod"
 GITHUB_REF="main"
 INSTALL_DIR="/opt/cybersentinel/agent"
@@ -97,6 +100,7 @@ Options:
   --binary-url URL       Fetch the executable from here instead of the repo
   --unit-url URL         Fetch the systemd unit template from here instead
                          (both accept file:// for an internal mirror)
+  --repo OWNER/NAME      GitHub repo to fetch from (default: ${GITHUB_REPO})
   --ref REF              Git branch or tag to fetch from (default: ${GITHUB_REF})
   --with-ocr             Also install tesseract (see note below)
   -y, --yes              Accept defaults, never prompt (for unattended runs)
@@ -194,6 +198,7 @@ while [ $# -gt 0 ]; do
     --policy-sync) POLICY_SYNC_INTERVAL="${2:-}"; shift 2 ;;
     --binary-url)  BINARY_URL="${2:-}";           shift 2 ;;
     --unit-url)    UNIT_URL_OVERRIDE="${2:-}";    shift 2 ;;
+    --repo)        GITHUB_REPO="${2:-}";          shift 2 ;;
     --ref)         GITHUB_REF="${2:-}";           shift 2 ;;
     --with-ocr)    WITH_OCR=1;                    shift ;;
     -y|--yes)      ASSUME_YES=1; TTY_OK=0;        shift ;;

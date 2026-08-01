@@ -23,7 +23,8 @@
  #include <shlobj.h>
  #include <comdef.h>
  #include <winnetwk.h>   // WNetGetConnectionA — resolve mapped drive -> UNC (needs -lmpr)
- 
+ #include <wtsapi32.h>   // WTSEnumerateSessions — enumerate logged-in users (needs -lwtsapi32)
+
  #include <iostream>
  #include <fstream>
  #include <sstream>
@@ -215,20 +216,15 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      return 0;
  }
 
- // Precise, human-readable OS name + build for endpoint inventory, e.g.
- //   "Windows 11 Pro 23H2 (Build 22631.4460)"
- // Sourced from HKLM\...\CurrentVersion rather than GetVersionEx() (which is
- // capped/shimmed by the app manifest and reports the wrong build). Microsoft
- // never updated the registry ProductName to "Windows 11", so we correct it
- // ourselves: any build >= 22000 is Windows 11.
- std::string GetOSVersion() {
+ // Precise OS product name shown in the Agents "OS" column, e.g. "Windows 11
+ // Pro". Sourced from HKLM\...\CurrentVersion rather than GetVersionEx() (which
+ // is capped/shimmed by the app manifest and reports the wrong build).
+ // Microsoft never updated the registry ProductName to "Windows 11", so we
+ // correct it ourselves: any build >= 22000 is Windows 11.
+ std::string GetOSProductName() {
      const char* CV = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
-     std::string product = RegReadStringHKLM(CV, "ProductName");      // "Windows 10 Pro"
-     std::string display = RegReadStringHKLM(CV, "DisplayVersion");   // "23H2"
-     if (display.empty()) display = RegReadStringHKLM(CV, "ReleaseId"); // older builds
+     std::string product = RegReadStringHKLM(CV, "ProductName");        // "Windows 10 Pro"
      std::string build   = RegReadStringHKLM(CV, "CurrentBuildNumber"); // "22631"
-     DWORD ubr = RegReadDwordHKLM(CV, "UBR");                          // 4460
-
      long buildNum = 0;
      try { buildNum = std::stol(build); } catch (...) { buildNum = 0; }
      if (buildNum >= 22000) {
@@ -236,17 +232,123 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          if (pos != std::string::npos) product.replace(pos, 10, "Windows 11");
      }
      if (product.empty()) product = "Windows";
+     return product;
+ }
 
-     std::string result = product;
-     if (!display.empty()) result += " " + display;
+ // Granular OS version/build shown in the Agents "Version" column, e.g.
+ // "23H2 (Build 22631.4460)". Complements GetOSProductName().
+ std::string GetOSVersionDetail() {
+     const char* CV = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+     std::string display = RegReadStringHKLM(CV, "DisplayVersion");     // "23H2"
+     if (display.empty()) display = RegReadStringHKLM(CV, "ReleaseId"); // older builds
+     std::string build   = RegReadStringHKLM(CV, "CurrentBuildNumber"); // "22631"
+     DWORD ubr = RegReadDwordHKLM(CV, "UBR");                           // 4460
+
+     std::string result = display;
      if (!build.empty()) {
-         result += " (Build " + build;
+         if (!result.empty()) result += " ";
+         result += "(Build " + build;
          if (ubr) result += "." + std::to_string(ubr);
          result += ")";
      }
      return result;
  }
- 
+
+ // ---- Logged-in user enumeration (WTS) ------------------------------------
+ // Case-insensitive compare, self-contained so these helpers don't depend on
+ // the shared ToLower() defined much further down the file.
+ static char _AsciiLower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
+ static bool _CIEquals(const std::string& a, const std::string& b) {
+     if (a.size() != b.size()) return false;
+     for (size_t i = 0; i < a.size(); ++i)
+         if (_AsciiLower(a[i]) != _AsciiLower(b[i])) return false;
+     return true;
+ }
+
+ // A Windows service/system pseudo-account, not a real person. Inventory or
+ // events attributed to these are noise, so callers fall back to the console
+ // user instead.
+ static bool _IsServiceAccount(const std::string& u) {
+     static const char* SVC[] = {"", "system", "unknown", "local service", "network service"};
+     for (const char* s : SVC) if (_CIEquals(u, s)) return true;
+     // Session-manager pseudo-users: DWM-N (desktop window mgr), UMFD-N (font driver).
+     if (u.size() >= 4 && _CIEquals(u.substr(0, 4), "dwm-")) return true;
+     if (u.size() >= 5 && _CIEquals(u.substr(0, 5), "umfd-")) return true;
+     return false;
+ }
+
+ // Every user with a live session — console, RDP-active, or logged-on but
+ // disconnected — deduped, with the active/console user first. Empty on error
+ // or when nobody is logged in (e.g. sitting at the login screen).
+ std::vector<std::string> GetLoggedInUsers() {
+     std::vector<std::string> users;
+     PWTS_SESSION_INFOA sessions = nullptr;
+     DWORD count = 0;
+     if (!WTSEnumerateSessionsA(WTS_CURRENT_SERVER_HANDLE, 0, 1, &sessions, &count))
+         return users;
+     for (DWORD i = 0; i < count; ++i) {
+         WTS_CONNECTSTATE_CLASS st = sessions[i].State;
+         if (st != WTSActive && st != WTSConnected && st != WTSDisconnected) continue;
+         LPSTR name = nullptr;
+         DWORD bytes = 0;
+         if (WTSQuerySessionInformationA(WTS_CURRENT_SERVER_HANDLE, sessions[i].SessionId,
+                                         WTSUserName, &name, &bytes) && name) {
+             std::string u(name);
+             if (!u.empty() && !_IsServiceAccount(u)) {
+                 bool dup = false;
+                 for (const auto& e : users) if (_CIEquals(e, u)) { dup = true; break; }
+                 if (!dup) {
+                     if (st == WTSActive) users.insert(users.begin(), u);  // console first
+                     else users.push_back(u);
+                 }
+             }
+         }
+         if (name) WTSFreeMemory(name);
+     }
+     WTSFreeMemory(sessions);
+     return users;
+ }
+
+ // The user physically (or RDP-) active at the console right now. "" when the
+ // machine is at the lock/login screen with no active session.
+ std::string GetActiveConsoleUser() {
+     DWORD sid = WTSGetActiveConsoleSessionId();
+     if (sid == 0xFFFFFFFF) return "";
+     LPSTR name = nullptr;
+     DWORD bytes = 0;
+     std::string result;
+     if (WTSQuerySessionInformationA(WTS_CURRENT_SERVER_HANDLE, sid,
+                                     WTSUserName, &name, &bytes) && name) {
+         result = name;
+     }
+     if (name) WTSFreeMemory(name);
+     if (_IsServiceAccount(result)) return "";
+     return result;
+ }
+
+ // Primary user for endpoint inventory: the active console user, else the
+ // agent's own token user (correct on single-user boxes where the agent runs
+ // in that user's session).
+ std::string GetPrimaryUser() {
+     std::string c = GetActiveConsoleUser();
+     if (!c.empty()) return c;
+     std::string u = GetUsername();
+     return u.empty() ? "unknown" : u;
+ }
+
+ // The user an event is attributed to in the log. If the agent runs in a real
+ // person's session, its own token IS that person. If it runs as SYSTEM/a
+ // service, attribute to the interactive console user instead so the alert log
+ // names who actually triggered it.
+ std::string GetEventUser() {
+     std::string u = GetUsername();
+     if (_IsServiceAccount(u)) {
+         std::string c = GetActiveConsoleUser();
+         if (!c.empty()) return c;
+     }
+     return u.empty() ? "unknown" : u;
+ }
+
  std::string GetRealIPAddress() {
      WSADATA wsaData;
      if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -2214,7 +2316,7 @@ if (shouldBlock && usbBlockingActive.load()) {
     json.AddString("event_subtype", "usb_blocked");
     json.AddString("agent_id", config.agentId);
     json.AddString("source_type", "agent");
-    json.AddString("user_email", GetUsername() + "@" + GetHostname());
+    json.AddString("user_email", GetEventUser() + "@" + GetHostname());
     json.AddString("description", "USB device blocked by policy: " + betterDeviceName);
     json.AddString("severity", "critical");
     json.AddString("action", "blocked");
@@ -3623,7 +3725,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
         json.AddString("event_subtype", "usb_file_transfer");
         json.AddString("agent_id", config.agentId);
         json.AddString("source_type", "agent");
-        json.AddString("user_email", GetUsername() + "@" + GetHostname());
+        json.AddString("user_email", GetEventUser() + "@" + GetHostname());
         json.AddString("description", description);
         json.AddString("severity", severity);
         json.AddString("action", action);
@@ -4315,7 +4417,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              NetworkExfilMonitor::Config nemCfg;
              nemCfg.agentId   = config.agentId;
              nemCfg.agentName = config.agentName;
-             nemCfg.username  = GetUsername();
+             nemCfg.username  = GetEventUser();
              nemCfg.hostname  = GetHostname();
 
              nemCfg.classify = [this](const std::string& content,
@@ -4416,8 +4518,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              json.AddString("name", config.agentName);
              json.AddString("hostname", GetHostname());
              json.AddString("os", "windows");
-             json.AddString("os_version", GetOSVersion());
-             json.AddString("username", GetUsername());
+             json.AddString("os_name", GetOSProductName());       // "Windows 11 Pro"
+             json.AddString("os_version", GetOSVersionDetail());  // "23H2 (Build 22631.4460)"
+             std::vector<std::string> loggedIn = GetLoggedInUsers();
+             json.AddArray("logged_in_users", loggedIn);
+             json.AddString("username", loggedIn.empty() ? GetPrimaryUser() : loggedIn.front());
              json.AddString("ip_address", GetRealIPAddress());
              json.AddString("version", AGENT_VERSION);
              
@@ -5285,11 +5390,15 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              JsonBuilder json;
              json.AddString("timestamp", GetCurrentTimestampISO());
              json.AddString("ip_address", GetRealIPAddress());
-             // Keep endpoint inventory live — a user can log off/on without the
-             // agent restarting, so refresh the logged-in user and OS build on
-             // every heartbeat (the server only overwrites when non-empty).
-             json.AddString("username", GetUsername());
-             json.AddString("os_version", GetOSVersion());
+             // Keep endpoint inventory live — users can log on/off (and OS can
+             // update) without the agent restarting, so refresh the logged-in
+             // user(s) and OS build on every heartbeat (server overwrites only
+             // when non-empty).
+             std::vector<std::string> loggedIn = GetLoggedInUsers();
+             json.AddArray("logged_in_users", loggedIn);
+             json.AddString("username", loggedIn.empty() ? GetPrimaryUser() : loggedIn.front());
+             json.AddString("os_name", GetOSProductName());
+             json.AddString("os_version", GetOSVersionDetail());
              if (!activePolicyVersion.empty()) {
                  json.AddString("policy_version", activePolicyVersion);
              }
@@ -5510,7 +5619,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 pubJson.AddString("event_subtype", "clipboard_copy");
                 pubJson.AddString("agent_id", config.agentId);
                 pubJson.AddString("source_type", "agent");
-                pubJson.AddString("user_email", GetUsername() + "@" + GetHostname());
+                pubJson.AddString("user_email", GetEventUser() + "@" + GetHostname());
                 pubJson.AddString("description", "Clipboard content - no sensitive data detected");
                 pubJson.AddString("severity", "low");
                 pubJson.AddString("action", "allowed");
@@ -5634,7 +5743,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("event_subtype", "clipboard_copy");
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "agent");
-            json.AddString("user_email", GetUsername() + "@" + GetHostname());
+            json.AddString("user_email", GetEventUser() + "@" + GetHostname());
             json.AddString("description", preciseDesc);
             json.AddString("severity", classification.severity);
             json.AddString("action", classification.suggestedAction);
@@ -6172,7 +6281,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("event_subtype", eventSubtype);
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "agent");
-            json.AddString("user_email", GetUsername() + "@" + GetHostname());
+            json.AddString("user_email", GetEventUser() + "@" + GetHostname());
             json.AddString("description", description);
             json.AddString("severity", severity);
             json.AddString("action", policyAction);
@@ -6348,7 +6457,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          json.AddString("event_subtype", "canary_tripped");
          json.AddString("agent_id", config.agentId);
          json.AddString("source_type", "agent");
-         json.AddString("user_email", GetUsername() + "@" + GetHostname());
+         json.AddString("user_email", GetEventUser() + "@" + GetHostname());
          json.AddString("description",
              "RANSOMWARE CANARY TRIPPED: decoy file was " + action + " — " + fullPath);
          json.AddString("severity", "critical");
@@ -6401,7 +6510,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          json.AddString("event_subtype", "mass_file_modification");
          json.AddString("agent_id", config.agentId);
          json.AddString("source_type", "agent");
-         json.AddString("user_email", GetUsername() + "@" + GetHostname());
+         json.AddString("user_email", GetEventUser() + "@" + GetHostname());
          json.AddString("description",
              "SUSPECTED RANSOMWARE: " + std::to_string(burst) +
              " file changes in " + secs + "s under a monitored path (most recent: " +
@@ -7365,7 +7474,7 @@ if (shouldMonitor) {
             json.AddString("event_subtype", emittedSubtype);
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "agent");
-            json.AddString("user_email", GetUsername() + "@" + GetHostname());
+            json.AddString("user_email", GetEventUser() + "@" + GetHostname());
             json.AddString("description", "File " + action + ": " + fileName + " - " + detectedSummary);
             json.AddString("severity", severity);
             json.AddString("action", detectedAction);
@@ -7645,7 +7754,7 @@ if (shouldMonitor) {
              json.AddString("event_subtype", blocked ? "transfer_blocked" : "transfer_attempt");
              json.AddString("agent_id", config.agentId);
              json.AddString("source_type", "agent");
-             json.AddString("user_email", GetUsername() + "@" + GetHostname());
+             json.AddString("user_email", GetEventUser() + "@" + GetHostname());
              json.AddString("description", description);
              json.AddString("severity", severity);
              json.AddString("action", blocked ? "blocked" : "logged");
@@ -9316,7 +9425,7 @@ void MonitorUSBTransferDirectories() {
             json.AddString("event_subtype", "usb_file_transfer");
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "agent");
-            json.AddString("user_email", GetUsername() + "@" + GetHostname());
+            json.AddString("user_email", GetEventUser() + "@" + GetHostname());
             json.AddString("description", description);
             json.AddString("severity", severity);
             json.AddString("action", policyAction);

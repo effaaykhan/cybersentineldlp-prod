@@ -138,9 +138,14 @@ export type Agent = {
   created_at: string
   version?: string
   hostname?: string
+  /** Precise OS product name, e.g. "Windows 11 Pro" / "Ubuntu 22.04.3 LTS". */
+  os_name?: string | null
+  /** Granular OS version/build, e.g. "23H2 (Build 22631.4460)" / kernel release. */
   os_version?: string
-  /** Logged-in user on the endpoint, reported by the agent. */
+  /** Primary/active logged-in user on the endpoint (fallback of logged_in_users). */
   username?: string | null
+  /** Every user with an active login session, active/console first. */
+  logged_in_users?: string[] | null
   capabilities?: Record<string, boolean>
   /** True if heartbeat within ``AGENT_TIMEOUT_SECONDS``. Mirrors
    *  ``lifecycle_status === 'active'``. */

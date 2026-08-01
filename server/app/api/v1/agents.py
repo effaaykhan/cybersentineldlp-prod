@@ -176,8 +176,17 @@ class Agent(AgentBase):
     # Endpoint inventory — reported by the agent, optional so legacy docs
     # (registered before these were captured) still validate.
     hostname: Optional[str] = Field(None, description="Endpoint hostname")
-    os_version: Optional[str] = Field(None, description="Precise OS name/build, e.g. 'Windows 11 Pro 23H2 (Build 22631.4460)'")
-    username: Optional[str] = Field(None, description="Logged-in user on the endpoint")
+    # OS is split into a precise product name (shown in the OS column) and a
+    # granular version (shown in the Version column). ``os_name`` examples:
+    # "Windows 11 Pro", "Ubuntu 22.04.3 LTS". ``os_version`` examples:
+    # "23H2 (Build 22631.4460)", "6.8.0-124-generic" (Linux kernel).
+    os_name: Optional[str] = Field(None, description="Precise OS product name, e.g. 'Windows 11 Pro' / 'Ubuntu 22.04.3 LTS'")
+    os_version: Optional[str] = Field(None, description="Granular OS version/build, e.g. '23H2 (Build 22631.4460)' / kernel release")
+    # The endpoint may have several people logged in at once (RDP, fast user
+    # switching, multi-seat Linux). ``logged_in_users`` lists them all;
+    # ``username`` is the primary/active one for back-compat and fallback.
+    username: Optional[str] = Field(None, description="Primary/active logged-in user on the endpoint")
+    logged_in_users: Optional[List[str]] = Field(None, description="All users with an active login session")
     # TODO: Implement agent resume functionality so agents can resume instead of creating new entries
     # Status field removed - agents are considered active if they've sent heartbeat within timeout period
     last_seen: datetime = Field(..., description="Last heartbeat timestamp")
@@ -394,8 +403,21 @@ async def register_agent(
     # logged-in user. ``hostname`` falls back to the agent name so the column
     # is never blank for agents that omit it.
     reported_os_version = body.get("os_version") or None
+    reported_os_name = body.get("os_name") or None
     reported_hostname = body.get("hostname") or agent.name
-    reported_username = body.get("username") or None
+    # ``logged_in_users`` is the authoritative list of who is on the endpoint.
+    # Accept only a clean list of non-empty strings; anything else → None so a
+    # malformed payload never clobbers a good prior value.
+    raw_logged_in = body.get("logged_in_users")
+    if isinstance(raw_logged_in, list):
+        reported_logged_in_users = [str(u).strip() for u in raw_logged_in if str(u).strip()]
+        reported_logged_in_users = reported_logged_in_users or None
+    else:
+        reported_logged_in_users = None
+    # username = the explicit primary user, else the first logged-in user.
+    reported_username = body.get("username") or (
+        reported_logged_in_users[0] if reported_logged_in_users else None
+    )
     now = datetime.now(timezone.utc)
 
     # Use the agent's self-assigned ID if provided (C++ agent sends UUID).
@@ -444,8 +466,12 @@ async def register_agent(
         # these fields never blanks out values captured on a prior run.
         if reported_os_version:
             update_fields["os_version"] = reported_os_version
+        if reported_os_name:
+            update_fields["os_name"] = reported_os_name
         if reported_username:
             update_fields["username"] = reported_username
+        if reported_logged_in_users is not None:
+            update_fields["logged_in_users"] = reported_logged_in_users
         if existing.get("is_deleted") or existing.get("decommissioned"):
             logger.info(
                 "Re-registration revived a removed/decommissioned agent",
@@ -488,8 +514,10 @@ async def register_agent(
             "name": agent.name,
             "os": agent.os,
             "os_version": reported_os_version,
+            "os_name": reported_os_name,
             "hostname": reported_hostname,
             "username": reported_username,
+            "logged_in_users": reported_logged_in_users,
             "ip_address": agent.ip_address,
             "version": agent.version,
             "last_seen": now,
@@ -555,9 +583,11 @@ class HeartbeatRequest(BaseModel):
     # Endpoint inventory refresh — lets the logged-in user / OS build stay
     # current between agent restarts (a user can log off/on without the agent
     # re-registering). Optional so agents that omit them change nothing.
-    os_version: Optional[str] = Field(None, description="Precise OS name/build")
+    os_version: Optional[str] = Field(None, description="Granular OS version/build")
+    os_name: Optional[str] = Field(None, description="Precise OS product name")
     hostname: Optional[str] = Field(None, description="Endpoint hostname")
-    username: Optional[str] = Field(None, description="Currently logged-in user")
+    username: Optional[str] = Field(None, description="Primary/active logged-in user")
+    logged_in_users: Optional[List[str]] = Field(None, description="All users with an active login session")
     policy_version: Optional[str] = Field(None, description="Agent policy bundle version")
     policy_sync_status: Optional[str] = Field(None, description="Most recent policy sync status")
     policy_last_synced_at: Optional[str] = Field(None, description="ISO timestamp for last policy sync")
@@ -627,10 +657,19 @@ async def agent_heartbeat(
         update_data["ip_address"] = heartbeat.ip_address
     if heartbeat and heartbeat.os_version:
         update_data["os_version"] = heartbeat.os_version
+    if heartbeat and heartbeat.os_name:
+        update_data["os_name"] = heartbeat.os_name
     if heartbeat and heartbeat.hostname:
         update_data["hostname"] = heartbeat.hostname
     if heartbeat and heartbeat.username:
         update_data["username"] = heartbeat.username
+    if heartbeat and heartbeat.logged_in_users:
+        # Coerce to a clean list of non-empty strings; ignore a stray empty
+        # payload so a good prior value is never wiped.
+        cleaned = [str(u).strip() for u in heartbeat.logged_in_users if str(u).strip()]
+        if cleaned:
+            update_data["logged_in_users"] = cleaned
+            update_data.setdefault("username", cleaned[0])
     if heartbeat and heartbeat.policy_version is not None:
         update_data["policy_version"] = heartbeat.policy_version
     if heartbeat and heartbeat.policy_sync_status is not None:

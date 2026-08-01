@@ -32,7 +32,7 @@ g++ -std=c++17 -O2 \
     -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \
-    -luiautomationcore -lpsapi -lmpr -static
+    -luiautomationcore -lpsapi -lmpr -lwtsapi32 -static
 
 # Check if compilation was successful
 if [ $? -eq 0 ]; then

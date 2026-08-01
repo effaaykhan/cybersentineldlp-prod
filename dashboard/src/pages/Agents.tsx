@@ -257,28 +257,52 @@ export default function Agents() {
                         </div>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
-                        <div>
-                          <div className="text-cs-ink capitalize">{agent.os || '—'}</div>
-                          {agent.os_version && (
-                            <div
-                              className="text-xs text-cs-muted"
-                              title={agent.os_version}
-                            >
-                              {agent.os_version}
-                            </div>
-                          )}
+                        {/* Precise product name ("Windows 11 Pro" / "Ubuntu 22.04.3 LTS").
+                            Fall back to the capitalized family for legacy agents that
+                            only ever sent ``os``. */}
+                        <div
+                          className={`text-cs-ink ${agent.os_name ? '' : 'capitalize'}`}
+                          title={agent.os_name || agent.os || ''}
+                        >
+                          {agent.os_name || agent.os || '—'}
                         </div>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
-                        {agent.username ? (
-                          <span className="text-sm text-cs-ink-2">{agent.username}</span>
-                        ) : (
-                          <span className="text-xs text-cs-muted">—</span>
-                        )}
+                        {(() => {
+                          // Show every logged-in user; the agent lists the
+                          // active/console user first. Fall back to the single
+                          // ``username`` for legacy agents.
+                          const users =
+                            agent.logged_in_users && agent.logged_in_users.length
+                              ? agent.logged_in_users
+                              : agent.username
+                                ? [agent.username]
+                                : []
+                          if (!users.length)
+                            return <span className="text-xs text-cs-muted">—</span>
+                          return (
+                            <span
+                              className="text-sm text-cs-ink-2"
+                              title={users.join(', ')}
+                            >
+                              {users.join(', ')}
+                              {users.length > 1 && (
+                                <span className="ml-1 text-xs text-cs-muted">
+                                  ({users.length})
+                                </span>
+                              )}
+                            </span>
+                          )
+                        })()}
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
-                        <code className="num text-xs text-cs-ink-2">
-                          {agent.version || '—'}
+                        {/* OS version/build — NOT the agent version (that's in the
+                            tooltip). e.g. "23H2 (Build 22631.4460)" / kernel release. */}
+                        <code
+                          className="num text-xs text-cs-ink-2"
+                          title={agent.version ? `Agent v${agent.version}` : undefined}
+                        >
+                          {agent.os_version || '—'}
                         </code>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>

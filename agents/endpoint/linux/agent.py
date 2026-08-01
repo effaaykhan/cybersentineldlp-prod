@@ -602,12 +602,20 @@ class DLPAgent:
         policy set while still emitting events.
         """
         try:
+            logged_in = self._logged_in_users()
             data = {
                 "agent_id": self.agent_id,
                 "name": self.config.get("agent_name") or socket.gethostname(),
                 "hostname": socket.gethostname(),
                 "os": "linux",
-                "os_version": platform.platform(),
+                # os_name = precise product ("Ubuntu 22.04.3 LTS"); os_version =
+                # granular kernel release ("6.8.0-124-generic"). Previously
+                # os_version carried the whole platform.platform() blob.
+                "os_name": self._os_name(),
+                "os_version": self._os_version_detail(),
+                # All logged-in users; username = the primary/first for back-compat.
+                "logged_in_users": logged_in,
+                "username": logged_in[0] if logged_in else self._current_user(),
                 # Use a real interface IP instead of hostname resolution to avoid 127.0.x/WSL artifacts
                 "ip_address": self._get_real_ip_address(),
                 "version": AGENT_VERSION,
@@ -1764,7 +1772,7 @@ class DLPAgent:
 
     def _send_usb_event(self, event_subtype: str, device: str, info: Dict[str, str],
                          policy: Optional[Dict[str, Any]], blocked: bool):
-        current_user = self._current_user()
+        current_user = self._event_user()
         label = info.get("label", device)
         mountpoint = info.get("mountpoint", "")
 
@@ -2114,7 +2122,7 @@ class DLPAgent:
                 logger.debug(f"USB copy allowed with no classification: {file_name}")
                 return
 
-            current_user = self._current_user()
+            current_user = self._event_user()
 
             severity_mapped = str(severity).lower()
             if severity_mapped not in ["low", "medium", "high", "critical"]:
@@ -2256,7 +2264,7 @@ class DLPAgent:
             elif policy_action == "alert":
                 event_action = "alert"
 
-            current_user = self._current_user()
+            current_user = self._event_user()
 
             # Send event to server
             event_data = {
@@ -2390,7 +2398,7 @@ class DLPAgent:
                 # routine activity, not an incident.
                 return
 
-            current_user = self._current_user()
+            current_user = self._event_user()
 
             event_data = {
                 "event_id": str(uuid.uuid4()),
@@ -2807,10 +2815,17 @@ class DLPAgent:
         """Send heartbeat to server with timestamp"""
         try:
             # Send timestamp in ISO format for server validation
+            logged_in = self._logged_in_users()
             data = {
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 # Keep heartbeat IP aligned with registration IP
                 "ip_address": self._get_real_ip_address(),
+                # Keep endpoint inventory live between restarts — users log in/out
+                # and the kernel can change (updates), so refresh every heartbeat.
+                "os_name": self._os_name(),
+                "os_version": self._os_version_detail(),
+                "logged_in_users": logged_in,
+                "username": logged_in[0] if logged_in else self._current_user(),
             }
 
             response = self.session.put(
@@ -3047,7 +3062,7 @@ class DLPAgent:
     def _send_clipboard_event(self, content: str, policy: Dict[str, Any], blocked: bool, policy_action: str):
         """Send clipboard alert/event to the server."""
         try:
-            current_user = self._current_user()
+            current_user = self._event_user()
 
             policy_severity = policy.get("severity", "medium").lower()
             
@@ -3283,6 +3298,88 @@ class DLPAgent:
             return pwd.getpwuid(os.getuid()).pw_name
         except Exception:
             return os.environ.get("USER", "unknown")
+
+    def _os_name(self) -> str:
+        """Precise OS product name for the Agents "OS" column, e.g.
+        "Ubuntu 22.04.3 LTS". Read from /etc/os-release (the freedesktop
+        standard every mainstream distro ships); falls back to uname."""
+        try:
+            data: Dict[str, str] = {}
+            with open("/etc/os-release", "r", encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    key, sep, val = line.partition("=")
+                    if sep:
+                        data[key.strip()] = val.strip().strip('"').strip("'")
+            pretty = data.get("PRETTY_NAME") or data.get("NAME")
+            if pretty:
+                return pretty
+        except Exception:
+            pass
+        sysname = platform.system() or "Linux"
+        rel = platform.release()
+        return f"{sysname} {rel}".strip() if rel else sysname
+
+    def _os_version_detail(self) -> str:
+        """Granular OS version for the Agents "Version" column — the kernel
+        release, e.g. "6.8.0-124-generic"."""
+        return platform.release() or platform.version() or ""
+
+    def _logged_in_users(self) -> List[str]:
+        """Everyone with a live login session (graphical seat, tty, or ssh),
+        deduped in first-seen order. Sourced from utmp via ``who`` (coreutils,
+        present on every real endpoint); falls back to ``loginctl`` on systemd,
+        then to the agent's own user. Under systemd the agent runs as root, so
+        ``who``/``loginctl`` — not our own uid — is what surfaces the humans."""
+        users: List[str] = []
+
+        def _add(name: str) -> None:
+            name = (name or "").strip()
+            if name and name not in users:
+                users.append(name)
+
+        try:
+            out = subprocess.check_output(
+                ["who"], text=True, timeout=5, stderr=subprocess.DEVNULL
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if parts:
+                    _add(parts[0])
+        except Exception:
+            pass
+
+        if not users:
+            try:
+                out = subprocess.check_output(
+                    ["loginctl", "list-sessions", "--no-legend"],
+                    text=True, timeout=5, stderr=subprocess.DEVNULL,
+                )
+                for line in out.splitlines():
+                    parts = line.split()
+                    # Columns: SESSION UID USER SEAT TTY
+                    if len(parts) >= 3:
+                        _add(parts[2])
+            except Exception:
+                pass
+
+        if not users:
+            cu = self._current_user()
+            if cu and cu != "unknown":
+                _add(cu)
+
+        return users
+
+    def _event_user(self) -> str:
+        """Best-effort 'who triggered this' for events that carry no PID —
+        inotify/watchdog file-watch events give no originating process, so the
+        exact owner is unknowable. Attribute to the primary interactive user
+        (the person at the console) rather than the agent's own service account
+        (root under systemd), which is never the real actor. Events that DO
+        have a PID keep using ``_process_username(pid)`` — the exact owner."""
+        users = self._logged_in_users()
+        if users:
+            return users[0]
+        return self._current_user()
 
     @staticmethod
     def _socket_inodes_for_pid(pid: int) -> Set[int]:

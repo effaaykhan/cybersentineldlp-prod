@@ -197,7 +197,6 @@ export default function Agents() {
                 <th>Agent ID</th>
                 <th>Name</th>
                 <th>OS</th>
-                <th>User</th>
                 <th>Version</th>
                 <th>IP Address</th>
                 <th>Last Seen</th>
@@ -208,7 +207,7 @@ export default function Agents() {
             <tbody>
               {filteredAgents.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-12">
+                  <td colSpan={9} className="text-center py-12">
                     <Server className="h-12 w-12 text-cs-muted-2 mx-auto mb-3" />
                     <p className="text-cs-ink-2 font-medium">
                       {filter === 'all' ? 'No agents registered' : `No ${TIER_BADGE[filter].label.toLowerCase()} agents`}
@@ -266,34 +265,6 @@ export default function Agents() {
                         >
                           {agent.os_name || agent.os || '—'}
                         </div>
-                      </td>
-                      <td onClick={() => handleAgentClick(agent.agent_id)}>
-                        {(() => {
-                          // Show every logged-in user; the agent lists the
-                          // active/console user first. Fall back to the single
-                          // ``username`` for legacy agents.
-                          const users =
-                            agent.logged_in_users && agent.logged_in_users.length
-                              ? agent.logged_in_users
-                              : agent.username
-                                ? [agent.username]
-                                : []
-                          if (!users.length)
-                            return <span className="text-xs text-cs-muted">—</span>
-                          return (
-                            <span
-                              className="text-sm text-cs-ink-2"
-                              title={users.join(', ')}
-                            >
-                              {users.join(', ')}
-                              {users.length > 1 && (
-                                <span className="ml-1 text-xs text-cs-muted">
-                                  ({users.length})
-                                </span>
-                              )}
-                            </span>
-                          )
-                        })()}
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         {/* OS version/build — NOT the agent version (that's in the

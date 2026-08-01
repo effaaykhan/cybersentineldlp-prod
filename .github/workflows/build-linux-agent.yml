@@ -1,0 +1,131 @@
+name: Build Linux Agent
+
+# Freezes the Linux endpoint agent into one self-contained executable (the same
+# PyInstaller recipe `install.sh --build-only` uses) and commits the built
+# binary + regenerated .sha256 back to the repo, so install_agent.sh keeps
+# serving them unchanged. This is the Linux counterpart of build-agent.yml
+# (Windows) and mirrors it beat for beat.
+#
+# SAFETY (identical guarantees to the Windows workflow):
+#  * a build failure, an undersized binary, or a failed --selftest aborts BEFORE
+#    any commit, so a broken build never replaces the working binary;
+#  * endpoints are NOT auto-updated — you still run install_agent.sh to deploy,
+#    so you validate one box before rolling out (a bad build cannot reach the
+#    fleet on its own);
+#  * the exact binary is also uploaded as a run artifact for testing.
+#
+# The commit-back is made with GITHUB_TOKEN, which does NOT re-trigger workflows,
+# and carries [skip ci]; combined with the source-only path filter (it never
+# lists dist/**) this cannot loop.
+#
+# GLIBC PORTABILITY: PyInstaller binaries only run on a glibc at least as new as
+# the one they were built against. The fleet spans Debian 11 (glibc 2.31)
+# through the newest Ubuntu, so the build runs inside a Debian 11 (bullseye)
+# container to pin the floor at 2.31 — building on the bare ubuntu-latest runner
+# (glibc 2.39) would produce a binary that fails on every older endpoint.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agents/endpoint/linux/**.py'
+      - 'agents/endpoint/linux/requirements.txt'
+      - 'agents/endpoint/linux/requirements-build.txt'
+      - '.github/workflows/build-linux-agent.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: build-linux-agent
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # commit the built binary back to the repo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Freeze agent into a single executable (Debian 11 → glibc 2.31 floor)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/src" \
+            -w /src/agents/endpoint/linux python:3.11-bullseye \
+            bash -euo pipefail -c '
+              python -m pip install --no-cache-dir --upgrade pip
+              python -m pip install --no-cache-dir -r requirements.txt -r requirements-build.txt
+
+              # Stage only the four modules that make up the agent, exactly like
+              # install.sh, so PyInstaller cannot scoop up anything else.
+              rm -rf /tmp/stage /tmp/out /tmp/work /tmp/spec
+              mkdir -p /tmp/stage
+              cp agent.py policy_cache.py print_monitor.py agent_launcher.py /tmp/stage/
+
+              # Same flags as install.sh --build-only. --hidden-import forces in
+              # policy_cache/print_monitor (the agent does not import them) and
+              # watchdog's inotify backend (chosen at runtime, invisible to static
+              # analysis). --runtime-tmpdir is intentionally omitted here: install.sh
+              # bakes an install-specific /opt path, but a published binary must
+              # extract to the system default so it runs anywhere.
+              cd /tmp/stage
+              pyinstaller \
+                --onefile \
+                --name cybersentineldlp-agent \
+                --distpath /tmp/out \
+                --workpath /tmp/work \
+                --specpath /tmp/spec \
+                --paths /tmp/stage \
+                --hidden-import agent \
+                --hidden-import policy_cache \
+                --hidden-import print_monitor \
+                --hidden-import watchdog.observers.inotify \
+                --hidden-import watchdog.observers.inotify_buffer \
+                --hidden-import watchdog.observers.polling \
+                --exclude-module tkinter \
+                --noupx --clean --noconfirm --log-level WARN \
+                agent_launcher.py
+
+              install -m 0755 /tmp/out/cybersentineldlp-agent \
+                /src/agents/endpoint/linux/dist/cybersentineldlp-agent
+            '
+          # The container runs as root; take ownership back so the git steps below
+          # (running as the runner user) can stage the file cleanly.
+          sudo chown "$(id -u):$(id -g)" agents/endpoint/linux/dist/cybersentineldlp-agent
+
+      - name: Verify + regenerate sha256
+        run: |
+          cd agents/endpoint/linux/dist
+          test -f cybersentineldlp-agent || { echo "::error::no binary produced"; exit 1; }
+          chmod +x cybersentineldlp-agent
+          size=$(stat -c%s cybersentineldlp-agent)
+          echo "built binary size: ${size} bytes"
+          [ "${size}" -gt 5000000 ] || { echo "::error::binary too small (${size}B) — build likely broken"; exit 1; }
+          # Prove all three modules + requests/watchdog are really inside it, and
+          # that the agent entry point runs — the same gate install.sh applies.
+          ./cybersentineldlp-agent --selftest
+          ./cybersentineldlp-agent --help >/dev/null
+          sha256sum cybersentineldlp-agent > cybersentineldlp-agent.sha256
+          cat cybersentineldlp-agent.sha256
+
+      - name: Upload build artifact (test before rollout)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cybersentineldlp-agent-linux
+          path: |
+            agents/endpoint/linux/dist/cybersentineldlp-agent
+            agents/endpoint/linux/dist/cybersentineldlp-agent.sha256
+          retention-days: 30
+
+      - name: Commit the built binary back to the repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agents/endpoint/linux/dist/cybersentineldlp-agent \
+                  agents/endpoint/linux/dist/cybersentineldlp-agent.sha256
+          if git diff --cached --quiet; then
+            echo "agent binary unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "build(agent/linux): CI-built binary + sha256 [skip ci]"
+          git pull --rebase origin main
+          git push origin main

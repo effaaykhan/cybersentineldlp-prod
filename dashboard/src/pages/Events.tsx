@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen, Printer } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
@@ -9,6 +9,7 @@ import { searchEvents, getAllAgents, clearAllEvents, type Event } from '@/lib/ap
 import { formatDate, cn, truncate, formatDateTimeIST, formatAgentLabel } from '@/lib/utils'
 import { Dot } from '@/components/ui/Dot'
 import { ActionPill } from '@/components/ui/ActionPill'
+import Pagination from '@/components/ui/Pagination'
 import toast from 'react-hot-toast'
 
 // Event Detail Modal Component
@@ -696,6 +697,30 @@ function EventDetailModal({
             </div>
           )}
 
+          {/* File Hashes — MD5/SHA-256 of the inspected/"violated" file (print channel etc.) */}
+          {(event.file_md5 || event.file_sha256) && (
+            <div className="rounded-cs-card border border-cs-hair overflow-hidden">
+              <div className="flex items-center gap-2 px-4 py-2 bg-cs-hair-2 border-b border-cs-hair">
+                <FileText className="w-4 h-4 text-cs-muted" />
+                <span className="text-xs font-semibold text-cs-ink-2 uppercase tracking-wide">File Hashes</span>
+              </div>
+              <div className="divide-y divide-cs-hair">
+                {event.file_md5 && (
+                  <div className="bg-cs-panel p-3">
+                    <label className="text-[11px] text-cs-muted uppercase font-medium mb-0.5 block">MD5</label>
+                    <p className="text-cs-ink font-mono tabular-nums text-xs break-all select-all">{event.file_md5}</p>
+                  </div>
+                )}
+                {event.file_sha256 && (
+                  <div className="bg-cs-panel p-3">
+                    <label className="text-[11px] text-cs-muted uppercase font-medium mb-0.5 block">SHA-256</label>
+                    <p className="text-cs-ink font-mono tabular-nums text-xs break-all select-all">{event.file_sha256}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Raw JSON Data (Expandable) */}
           <div className="border-t border-cs-hair pt-4">
             <button
@@ -749,6 +774,8 @@ export default function Events() {
   const [showFilters, setShowFilters] = useState(false)
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
 
   // When the user clicks an agent from the Agents tab, we land here
   // with ?agent=<id>. The id is forwarded to the backend as a dedicated
@@ -879,15 +906,26 @@ export default function Events() {
 
   // Fetch events — forward dashboard drill-down filters as query params
   // (backend merges them into the Mongo filter alongside ABAC).
+  // Any change to the search/agent/filter set collapses the result set to a
+  // new page 1 — otherwise you could sit on "page 40" of a filter that now has
+  // only 2 pages and see an empty list.
+  useEffect(() => {
+    setPage(1)
+  }, [activeQuery, agentParam, dashboardFilters])
+
   const {
     data,
     isLoading,
     error,
     refetch,
+    isFetching,
   } = useQuery({
-    queryKey: ['events', activeQuery, agentParam, dashboardFilters],
+    queryKey: ['events', activeQuery, agentParam, dashboardFilters, page, pageSize],
     queryFn: () => {
-      const params: Record<string, any> = { limit: 100 }
+      const params: Record<string, any> = {
+        limit: pageSize,
+        skip: (page - 1) * pageSize,
+      }
       if (activeQuery) params.search = activeQuery
       if (agentParam) params.agent = agentParam
       // Only include filter params that are actually set.
@@ -897,6 +935,9 @@ export default function Events() {
       return searchEvents(params)
     },
     refetchInterval: 15000,
+    // Keep the current page visible while the next one loads — no flash to a
+    // blank list on every page change.
+    placeholderData: keepPreviousData,
   })
 
   const events = data?.events || []
@@ -1257,6 +1298,19 @@ export default function Events() {
             ))
           )}
         </div>
+
+        {/* Pagination */}
+        {!isLoading && !error && total > 0 && (
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            itemLabel="events"
+            isFetching={isFetching}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPageSize(size); setPage(1) }}
+          />
+        )}
       </div>
 
       {/* Event Detail Modal */}

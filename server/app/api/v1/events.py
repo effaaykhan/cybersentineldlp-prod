@@ -130,6 +130,11 @@ class EventCreate(BaseModel):
     # ('printer_control' = device policy, 'content' = sensitive document).
     printer_name: Optional[str] = Field(None, description="Target printer name (print events)")
     block_reason: Optional[str] = Field(None, description="Why blocked: 'printer_control' | 'content'")
+    # Integrity hashes of the inspected/"violated" file, computed on the endpoint
+    # (both agents). Logged whenever a file was included — primarily the print
+    # channel's spooled document, but usable by any file-bearing event.
+    file_md5: Optional[str] = Field(None, description="MD5 of the violated/inspected file (hex)")
+    file_sha256: Optional[str] = Field(None, description="SHA-256 of the violated/inspected file (hex)")
     detected_content: Optional[str] = Field(None, description="Summary of detected sensitive content")
     action: Optional[str] = Field(None, description="Action taken (logged, blocked, alerted, etc.)")
     destination: Optional[str] = Field(None, description="Destination path for transfers")
@@ -236,6 +241,8 @@ class DLPEvent(BaseModel):
     file_path: Optional[str] = None
     file_name: Optional[str] = None
     file_id: Optional[str] = None
+    file_md5: Optional[str] = None
+    file_sha256: Optional[str] = None
     mime_type: Optional[str] = None
     folder_id: Optional[str] = None
     folder_name: Optional[str] = None
@@ -525,6 +532,14 @@ async def create_event(
         event_doc["printer_name"] = event.printer_name
     if event.block_reason:
         event_doc["block_reason"] = event.block_reason
+    # File integrity hashes of the violated/inspected file (print channel etc.),
+    # computed on the endpoint. Mirror the SHA-256 into ``file_hash`` too so the
+    # existing SIEM connectors forward it without further changes.
+    if event.file_md5:
+        event_doc["file_md5"] = event.file_md5
+    if event.file_sha256:
+        event_doc["file_sha256"] = event.file_sha256
+        event_doc.setdefault("file_hash", event.file_sha256)
     # Preserve agent-provided content diff fields so the event detail
     # view can render the per-line change list. Empty diffs are still
     # written so the UI can distinguish "modified, no textual change"
@@ -840,16 +855,26 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                 )
 
 
+# Coalescing controls: repeated same-user / same-type / same-category events
+# fold into ONE incident whose last event is within this window, instead of
+# creating a fresh incident per event. MAX_INCIDENT_EVENT_IDS caps the stored
+# member-id array (event_count remains the true total).
+INCIDENT_COALESCE_WINDOW_HOURS = 24
+MAX_INCIDENT_EVENT_IDS = 500
+
+
 async def _auto_create_incident(
     db, event_id: str, payload: Dict[str, Any], update_fields: Dict[str, Any]
 ) -> None:
     """
-    Auto-create incidents for blocked or high-severity events.
+    Auto-create (or grow) incidents for blocked or high-severity events.
 
-    Triggers:
-      - Classification level is Restricted or Confidential AND action is block
-      - Severity is critical or high
-      - Repeated violations from same user (5+ events in 1 hour)
+    An event qualifies when its classification is Restricted/Confidential AND it
+    was blocked (Rule 1), or its severity is critical/high (Rule 2). Qualifying
+    events are COALESCED: repeated events of the same kind from the same user
+    join one incident (see the coalescing block below) rather than spawning a
+    new incident each time. ``event_count`` is the number of events grouped into
+    the incident and ``event_ids`` lists them.
     """
     try:
         incidents_col = db["incidents"]
@@ -867,69 +892,82 @@ async def _auto_create_incident(
         user_email = payload.get("user", {}).get("email", "unknown")
         event_type = payload.get("event", {}).get("type", "unknown")
 
-        should_create = False
-        title = ""
-        sev_num = 2
-
-        # Rule 1: Blocked restricted/confidential data
+        # Categorize the event. Rule 1 (blocked sensitive data) wins over
+        # Rule 2 (high/critical severity) when both apply.
         if blocked and classification in ("Restricted", "Confidential"):
-            should_create = True
+            category = "blocked_sensitive"
             title = f"Blocked {classification} Data — {event_type.replace('_', ' ').title()}"
             sev_num = 4 if classification == "Restricted" else 3
-
-        # Rule 2: Critical/high severity events
         elif severity_str in ("critical", "high"):
-            should_create = True
+            category = "high_severity"
             title = f"{severity_str.title()} Severity Event — {event_type.replace('_', ' ').title()}"
             sev_num = 4 if severity_str == "critical" else 3
-
-        if not should_create:
+        else:
             return
 
-        # Check for duplicate — don't create if same event_id already has an incident
-        existing = await incidents_col.find_one({"event_id": event_id})
-        if existing:
+        # Idempotency: never record the same event twice — as a coalesced member
+        # or as a legacy single-event incident.
+        if await incidents_col.find_one({"event_ids": event_id}, {"_id": 1}):
+            return
+        if await incidents_col.find_one({"event_id": event_id}, {"_id": 1}):
             return
 
-        # Check for repeated violations — count events from same user in last hour
-        from datetime import timedelta
-        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-        violation_count = await events_col.count_documents({
-            "user_email": user_email,
-            "blocked": True,
-            "timestamp": {"$gte": one_hour_ago},
-        })
-
-        if violation_count >= 5:
-            title = f"Repeated Violations ({violation_count}x) — {user_email}"
-            sev_num = 4
-
-        # Stamp the auto-incident with the source event's ABAC attributes so
-        # it can be department-filtered like any other record. We read them
-        # from the just-updated event doc (authoritative) rather than the
-        # processor payload (may predate the tag).
+        # Source-event ABAC attributes + timestamp (authoritative post-tag).
         src_event = await events_col.find_one(
             {"id": event_id},
-            projection={"department": 1, "required_clearance": 1, "_id": 0},
+            projection={"department": 1, "required_clearance": 1, "timestamp": 1, "_id": 0},
         ) or {}
         dept = src_event.get("department") or "DEFAULT"
         req_clr = int(src_event.get("required_clearance") or 0)
+        ev_ts = src_event.get("timestamp") or datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+
+        # COALESCE: a qualifying event joins the most recent still-active incident
+        # of the same (user, event_type, category) whose last event is within the
+        # window; otherwise it starts a new incident. This makes event_count mean
+        # "events in this incident" and stops one-incident-per-event flooding.
+        from datetime import timedelta
+        dedup_key = f"{user_email}|{event_type}|{category}"
+        window_start = ev_ts - timedelta(hours=INCIDENT_COALESCE_WINDOW_HOURS)
+
+        coalesced = await incidents_col.update_one(
+            {
+                "dedup_key": dedup_key,
+                "status": {"$in": ["open", "investigating"]},
+                "last_event_at": {"$gte": window_start},
+            },
+            {
+                "$inc": {"event_count": 1},
+                "$push": {"event_ids": {"$each": [event_id], "$slice": -MAX_INCIDENT_EVENT_IDS}},
+                "$max": {"severity": sev_num, "last_event_at": ev_ts},
+                "$set": {"updated_at": now},
+            },
+        )
+        if coalesced.matched_count:
+            logger.info("Auto-incident coalesced", event_id=event_id, dedup_key=dedup_key)
+            return
 
         incident_doc = {
             "id": event_id,
-            "event_id": event_id,
+            "event_id": event_id,          # the incident's first / primary event
+            "dedup_key": dedup_key,
+            "category": category,
             "title": title,
-            "description": f"Auto-generated from {event_type} event. Classification: {classification}. Action: {action}.",
+            "description": f"Auto-generated from {event_type} event(s). Classification: {classification}. Action: {action}.",
             "severity": sev_num,
             "status": "open",
             "agent_id": agent_id,
             "user_email": user_email,
+            "event_type": event_type,
             "classification_level": classification,
-            "event_count": violation_count,
+            "event_ids": [event_id],
+            "event_count": 1,
+            "first_event_at": ev_ts,
+            "last_event_at": ev_ts,
             "department": dept,
             "required_clearance": req_clr,
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": now,
+            "updated_at": now,
             "assigned_to": None,
             "comments": [],
         }
@@ -940,7 +978,7 @@ async def _auto_create_incident(
             upsert=True,
         )
 
-        logger.info("Auto-incident created", event_id=event_id, title=title, severity=sev_num)
+        logger.info("Auto-incident created", event_id=event_id, title=title, dedup_key=dedup_key)
 
     except Exception as e:
         logger.warning("Auto-incident creation failed (non-fatal)", error=str(e))

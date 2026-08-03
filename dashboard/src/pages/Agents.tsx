@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Server, RefreshCw, Trash2, X } from 'lucide-react'
@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { Dot } from '@/components/ui/Dot'
+import Pagination from '@/components/ui/Pagination'
 import {
   getAllAgents,
   deleteAgent,
@@ -55,6 +56,8 @@ interface ConfirmState {
 export default function Agents() {
   const [filter, setFilter] = useState<FilterType>('all')
   const [confirm, setConfirm] = useState<ConfirmState | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -84,6 +87,11 @@ export default function Agents() {
     },
   })
 
+  // Reset to the first page whenever the lifecycle filter narrows the list
+  useEffect(() => {
+    setPage(1)
+  }, [filter])
+
   if (isLoading) {
     return <LoadingSpinner size="lg" />
   }
@@ -111,6 +119,8 @@ export default function Agents() {
     if (filter === 'all') return true
     return resolveTier(agent) === filter
   })
+
+  const pageAgents = filteredAgents.slice((page - 1) * pageSize, page * pageSize)
 
   const handleAgentClick = (agentId: string) => {
     navigate(`/events?agent=${agentId}`)
@@ -220,7 +230,7 @@ export default function Agents() {
                   </td>
                 </tr>
               ) : (
-                filteredAgents.map((agent) => {
+                pageAgents.map((agent) => {
                   const tier = resolveTier(agent)
                   const badge = TIER_BADGE[tier]
                   return (
@@ -317,6 +327,14 @@ export default function Agents() {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={filteredAgents.length}
+          itemLabel="agents"
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(1) }}
+        />
       </div>
 
       {/* Confirmation modal for removing an agent */}

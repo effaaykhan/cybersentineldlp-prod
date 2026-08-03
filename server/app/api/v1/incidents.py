@@ -319,6 +319,7 @@ from datetime import timezone
 async def list_auto_incidents(
     status: Optional[str] = Query(None),
     severity: Optional[int] = Query(None),
+    skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     current_user=Depends(get_current_user),
     pg_db: AsyncSession = Depends(get_db),
@@ -348,7 +349,7 @@ async def list_auto_incidents(
         query["severity"] = severity
     query = merge_mongo_filter(query, abac)
 
-    cursor = col.find(query).sort("created_at", -1).limit(limit)
+    cursor = col.find(query).sort("created_at", -1).skip(skip).limit(limit)
     incidents = []
     async for doc in cursor:
         doc.pop("_id", None)
@@ -470,19 +471,31 @@ async def get_auto_incident(
         if f in doc and isinstance(doc[f], datetime):
             doc[f] = doc[f].isoformat()
 
-    # Get related events (same user, same hour)
+    # The events that make up this incident. Coalesced incidents store their
+    # actual constituent event ids in ``event_ids``; legacy single-event
+    # incidents fall back to their one primary event. Either way we return the
+    # real member events — not a heuristic "recent activity" query, which used
+    # to surface benign events that contradicted the incident.
+    def _iso_event(ev: dict) -> dict:
+        ev.pop("_id", None)
+        for f in ("timestamp", "created_at", "processed_at", "updated_at"):
+            if f in ev and isinstance(ev[f], datetime):
+                ev[f] = ev[f].isoformat()
+        return ev
+
+    trigger_id = doc.get("event_id")
+    event_ids = doc.get("event_ids") or ([trigger_id] if trigger_id else [])
+
     related = []
-    if doc.get("user_email"):
-        cursor = events_col.find({
-            "user_email": doc["user_email"],
-            "severity": {"$in": ["critical", "high"]},
-        }).sort("timestamp", -1).limit(20)
+    if event_ids:
+        cursor = events_col.find(
+            merge_mongo_filter({"id": {"$in": event_ids}}, abac)
+        ).sort("timestamp", -1).limit(500)
         async for ev in cursor:
-            ev.pop("_id", None)
-            for f in ("timestamp", "created_at", "processed_at"):
-                if f in ev and isinstance(ev[f], datetime):
-                    ev[f] = ev[f].isoformat()
-            related.append(ev)
+            e = _iso_event(ev)
+            e["is_trigger"] = (e.get("id") == trigger_id)
+            related.append(e)
 
     doc["related_events"] = related
+    doc["trigger_event_id"] = trigger_id
     return doc

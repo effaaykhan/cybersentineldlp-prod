@@ -1,11 +1,12 @@
 
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { Search, Loader2, X, Download, RefreshCcw, ChevronDown, ChevronUp, Filter, FileText } from 'lucide-react'
 import { getEvents as fetchEvents } from '@/lib/api'
 import { formatDateTimeIST } from '@/lib/utils'
+import Pagination from '@/components/ui/Pagination'
 import toast from 'react-hot-toast'
 
 const TIME_PRESETS = [
@@ -37,9 +38,11 @@ export default function LogExplorerPage() {
   const [endTime, setEndTime] = useState('')
   const [agentFilter, setAgentFilter] = useState('')
   const [userFilter, setUserFilter] = useState('')
-  const [limit, setLimit] = useState(100)
+  const [limit, setLimit] = useState(1000)
   const [expandedEvent, setExpandedEvent] = useState<string | null>(null)
   const [showFilters, setShowFilters] = useState(true)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['log-explorer', eventType, severity, limit],
@@ -66,6 +69,14 @@ export default function LogExplorerPage() {
     usb: events.filter((e: any) => e.event_type === 'usb').length,
     blocked: events.filter((e: any) => e.blocked || e.action_taken === 'block').length,
   }), [events])
+
+  // Any filter change collapses back to page 1 (stats/export still cover the
+  // whole filtered set; only the rendered rows are paginated).
+  useEffect(() => {
+    setPage(1)
+  }, [searchQuery, eventType, severity, classification, timePreset, startTime, endTime, agentFilter, userFilter])
+
+  const pagedEvents = events.slice((page - 1) * pageSize, page * pageSize)
 
   const exportCSV = () => {
     const rows = [['Timestamp','Type','Severity','Classification','Action','Blocked','Rules','Description','Agent','User'].join(','),
@@ -168,7 +179,7 @@ export default function LogExplorerPage() {
               <div className="col-span-1">Type</div><div className="col-span-3">Description</div><div className="col-span-2">Classification</div><div className="col-span-1">Severity</div><div className="col-span-1">Action</div><div className="col-span-2">User</div><div className="col-span-2">Time</div>
             </div>
             <div className="divide-y divide-slate-100">
-              {events.map((event: any, idx: number) => {
+              {pagedEvents.map((event: any, idx: number) => {
                 const isExpanded = expandedEvent === (event.id || idx.toString())
                 const category = event.classification_category || event.classification_level || 'Public'
                 return (
@@ -206,6 +217,14 @@ export default function LogExplorerPage() {
                 )
               })}
             </div>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={events.length}
+              itemLabel="events"
+              onPageChange={setPage}
+              onPageSizeChange={(s) => { setPageSize(s); setPage(1) }}
+            />
           </div>
         )}
       </div>

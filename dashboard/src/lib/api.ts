@@ -108,8 +108,8 @@ export const deleteAgent = async (agentId: string) => {
 }
 
 // Additional exports for direct imports
-export const getAlerts = async () => {
-  const { data } = await apiClient.get('/alerts/')
+export const getAlerts = async (params?: any) => {
+  const { data } = await apiClient.get('/alerts/', { params })
   return data
 }
 
@@ -194,6 +194,8 @@ export type Event = {
   file_path?: string
   file_name?: string
   file_id?: string
+  file_md5?: string
+  file_sha256?: string
   mime_type?: string
   folder_id?: string
   folder_name?: string
@@ -319,6 +321,14 @@ export const disablePolicy = async (policyId: string) => {
 
 export const refreshPolicyBundles = async () => {
   const { data } = await apiClient.post('/policies/cache/refresh')
+  return data
+}
+
+export const importPolicies = async (payload: {
+  policies: any[]
+  on_conflict?: 'skip' | 'rename' | 'replace'
+}) => {
+  const { data } = await apiClient.post('/policies/import', payload)
   return data
 }
 
@@ -514,7 +524,7 @@ export async function getIncidentStats() {
 }
 
 // ── Auto Incidents (MongoDB-backed) ──
-export async function getAutoIncidents(params?: { status?: string; severity?: number; limit?: number }) {
+export async function getAutoIncidents(params?: { status?: string; severity?: number; limit?: number; skip?: number }) {
   const { data } = await apiClient.get('/incidents/auto/list', { params })
   return data
 }

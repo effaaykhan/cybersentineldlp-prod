@@ -5,6 +5,8 @@ Monitors CUPS print jobs via the CUPS API or log files
 
 import os
 import time
+import glob
+import hashlib
 import threading
 import logging
 import subprocess
@@ -77,6 +79,10 @@ class PrintMonitor:
                         printer = job_id.split("-")[0] if "-" in job_id else "unknown"
                         document = self._get_job_document(job_id)
 
+                        # Hash the actual spooled document ("violated file") so the
+                        # print-channel event logs its MD5/SHA-256.
+                        file_md5, file_sha256, spool_path = self._hash_job_file(job_id)
+
                         event = {
                             "event_type": "print",
                             "printer": printer,
@@ -84,9 +90,17 @@ class PrintMonitor:
                             "owner": owner,
                             "size": size,
                             "job_id": job_id,
+                            "file_md5": file_md5,
+                            "file_sha256": file_sha256,
+                            "spool_path": spool_path,
                             "timestamp": datetime.utcnow().isoformat(),
                         }
 
+                        if file_md5:
+                            logger.info(
+                                f"Print file hashes for {job_id} ({document}): "
+                                f"MD5={file_md5} SHA256={file_sha256}"
+                            )
                         logger.info(f"Print job detected: {job_id} - {document}")
 
                         if self.callback:
@@ -98,6 +112,34 @@ class PrintMonitor:
             logger.debug("lpstat not available - CUPS not installed")
         except subprocess.TimeoutExpired:
             logger.warning("lpstat timed out")
+
+    def _hash_job_file(self, job_id):
+        """Best-effort MD5 + SHA-256 of the CUPS spooled document for this job.
+
+        CUPS writes the job's document data to /var/spool/cups/d<NNNNN>-NNN
+        (the ``d`` = data file; ``c`` = control file). Returns
+        (md5_hex, sha256_hex, path) or (None, None, None) if the spool file is
+        gone or unreadable (requires root — the agent runs as root).
+        """
+        try:
+            num = job_id.rsplit("-", 1)[-1]
+            if not num.isdigit():
+                return None, None, None
+            # Primary layout d<5-digit>-001; glob covers multi-doc / >99999 jobs.
+            candidates = [f"/var/spool/cups/d{int(num):05d}-001"]
+            candidates += sorted(glob.glob(f"/var/spool/cups/d{int(num):05d}-*"))
+            path = next((p for p in candidates if os.path.isfile(p)), None)
+            if not path:
+                return None, None, None
+            md5, sha = hashlib.md5(), hashlib.sha256()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    md5.update(chunk)
+                    sha.update(chunk)
+            return md5.hexdigest(), sha.hexdigest(), path
+        except Exception as e:
+            logger.debug(f"Could not hash spool file for {job_id}: {e}")
+            return None, None, None
 
     def _get_job_document(self, job_id):
         """Get document name for a print job"""

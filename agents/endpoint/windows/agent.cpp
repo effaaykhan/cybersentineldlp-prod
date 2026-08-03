@@ -24,6 +24,7 @@
  #include <comdef.h>
  #include <winnetwk.h>   // WNetGetConnectionA — resolve mapped drive -> UNC (needs -lmpr)
  #include <wtsapi32.h>   // WTSEnumerateSessions — enumerate logged-in users (needs -lwtsapi32)
+ #include <wincrypt.h>   // CryptAcquireContext/CryptHashData — MD5/SHA-256 of the print spool (uses -ladvapi32, already linked)
 
  #include <iostream>
  #include <fstream>
@@ -2022,6 +2023,11 @@ static ClassificationResult Classify(const std::string& content,
     std::atomic<bool> printContentInspection{false};    // a print_content_prevention policy is active
     std::string printContentMode;                       // "enforce" | "audit" | "off" (guarded by printerPolicyMutex)
     std::mutex printerPolicyMutex;
+    // MD5/SHA-256 of the last spooled document read, keyed by job id. Set when
+    // the spool is read for content inspection and reused when the print event
+    // is emitted (both run on the print-monitor thread, in order). See
+    // ReadSpoolText / the PrintMonitor callback.
+    struct { int jobId = -1; std::string md5, sha256; } lastSpoolHash;
 
     // ── MANAGED-APPLICATION FILE CONTROL (allow/block an action by acting app) ──
     // Synced from GET /agents/{id}/application-control. A covered channel handler
@@ -2906,7 +2912,8 @@ if (!shouldBlock) {
          return out;
      }
 
-     std::string ReadSpoolText(int jobId) {
+     // Raw bytes of the spooled document (the "violated file") for this job.
+     std::string ReadSpoolBytes(int jobId) {
          char sysdir[MAX_PATH] = {0};
          GetSystemDirectoryA(sysdir, MAX_PATH);
          std::string dir = std::string(sysdir) + "\\spool\\PRINTERS\\";
@@ -2917,7 +2924,17 @@ if (!shouldBlock) {
              std::string p = NewestSpoolFile(dir);
              if (!p.empty()) bytes = ReadFileBytesAll(p);
          }
+         return bytes;
+     }
+
+     std::string ReadSpoolText(int jobId) {
+         std::string bytes = ReadSpoolBytes(jobId);
          if (bytes.empty()) return "";
+         // Stash the spooled document's hashes for the print event to log; the
+         // content-inspection path already holds the bytes, so no re-read.
+         lastSpoolHash.jobId = jobId;
+         lastSpoolHash.md5 = Md5Hex(bytes);
+         lastSpoolHash.sha256 = Sha256Hex(bytes);
          return ExtractSpoolStrings(bytes);
      }
 
@@ -4384,6 +4401,23 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("file_path", event.documentName);
                  json.AddString("printer_name", event.printerName);
                  json.AddString("block_reason", event.blockReason);
+                 // Log the MD5/SHA-256 of the spooled document ("violated file").
+                 // Reuse hashes computed during content inspection; otherwise read
+                 // the spool now (best-effort — it may already be gone).
+                 std::string fmd5, fsha;
+                 if (lastSpoolHash.jobId == event.jobId) {
+                     fmd5 = lastSpoolHash.md5;
+                     fsha = lastSpoolHash.sha256;
+                 } else {
+                     std::string sb = ReadSpoolBytes(event.jobId);
+                     if (!sb.empty()) { fmd5 = Md5Hex(sb); fsha = Sha256Hex(sb); }
+                 }
+                 if (!fmd5.empty()) {
+                     json.AddString("file_md5", fmd5);
+                     json.AddString("file_sha256", fsha);
+                     logger.Info("Print file hashes (job " + std::to_string(event.jobId) +
+                                 "): MD5=" + fmd5 + " SHA256=" + fsha);
+                 }
                  json.AddString("timestamp", GetCurrentTimestampISO());
                  SendEvent(json.Build());
              },
@@ -8667,6 +8701,35 @@ if (shouldMonitor) {
     //
     // Self-contained on purpose: no wincrypt/crypt32 dependency, so the
     // existing build command is unchanged.
+
+    // MD5 / SHA-256 of arbitrary bytes, lowercase hex. Uses the legacy CryptoAPI
+    // (advapi32, already linked — no crypt32), so the print channel can log the
+    // spooled document's hashes without touching the build command.
+    static std::string HashHexWin(const std::string& data, ALG_ID alg) {
+        HCRYPTPROV hProv = 0; HCRYPTHASH hHash = 0; std::string out;
+        if (!CryptAcquireContextA(&hProv, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
+            return out;
+        if (CryptCreateHash(hProv, alg, 0, 0, &hHash)) {
+            if (CryptHashData(hHash, reinterpret_cast<const BYTE*>(data.data()),
+                              static_cast<DWORD>(data.size()), 0)) {
+                BYTE digest[64]; DWORD len = sizeof(digest);
+                if (CryptGetHashParam(hHash, HP_HASHVAL, digest, &len, 0)) {
+                    static const char* H = "0123456789abcdef";
+                    out.reserve(len * 2);
+                    for (DWORD i = 0; i < len; ++i) {
+                        out += H[digest[i] >> 4];
+                        out += H[digest[i] & 0x0F];
+                    }
+                }
+            }
+            CryptDestroyHash(hHash);
+        }
+        CryptReleaseContext(hProv, 0);
+        return out;
+    }
+    static std::string Md5Hex(const std::string& d)    { return HashHexWin(d, CALG_MD5); }
+    static std::string Sha256Hex(const std::string& d) { return HashHexWin(d, CALG_SHA_256); }
+
     static std::string Base64Encode(const std::string& in) {
         static const char* T =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

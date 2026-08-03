@@ -7,6 +7,7 @@ import {
   getSharingConfig, updateSharingConfig,
   type IOC, type TaxiiFeed, type IocStats, type SharingConfig,
 } from '@/lib/api'
+import Pagination from '@/components/ui/Pagination'
 
 const IOC_TYPES = ['ipv4', 'ipv6', 'domain', 'url', 'email', 'file_sha256', 'file_sha1', 'file_md5']
 const TLPS = ['white', 'green', 'amber', 'red']
@@ -35,6 +36,10 @@ export default function ThreatIntelligence() {
   const [savingShare, setSavingShare] = useState(false)
   const [copied, setCopied] = useState(false)
 
+  // Client-side pagination for the IOC (indicators) table.
+  const [iocPage, setIocPage] = useState(1)
+  const [iocPageSize, setIocPageSize] = useState(25)
+
   const load = async () => {
     try {
       const [s, i, f, m, sh] = await Promise.all([
@@ -49,6 +54,14 @@ export default function ThreatIntelligence() {
     }
   }
   useEffect(() => { load() }, [])
+
+  // Keep the IOC page in range when the list shrinks (delete / import / refresh).
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(iocs.length / iocPageSize))
+    if (iocPage > maxPage) setIocPage(maxPage)
+  }, [iocs.length, iocPageSize, iocPage])
+
+  const iocPageItems = iocs.slice((iocPage - 1) * iocPageSize, iocPage * iocPageSize)
 
   const shareUrl = sharing ? `${window.location.origin}${sharing.taxii_path}` : ''
 
@@ -316,6 +329,7 @@ export default function ThreatIntelligence() {
         {loading ? <p className="text-sm text-cs-muted">Loading…</p> : iocs.length === 0 ? (
           <p className="text-sm text-cs-muted">No indicators yet.</p>
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-cs-muted border-b border-cs-hair-2">
@@ -327,7 +341,7 @@ export default function ThreatIntelligence() {
                 <th className="py-2 w-10"></th>
               </tr></thead>
               <tbody>
-                {iocs.map((i) => (
+                {iocPageItems.map((i) => (
                   <tr key={i.id} className="border-b border-cs-hair-2 last:border-0">
                     <td className="py-2 pr-4 text-cs-ink-2">{i.ioc_type}</td>
                     <td className="py-2 pr-4 num text-cs-ink break-all">{i.value}</td>
@@ -350,6 +364,15 @@ export default function ThreatIntelligence() {
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={iocPage}
+            pageSize={iocPageSize}
+            total={iocs.length}
+            itemLabel="indicators"
+            onPageChange={setIocPage}
+            onPageSizeChange={(s) => { setIocPageSize(s); setIocPage(1) }}
+          />
+          </>
         )}
       </div>
 

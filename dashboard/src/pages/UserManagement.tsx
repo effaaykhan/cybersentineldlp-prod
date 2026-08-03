@@ -19,6 +19,7 @@ import {
   type PermissionDef,
 } from '@/lib/api'
 import { usePermission } from '@/hooks/usePermission'
+import Pagination from '@/components/ui/Pagination'
 
 // Roles exposed by the dropdowns — mirrors the backend whitelist.
 const ROLE_OPTIONS = [
@@ -65,7 +66,7 @@ export default function UserManagement() {
 
   const usersQ = useQuery({
     queryKey: ['admin-users'],
-    queryFn: () => adminListUsers({ limit: 500 }),
+    queryFn: () => adminListUsers({ limit: 1000 }),
     enabled: canManage,
     refetchInterval: 30000,
   })
@@ -124,6 +125,8 @@ export default function UserManagement() {
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<AdminUser | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   const users = usersQ.data ?? []
   const permsCatalog = permsCatalogQ.data ?? []
@@ -132,6 +135,8 @@ export default function UserManagement() {
     () => [...users].sort((a, b) => a.email.localeCompare(b.email)),
     [users]
   )
+
+  const pageUsers = sortedUsers.slice((page - 1) * pageSize, page * pageSize)
 
   // Permission gate (UX only; backend re-enforces)
   if (!canManage) {
@@ -211,7 +216,7 @@ export default function UserManagement() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-cs-hair">
-                {sortedUsers.map((u) => (
+                {pageUsers.map((u) => (
                   <tr key={u.id} className="hover:bg-cs-hair-2 transition-colors">
                     <Td className="font-medium text-cs-ink">{u.email}</Td>
                     <Td>{u.username || <span className="text-cs-muted-2">—</span>}</Td>
@@ -273,6 +278,14 @@ export default function UserManagement() {
             </table>
           </div>
         )}
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={sortedUsers.length}
+          itemLabel="users"
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(1) }}
+        />
       </div>
 
       {createOpen && (

@@ -49,6 +49,8 @@ async def get_alerts(
     current_user=Depends(get_current_user),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     status: Optional[str] = Query(None, description="Filter by status"),
+    skip: int = Query(0, ge=0, description="Records to skip (pagination offset)"),
+    limit: int = Query(100, ge=1, le=500, description="Max records to return"),
     pg_db: AsyncSession = Depends(get_db),
 ):
     """
@@ -98,8 +100,8 @@ async def get_alerts(
             merge_mongo_filter({**query_filter, "status": "resolved"}, None)
         )
 
-        # Get limited list for display
-        cursor = alerts_collection.find(query_filter).sort("timestamp", -1).limit(100)
+        # Get one page for display (counts above already reflect the full total)
+        cursor = alerts_collection.find(query_filter).sort("timestamp", -1).skip(skip).limit(limit)
         async for alert_doc in cursor:
             try:
                 alert_dict = {k: v for k, v in alert_doc.items() if k != "_id"}
@@ -133,8 +135,8 @@ async def get_alerts(
         counts["acknowledged"] = 0
         counts["resolved"] = 0
 
-        # Get limited list for display
-        cursor = events_collection.find(query_filter).sort("timestamp", -1).limit(100)
+        # Get one page for display (counts above already reflect the full total)
+        cursor = events_collection.find(query_filter).sort("timestamp", -1).skip(skip).limit(limit)
 
         async for event_doc in cursor:
             try:

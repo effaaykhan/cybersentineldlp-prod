@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Shield, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
+import { Plus, Shield, CheckCircle, XCircle, RefreshCw, Download, Upload } from 'lucide-react'
 import PolicyCreatorModal from '@/components/policies/PolicyCreatorModal'
 import PolicyTable from '@/components/policies/PolicyTable'
 import PolicyDetailsModal from '@/components/policies/PolicyDetailsModal'
+import ExportPoliciesModal from '@/components/policies/ExportPoliciesModal'
+import ImportPoliciesModal from '@/components/policies/ImportPoliciesModal'
 import { Policy } from '@/types/policy'
 import {
   getPolicies,
@@ -35,6 +37,8 @@ export default function PoliciesPage() {
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null)
   const [selectedPolicy, setSelectedPolicy] = useState<Policy | null>(null)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
   const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null)
 
   // Fetch policies from API
@@ -257,6 +261,21 @@ export default function PoliciesPage() {
             {refreshBundlesMutation.isPending ? 'Refreshing…' : 'Refresh Bundles'}
           </button>
           <button
+            onClick={() => setShowImportModal(true)}
+            className="btn-secondary gap-2"
+          >
+            <Upload className="w-4 h-4" />
+            Import
+          </button>
+          <button
+            onClick={() => setShowExportModal(true)}
+            disabled={policies.length === 0}
+            className="btn-secondary gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+          <button
             onClick={handleCreatePolicy}
             className="btn-primary gap-2"
           >
@@ -374,6 +393,29 @@ export default function PoliciesPage() {
           setSelectedPolicy(null)
         }}
       />
+
+      {/* Export Policies Modal — mounted only while open so the selection
+          always initialises from the current policy list. */}
+      {showExportModal && (
+        <ExportPoliciesModal
+          isOpen
+          policies={policies}
+          onClose={() => setShowExportModal(false)}
+        />
+      )}
+
+      {/* Import Policies Modal — mounted only while open so file/result state
+          resets on every open. */}
+      {showImportModal && (
+        <ImportPoliciesModal
+          isOpen
+          onClose={() => setShowImportModal(false)}
+          onImported={() => {
+            queryClient.invalidateQueries({ queryKey: ['policies'] })
+            queryClient.invalidateQueries({ queryKey: ['policy-stats'] })
+          }}
+        />
+      )}
     </div>
   )
 }

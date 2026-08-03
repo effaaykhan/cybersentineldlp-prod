@@ -105,6 +105,84 @@ class PolicyUpsert(BaseModel):
         allow_population_by_field_name = True
 
 
+class PolicyImportItem(BaseModel):
+    """One policy inside an import document.
+
+    Deliberately lenient about ``conditions``/``actions`` so the endpoint can
+    swallow both shapes we produce:
+      * the dashboard export / API shape — ``conditions`` is a list of
+        ``{field, operator, value}`` and ``actions`` a list of
+        ``{type, parameters}``;
+      * the raw backend / seed-file shape — ``conditions`` is a
+        ``{"match", "rules"}`` dict and ``actions`` an ``{action: params}`` dict.
+    Both are normalised in ``_import_conditions_actions``.
+    """
+    name: str
+    description: Optional[str] = ""
+    enabled: bool = True
+    priority: int = 100
+    type: Optional[str] = None
+    severity: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    match: Optional[str] = "all"
+    conditions: Optional[Any] = None
+    actions: Optional[Any] = None
+    compliance_tags: Optional[List[str]] = []
+
+
+class PolicyImportRequest(BaseModel):
+    policies: List[PolicyImportItem]
+    # What to do when a policy with the same name already exists.
+    #   skip    – leave the existing one untouched (default, safest)
+    #   rename  – import the incoming one under a unique "(imported)" name
+    #   replace – overwrite the existing policy with the incoming definition
+    on_conflict: Literal["skip", "rename", "replace"] = "skip"
+
+
+def _import_conditions_actions(item: PolicyImportItem):
+    """Rebuild the backend conditions/actions dicts from one imported policy,
+    accepting both the dashboard export shape (lists) and the raw storage shape
+    (dicts). Mirrors the create/update endpoints so an imported policy behaves
+    exactly like a hand-created one."""
+    # A typed policy carrying a real config is fully described by that config;
+    # let the same transformer the create path uses rebuild its rules/actions.
+    if item.config and item.type:
+        conditions_dict, actions_dict = transform_frontend_config_to_backend(
+            item.type, item.config
+        )
+    else:
+        raw_conditions = item.conditions
+        if isinstance(raw_conditions, dict):
+            conditions_dict = {
+                "match": raw_conditions.get("match", item.match or "all"),
+                "rules": raw_conditions.get("rules", []) or [],
+            }
+        elif isinstance(raw_conditions, list):
+            rules = [
+                {"field": r.get("field"), "operator": r.get("operator"), "value": r.get("value")}
+                for r in raw_conditions
+                if isinstance(r, dict)
+            ]
+            conditions_dict = {"match": item.match or "all", "rules": rules}
+        else:
+            conditions_dict = {"match": item.match or "all", "rules": []}
+
+        raw_actions = item.actions
+        if isinstance(raw_actions, dict):
+            actions_dict = raw_actions
+        elif isinstance(raw_actions, list):
+            actions_dict = {
+                a["type"]: (a.get("parameters") or {})
+                for a in raw_actions
+                if isinstance(a, dict) and a.get("type")
+            }
+        else:
+            actions_dict = {}
+
+    actions_dict = normalize_monitoring_actions(item.type, item.config, actions_dict)
+    return conditions_dict, actions_dict
+
+
 async def _normalize_agent_scope(
     db: AsyncSession,
     agent_id: Optional[str],
@@ -543,6 +621,162 @@ async def refresh_policy_bundles(
     """
     await invalidate_policy_bundle_cache()
     return {"message": "Policy bundle cache cleared", "status": "ok"}
+
+
+@router.post("/import")
+async def import_policies(
+    payload: PolicyImportRequest,
+    current_user: User = Depends(require_permission("create_policy")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Bulk-import policies from a previously exported document.
+
+    Each policy is validated and created independently, so one malformed entry
+    never aborts the whole import — the response reports the per-policy outcome
+    (created / replaced / skipped / failed) instead of a single 4xx.
+
+    Agent scoping is intentionally dropped on import: ``agent_ids`` reference
+    agents in *this* deployment's MongoDB, so a policy exported from another box
+    would 400 or silently mis-scope. Imported policies therefore apply to all
+    agents until you re-scope them.
+    """
+    if not payload.policies:
+        raise HTTPException(status_code=400, detail="No policies to import.")
+
+    policy_service = PolicyService(db)
+
+    # Snapshot existing names → policy for conflict handling (limit high enough
+    # to cover any realistic policy count).
+    existing = await policy_service.get_all_policies(skip=0, limit=1000)
+    by_name: Dict[str, Any] = {p.name: p for p in existing}
+    taken_names = set(by_name.keys())
+
+    def _unique_name(base: str) -> str:
+        candidate = f"{base} (imported)"
+        n = 2
+        while candidate in taken_names:
+            candidate = f"{base} (imported {n})"
+            n += 1
+        return candidate
+
+    results: List[Dict[str, Any]] = []
+    imported = replaced = skipped = failed = 0
+    changed = False
+
+    for item in payload.policies:
+        name = (item.name or "").strip()
+        if not name:
+            failed += 1
+            results.append({"name": item.name or "(unnamed)", "status": "failed",
+                            "detail": "Policy has no name."})
+            continue
+
+        # Domain-scoped RBAC: may this admin create in the target domain?
+        target_domain = domain_for_policy_type(item.type)
+        if not user_can_access_domain(current_user, target_domain):
+            failed += 1
+            results.append({"name": name, "status": "failed",
+                            "detail": f"'{item.type}' is in the '{target_domain}' "
+                                      f"domain, which is outside your access."})
+            continue
+
+        conflict = name in taken_names
+
+        if conflict and payload.on_conflict == "skip":
+            skipped += 1
+            results.append({"name": name, "status": "skipped",
+                            "detail": "A policy with this name already exists."})
+            continue
+
+        try:
+            conditions_dict, actions_dict = _import_conditions_actions(item)
+
+            if conflict and payload.on_conflict == "replace":
+                existing_policy = by_name.get(name)
+                # Only overwrite a policy we're actually allowed to touch.
+                if existing_policy is not None and not user_can_access_domain(
+                    current_user, getattr(existing_policy, "domain", None)
+                ):
+                    failed += 1
+                    results.append({"name": name, "status": "failed",
+                                    "detail": "Existing policy is outside your domain."})
+                    continue
+                await policy_service.update_policy(
+                    policy_id=str(existing_policy.id),
+                    name=name,
+                    description=item.description or name,
+                    conditions=conditions_dict,
+                    actions=actions_dict,
+                    enabled=item.enabled,
+                    priority=item.priority,
+                    compliance_tags=item.compliance_tags or [],
+                    type=item.type,
+                    severity=item.severity,
+                    config=item.config,
+                    agent_ids=[],
+                )
+                replaced += 1
+                changed = True
+                results.append({"name": name, "status": "replaced",
+                                "detail": "Existing policy overwritten."})
+                continue
+
+            # Fresh create, or rename-on-conflict.
+            create_name = _unique_name(name) if conflict else name
+            created = await policy_service.create_policy(
+                name=create_name,
+                description=item.description or create_name,
+                conditions=conditions_dict,
+                actions=actions_dict,
+                created_by=str(current_user.id),
+                enabled=item.enabled,
+                priority=item.priority,
+                compliance_tags=item.compliance_tags or [],
+                type=item.type,
+                severity=item.severity,
+                config=item.config,
+                agent_ids=[],
+            )
+            taken_names.add(create_name)
+            by_name[create_name] = created
+            imported += 1
+            changed = True
+            results.append({"name": create_name, "status": "created",
+                            "detail": f"Imported as '{create_name}'."
+                            if create_name != name else "Imported."})
+
+        except ValueError as e:
+            failed += 1
+            results.append({"name": name, "status": "failed", "detail": str(e)})
+        except Exception as e:  # defensive: never let one entry 500 the batch
+            logger.warning("Policy import entry failed", policy_name=name, error=str(e))
+            failed += 1
+            results.append({"name": name, "status": "failed", "detail": str(e)})
+
+    if changed:
+        await invalidate_policy_bundle_cache()
+        await audit_log(
+            current_user.id,
+            "policy.import",
+            {"imported": imported, "replaced": replaced,
+             "skipped": skipped, "failed": failed},
+        )
+
+    logger.info(
+        "Policies imported",
+        user=current_user.email,
+        imported=imported, replaced=replaced, skipped=skipped, failed=failed,
+    )
+
+    return {
+        "total": len(payload.policies),
+        "imported": imported,
+        "replaced": replaced,
+        "skipped": skipped,
+        "failed": failed,
+        "results": results,
+    }
 
 
 @router.get("/stats/summary")

@@ -531,6 +531,10 @@ class DLPAgent:
             threading.Thread(target=self.refresh_sensitive_marks, daemon=True,
                              name="CS_MarkSeed").start()
 
+        # Print channel: monitor CUPS jobs so every printed document's MD5/SHA-256
+        # is logged (parity with the Windows agent's spool hashing).
+        self._start_print_monitor()
+
         logger.info("Agent started successfully")
 
         # Keep main thread alive
@@ -568,6 +572,14 @@ class DLPAgent:
         # left waiting on a verdict that will never come.
         self._resume_all_suspended()
         self.stop_read_guard()
+
+        # Stop the print monitor if it was started.
+        pm = getattr(self, "print_monitor", None)
+        if pm is not None:
+            try:
+                pm.stop()
+            except Exception:
+                pass
 
         # Unregister from server
         self.unregister_agent()
@@ -2765,6 +2777,55 @@ class DLPAgent:
         # real text out of pdf/docx/xlsx/pptx, or reports the file as
         # uninspectable so a policy decides.
         return ""
+
+    def _start_print_monitor(self):
+        """Start CUPS print-job monitoring so print-channel events carry the
+        spooled document's MD5/SHA-256. No-op if CUPS/lpstat is unavailable."""
+        try:
+            import shutil
+            if not shutil.which("lpstat"):
+                logger.info("Print monitor: lpstat not found (CUPS absent) — skipping")
+                return
+            from print_monitor import PrintMonitor
+            self.print_monitor = PrintMonitor(callback=self._on_print_job, poll_interval=5)
+            self.print_monitor.start()
+            logger.info("Print monitor started (CUPS)")
+        except Exception as e:
+            logger.warning(f"Print monitor not started: {e}")
+
+    def _on_print_job(self, ev: Dict[str, Any]):
+        """Turn a detected CUPS print job into a DLP 'print' event, logging the
+        spooled document's MD5/SHA-256 (the "violated file")."""
+        try:
+            current_user = self._event_user()
+            document = ev.get("document") or "print job"
+            md5 = ev.get("file_md5")
+            sha256 = ev.get("file_sha256")
+            payload = {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "print",
+                "event_subtype": "print_job",
+                "agent_id": self.agent_id,
+                "source_type": "agent",
+                "user_email": f"{current_user}@{socket.gethostname()}",
+                "username": current_user,
+                "printer_name": ev.get("printer"),
+                "file_path": document,
+                "file_name": document,
+                "file_md5": md5,
+                "file_sha256": sha256,
+                "severity": "medium",
+                "action": "logged",
+                "blocked": False,
+                "description": (
+                    f"Print job: {document} -> {ev.get('printer')}"
+                    + (f" (MD5 {md5})" if md5 else "")
+                ),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            self.send_event(payload)
+        except Exception as e:
+            logger.error(f"Error handling print job: {e}")
 
     def send_event(self, event_data: Dict[str, Any]):
         """Send event to server"""

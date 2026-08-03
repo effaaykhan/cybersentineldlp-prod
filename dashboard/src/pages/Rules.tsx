@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Plus, Edit, Trash2, Power, PowerOff, TestTube, Search, Filter } from 'lucide-react'
@@ -7,6 +7,7 @@ import ErrorMessage from '@/components/ErrorMessage'
 import RuleModal from '@/components/rules/RuleModal'
 import RuleTestModal from '@/components/rules/RuleTestModal'
 import { Dot } from '@/components/ui/Dot'
+import Pagination from '@/components/ui/Pagination'
 import { getRules, getRuleStatistics, deleteRule, toggleRule, type Rule } from '@/lib/rules-api'
 import { formatRelativeTime, cn } from '@/lib/utils'
 import toast from 'react-hot-toast'
@@ -16,6 +17,8 @@ type FilterType = 'all' | 'regex' | 'keyword' | 'dictionary'
 export default function Rules() {
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
   const [selectedRule, setSelectedRule] = useState<Rule | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isTestModalOpen, setIsTestModalOpen] = useState(false)
@@ -24,7 +27,7 @@ export default function Rules() {
   // Fetch rules
   const { data: rules, isLoading, error, refetch } = useQuery({
     queryKey: ['rules', filter],
-    queryFn: () => getRules({ type: filter === 'all' ? undefined : filter }),
+    queryFn: () => getRules({ type: filter === 'all' ? undefined : filter, limit: 1000 }),
     refetchInterval: 30000,
   })
 
@@ -94,6 +97,13 @@ export default function Rules() {
       rule.type.toLowerCase().includes(query)
     )
   })
+
+  // Reset to the first page whenever a filter/search narrows the list
+  useEffect(() => {
+    setPage(1)
+  }, [filter, searchQuery])
+
+  const pageItems = filteredRules?.slice((page - 1) * pageSize, page * pageSize)
 
   if (isLoading) {
     return <LoadingSpinner size="lg" />
@@ -249,7 +259,7 @@ export default function Rules() {
                   </td>
                 </tr>
               ) : (
-                filteredRules?.map((rule) => (
+                pageItems?.map((rule) => (
                   <tr key={rule.id} className="hover:bg-cs-hair-2">
                     <td>
                       <button
@@ -347,6 +357,14 @@ export default function Rules() {
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={filteredRules?.length ?? 0}
+          itemLabel="rules"
+          onPageChange={setPage}
+          onPageSizeChange={(s) => { setPageSize(s); setPage(1) }}
+        />
       </div>
 
       {/* Modals */}

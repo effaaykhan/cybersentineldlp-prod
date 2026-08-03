@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, AlertTriangle, ShieldAlert, Search } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import AlertDetailsModal from '@/components/alerts/AlertDetailsModal'
+import Pagination from '@/components/ui/Pagination'
 import { getAlerts } from '@/lib/api'
 import { formatRelativeTime, getSeverityColor, cn } from '@/lib/utils'
 
@@ -14,12 +15,21 @@ export default function Alerts() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   const { data: alertsData, isLoading, error, refetch } = useQuery({
     queryKey: ['alerts'],
-    queryFn: getAlerts,
+    // Pull a generous window so the client-side severity filter + search still
+    // operate across the whole set; the list itself is paginated client-side.
+    queryFn: () => getAlerts({ limit: 500 }),
     refetchInterval: 10000,
   })
+
+  // Changing the severity filter or search returns to the first page.
+  useEffect(() => {
+    setPage(1)
+  }, [filter, searchQuery])
 
   const handleAlertClick = (alert: any) => {
     setSelectedAlert(alert)
@@ -84,6 +94,8 @@ export default function Alerts() {
 
     return true
   })
+
+  const pagedAlerts = filteredAlerts.slice((page - 1) * pageSize, page * pageSize)
 
   return (
     <div className="space-y-6">
@@ -188,7 +200,7 @@ export default function Alerts() {
               </p>
             </div>
           ) : (
-            filteredAlerts.map((alert) => (
+            pagedAlerts.map((alert) => (
               <div
                 key={alert.id}
                 className="p-4 hover:bg-slate-50 cursor-pointer transition-colors"
@@ -233,6 +245,18 @@ export default function Alerts() {
             ))
           )}
         </div>
+
+        {/* Pagination */}
+        {filteredAlerts.length > 0 && (
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filteredAlerts.length}
+            itemLabel="alerts"
+            onPageChange={setPage}
+            onPageSizeChange={(size) => { setPageSize(size); setPage(1) }}
+          />
+        )}
       </div>
 
       {/* Alert Details Modal */}

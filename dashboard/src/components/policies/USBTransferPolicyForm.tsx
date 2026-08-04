@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { USBTransferConfig } from '@/types/policy'
 import { Plus, Trash2 } from 'lucide-react'
+import FileIdentityDenylist from './FileIdentityDenylist'
 
 interface USBTransferPolicyFormProps {
   config: USBTransferConfig
@@ -159,6 +160,8 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
           </label>
         </div>
       </div>
+
+      <FileIdentityDenylist config={config} onChange={onChange} />
     </div>
   )
 }

@@ -1077,6 +1077,11 @@ class PolicyEvaluationRequest(BaseModel):
         None, description="Why the caller could not inspect: too_large | unreadable"
     )
     file_size: Optional[int] = Field(None, description="File size in bytes")
+    # Endpoint-computed file hashes, used for the file-hash denylist rule
+    # (Print/USB). Optional: if the agent sends file_content_b64, the server
+    # computes them from the raw bytes instead.
+    file_sha256: Optional[str] = Field(None, description="SHA-256 of the file (hex), for file-hash rules")
+    file_md5: Optional[str] = Field(None, description="MD5 of the file (hex), for file-hash rules")
     event_type: str = Field(..., description="Event type (e.g., 'usb_file_transfer', 'clipboard', 'network_exfil')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
     source_path: Optional[str] = Field(None, description="Source file path")
@@ -1681,6 +1686,80 @@ async def wireless_policy(
     )
 
 
+def _file_extension(file_name: Optional[str]) -> Optional[str]:
+    """Lowercase file extension incl. the dot (e.g. '.dwg'), or None."""
+    if not file_name:
+        return None
+    base = str(file_name).replace("\\", "/").rstrip("/").split("/")[-1]
+    dot = base.rfind(".")
+    if dot <= 0 or dot == len(base) - 1:
+        return None
+    return base[dot:].lower()
+
+
+async def _match_file_identity(
+    db: AsyncSession,
+    agent_id: str,
+    event_type: Optional[str],
+    file_ext: Optional[str],
+    file_sha256: Optional[str],
+    file_md5: Optional[str],
+):
+    """Match a file against the custom-extension and file-hash denylists defined
+    on the USB/Print policies that apply to this agent.
+
+    Independent of content classification: a file is caught if its extension is
+    on a policy's custom-extension list OR its hash is on a policy's denylist —
+    which also catches renamed files and non-text documents. Returns
+    (should_block, should_alert, reason).
+    """
+    try:
+        et = (event_type or "").lower()
+        if "print" in et:
+            types = {"print_content_prevention"}
+        elif "usb" in et:
+            types = {"usb_file_transfer_monitoring", "usb_device_control"}
+        else:
+            return (False, False, "")
+
+        hashes = {h.lower() for h in (file_sha256, file_md5) if h}
+        policies = await PolicyService(db).get_all_policies(skip=0, limit=1000, enabled_only=True)
+        for p in policies:
+            if getattr(p, "type", None) not in types:
+                continue
+            # Scope: a policy with agent_ids applies only to those agents.
+            scope = getattr(p, "agent_ids", None) or []
+            if scope and agent_id not in scope:
+                continue
+            cfg = getattr(p, "config", None) or {}
+
+            # Custom blocked extensions — a DENYLIST (distinct from the existing
+            # ``fileExtensions`` scope field, which selects file types to inspect
+            # for content and must NOT be treated as "block these").
+            exts = []
+            for e in (cfg.get("blockedExtensions") or []):
+                e = str(e).strip().lower()
+                if e:
+                    exts.append(e if e.startswith(".") else "." + e)
+            if file_ext and file_ext in exts:
+                act = str(cfg.get("blockedExtensionAction") or "block").lower()
+                reason = f"file extension {file_ext} is on the block list (policy '{p.name}')"
+                return (act != "alert", act == "alert", reason)
+
+            # File-hash denylist (MD5 or SHA-256).
+            plist = {str(h).strip().lower() for h in (cfg.get("blockedHashes") or []) if h}
+            hit = hashes & plist
+            if hit:
+                act = str(cfg.get("blockedHashAction") or "block").lower()
+                matched = next(iter(hit))
+                reason = f"file hash {matched[:16]}… is on the block list (policy '{p.name}')"
+                return (act != "alert", act == "alert", reason)
+        return (False, False, "")
+    except Exception as e:  # never let matching break evaluation
+        logger.warning("File-identity match failed (non-fatal)", error=str(e))
+        return (False, False, "")
+
+
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
 async def evaluate_policy_realtime(
     agent_id: str,
@@ -1711,6 +1790,10 @@ async def evaluate_policy_realtime(
         #    makes binary documents classifiable at all — decoding their bytes
         #    into a string yields compressed garbage that always looks "Public".
         content_to_classify = request.file_content or ""
+        # File hashes for the file-hash denylist rule: prefer agent-supplied,
+        # else computed from the raw bytes in the base64 branch below.
+        req_sha256 = (request.file_sha256 or "").strip().lower() or None
+        req_md5 = (request.file_md5 or "").strip().lower() or None
         extract_kind = "text"
         # readable | unreadable — whether we could actually see inside the file.
         # An encrypted archive / scanned image / opaque binary is NOT the same as
@@ -1738,6 +1821,14 @@ async def evaluate_policy_realtime(
                 raw = _b64.b64decode(request.file_content_b64, validate=False)
             except Exception as e:  # noqa: BLE001 — malformed base64 from an agent
                 raise HTTPException(400, f"file_content_b64 is not valid base64: {e}")
+            # Hash the real bytes for the file-hash denylist (covers USB, where
+            # the agent sends raw bytes; the print agent sends its own hashes).
+            if req_sha256 is None or req_md5 is None:
+                import hashlib as _hl
+                if req_sha256 is None:
+                    req_sha256 = _hl.sha256(raw).hexdigest()
+                if req_md5 is None:
+                    req_md5 = _hl.md5(raw).hexdigest()
             extracted = _extract_text(request.file_name, raw)
             content_to_classify = extracted.text
             extract_kind = extracted.kind
@@ -1904,6 +1995,18 @@ async def evaluate_policy_realtime(
                         if alert_severity is None or _severity_rank(action_severity) > _severity_rank(alert_severity):
                             alert_severity = action_severity
 
+        # 4b. File-identity rules (custom extensions + file-hash denylist) for the
+        # USB/Print channels — independent of content classification, so they
+        # also catch renamed files and non-text documents.
+        _id_block, _id_alert, _id_reason = await _match_file_identity(
+            db, agent_id, request.event_type,
+            _file_extension(request.file_name), req_sha256, req_md5,
+        )
+        if _id_block:
+            should_block = True
+        elif _id_alert:
+            should_alert = True
+
         # 5. Build response
         action = "block" if should_block else "allow"
 
@@ -1919,6 +2022,10 @@ async def evaluate_policy_realtime(
 
         if should_block:
             reason = f"BLOCKED - {reason}"
+
+        # A file-identity match is the operator-relevant reason — surface it.
+        if _id_reason:
+            reason = (f"BLOCKED - {_id_reason}" if _id_block else _id_reason)
 
         logger.info(
             "Policy evaluation complete",

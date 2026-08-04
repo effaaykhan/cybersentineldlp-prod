@@ -2949,6 +2949,13 @@ if (!shouldBlock) {
          j.AddString("file_name", docName);
          j.AddString("file_content", text.substr(0, 200000));
          j.AddString("event_type", "print");
+         // Send the spooled document's hashes so the server's file-hash denylist
+         // rule can match (the print channel sends text, not raw bytes, so the
+         // server can't compute these itself). ReadSpoolText stashed them above.
+         if (lastSpoolHash.jobId == jobId && !lastSpoolHash.sha256.empty()) {
+             j.AddString("file_sha256", lastSpoolHash.sha256);
+             j.AddString("file_md5", lastSpoolHash.md5);
+         }
          auto [st, resp] = httpClient->Post(
              "/agents/" + config.agentId + "/policy/evaluate", j.Build());
          if (st != 200) {
@@ -8797,7 +8804,7 @@ if (shouldMonitor) {
                                " bytes) — asking server to decide (uninspectable)");
             }
 
-            std::string encodedContent;
+            std::string encodedContent, fileSha256, fileMd5;
             if (!tooLargeToInspect) {
                 // Read file content
                 std::ifstream file(filePath, std::ios::binary);
@@ -8817,6 +8824,10 @@ if (shouldMonitor) {
                 // then classified as "Public" and were allowed onto USB. The server
                 // decodes this and runs the proper parser per format.
                 encodedContent = Base64Encode(fileContent);
+                // Full-file hashes for the file-hash denylist rule (fileContent
+                // holds the entire file here).
+                fileSha256 = Sha256Hex(fileContent);
+                fileMd5 = Md5Hex(fileContent);
             }
 
             // Build JSON request using JsonBuilder
@@ -8828,6 +8839,10 @@ if (shouldMonitor) {
                 json.AddString("inspection_skipped", "too_large");
             } else {
                 json.AddString("file_content_b64", encodedContent);
+                if (!fileSha256.empty()) {
+                    json.AddString("file_sha256", fileSha256);
+                    json.AddString("file_md5", fileMd5);
+                }
             }
             json.AddInt("file_size", static_cast<int>(fileSize));
             json.AddString("event_type", eventType);

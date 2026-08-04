@@ -1577,6 +1577,13 @@ class DLPAgent:
 
                 file_size = os.path.getsize(file_path)
                 payload["file_size"] = file_size
+                # Full-file MD5/SHA-256 for the file-hash denylist rule. Computed
+                # over the whole file (any size), so hash matching works even when
+                # the content is too large to inspect / omitted below.
+                _md5, _sha = self._hash_file(file_path)
+                if _sha:
+                    payload["file_sha256"] = _sha
+                    payload["file_md5"] = _md5
                 max_bytes = int(self.config.get("classification", {}).get("max_file_size_mb", 10)) * 1024 * 1024
 
                 if file_size > max_bytes:
@@ -2700,6 +2707,21 @@ class DLPAgent:
             return sha256_hash.hexdigest()
         except:
             return ""
+
+    def _hash_file(self, path: str, chunk: int = 1024 * 1024):
+        """Streaming MD5 + SHA-256 of a whole file, hex. For the file-hash
+        denylist rule. Returns (md5, sha256) or (None, None)."""
+        try:
+            import hashlib
+            md5, sha = hashlib.md5(), hashlib.sha256()
+            with open(path, "rb") as f:
+                for block in iter(lambda: f.read(chunk), b""):
+                    md5.update(block)
+                    sha.update(block)
+            return md5.hexdigest(), sha.hexdigest()
+        except Exception as e:
+            logger.debug(f"Could not hash {path}: {e}")
+            return None, None
 
     def _read_file_content(self, file_path: str, max_bytes: int = 200000) -> str:
         """Read text content from various file formats (.txt, .json, .xml, .csv, .sql, .docx, .xlsx, .pptx, .pdf, .zip, .db, etc.)."""

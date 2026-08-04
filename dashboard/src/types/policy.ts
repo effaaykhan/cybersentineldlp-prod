@@ -134,14 +134,24 @@ export interface PrinterControlConfig {
   scope: 'block_all' | 'block_network' | 'block_local' | 'allowlist'
 }
 
-export interface PrintContentConfig {
+// File-identity denylist — block/alert a file by custom extension or exact hash,
+// independent of content classification (also catches renamed / non-text files).
+// Shared shape mixed into the USB and Print channel configs.
+export interface FileIdentityDenylist {
+  blockedExtensions?: string[]          // e.g. [".dwg", ".iso"] — lowercase, leading dot
+  blockedHashes?: string[]              // MD5 or SHA-256 hex, lowercase
+  blockedExtensionAction?: 'block' | 'alert'
+  blockedHashAction?: 'block' | 'alert'
+}
+
+export interface PrintContentConfig extends FileIdentityDenylist {
   // enforce = cancel sensitive print jobs; audit = log "would block", don't cancel
   mode: 'enforce' | 'audit'
   // classification levels that trigger the action
   levels: string[]
 }
 
-export interface USBTransferConfig {
+export interface USBTransferConfig extends FileIdentityDenylist {
   monitoredPaths: string[]
   action: USBTransferAction
   quarantinePath?: string

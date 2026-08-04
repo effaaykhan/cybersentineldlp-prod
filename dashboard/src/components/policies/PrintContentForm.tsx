@@ -2,6 +2,7 @@
 
 import { Printer, ShieldCheck, ShieldAlert } from 'lucide-react'
 import { PrintContentConfig } from '@/types/policy'
+import FileIdentityDenylist from './FileIdentityDenylist'
 
 interface Props {
   config: PrintContentConfig
@@ -92,6 +93,8 @@ export default function PrintContentForm({ config, onChange }: Props) {
           </button>
         </div>
       </div>
+
+      <FileIdentityDenylist config={config} onChange={onChange} />
     </div>
   )
 }

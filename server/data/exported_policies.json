@@ -614,10 +614,33 @@
     "name": "Alert on Sensitive Clipboard Copy",
     "description": "Alerts when clipboard content classifies as sensitive (cards, SSN, Aadhaar, PAN, keys, DB connection strings). Enables the agent's clipboard channel (hasClipboardPolicies=true); action is alert, not block, so it never interferes with normal copy/paste.",
     "enabled": true,
-    "priority": 80,
+    "priority": 70,
     "type": "clipboard_monitoring",
     "severity": "high",
     "config": {
+      "patterns": {
+        "predefined": [
+          "ssn",
+          "email",
+          "credit_card",
+          "phone",
+          "api_key",
+          "private_key",
+          "aadhaar",
+          "pan",
+          "ifsc",
+          "indian_bank_account",
+          "indian_phone",
+          "upi_id",
+          "micr",
+          "indian_dob",
+          "source_code_content",
+          "api_key_in_code",
+          "database_connection_string"
+        ],
+        "custom": []
+      },
+      "action": "alert",
       "monitoredEvents": [
         "clipboard_copy"
       ],
@@ -636,17 +659,45 @@
         "AWS_KEY",
         "DATABASE_CONNECTION"
       ],
-      "minMatchCount": 1,
-      "action": "alert"
+      "minMatchCount": 1
     },
     "conditions": {
-      "match": "all",
-      "rules": []
+      "match": "any",
+      "rules": [
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9_-]{32,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
+        }
+      ]
     },
     "actions": {
-      "alert": {
-        "severity": "high"
-      }
+      "alert": {}
     }
   },
   {
@@ -1008,6 +1059,77 @@
     }
   },
   {
+    "name": "Clipboard policy MacOS",
+    "description": "",
+    "enabled": true,
+    "priority": 90,
+    "type": "clipboard_monitoring",
+    "severity": "critical",
+    "config": {
+      "patterns": {
+        "predefined": [
+          "ssn",
+          "credit_card",
+          "email",
+          "phone",
+          "api_key",
+          "private_key",
+          "aadhaar",
+          "pan",
+          "ifsc",
+          "indian_bank_account",
+          "indian_phone",
+          "upi_id",
+          "micr",
+          "indian_dob",
+          "source_code_content",
+          "api_key_in_code",
+          "database_connection_string"
+        ],
+        "custom": []
+      },
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "any",
+      "rules": [
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9_-]{32,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {}
+    }
+  },
+  {
     "name": "Network Exfiltration — Block Sensitive Data (all methods)",
     "description": "The core Network Prevention rule. Blocks Confidential/Restricted data from leaving the endpoint over ANY network channel — python http.server, ftp/sftp/scp/tftp, http(s) POST uploads, curl/wget, netcat, SMB copy, WebDAV, rsync, DNS tunnelling, cloud CLIs. It is deliberately method-AGNOSTIC: it matches on the fact that classified data is going out, not on how, so a novel tool is covered the moment the agent routes the transfer through the real-time evaluate endpoint. Works on every file type because the file is extracted+classified server-side (pdf/docx/xlsx/archives/OCR) exactly like a USB copy.",
     "enabled": true,
@@ -1194,77 +1316,6 @@
     },
     "actions": {
       "block": {}
-    }
-  },
-  {
-    "name": "Clipboard policy MacOS",
-    "description": "",
-    "enabled": true,
-    "priority": 100,
-    "type": "clipboard_monitoring",
-    "severity": "medium",
-    "config": {
-      "patterns": {
-        "predefined": [
-          "ssn",
-          "credit_card",
-          "email",
-          "phone",
-          "api_key",
-          "private_key",
-          "aadhaar",
-          "pan",
-          "ifsc",
-          "indian_bank_account",
-          "indian_phone",
-          "upi_id",
-          "micr",
-          "indian_dob",
-          "source_code_content",
-          "api_key_in_code",
-          "database_connection_string"
-        ],
-        "custom": []
-      },
-      "action": "alert"
-    },
-    "conditions": {
-      "match": "any",
-      "rules": [
-        {
-          "field": "clipboard_content",
-          "operator": "matches_regex",
-          "value": "\\b\\d{3}-\\d{2}-\\d{4}\\b"
-        },
-        {
-          "field": "clipboard_content",
-          "operator": "matches_regex",
-          "value": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
-        },
-        {
-          "field": "clipboard_content",
-          "operator": "matches_regex",
-          "value": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
-        },
-        {
-          "field": "clipboard_content",
-          "operator": "matches_regex",
-          "value": "\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b"
-        },
-        {
-          "field": "clipboard_content",
-          "operator": "matches_regex",
-          "value": "\\b[A-Za-z0-9_-]{32,}\\b"
-        },
-        {
-          "field": "clipboard_content",
-          "operator": "matches_regex",
-          "value": "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
-        }
-      ]
-    },
-    "actions": {
-      "alert": {}
     }
   },
   {
@@ -1890,6 +1941,77 @@
     },
     "actions": {
       "log": {}
+    }
+  },
+  {
+    "name": "Block Sensitive Clipboard  MacOS",
+    "description": "",
+    "enabled": true,
+    "priority": 120,
+    "type": "clipboard_monitoring",
+    "severity": "high",
+    "config": {
+      "patterns": {
+        "predefined": [
+          "ssn",
+          "email",
+          "aadhaar",
+          "api_key",
+          "private_key",
+          "phone",
+          "credit_card",
+          "pan",
+          "ifsc",
+          "indian_bank_account",
+          "indian_phone",
+          "upi_id",
+          "micr",
+          "indian_dob",
+          "source_code_content",
+          "api_key_in_code",
+          "database_connection_string"
+        ],
+        "custom": []
+      },
+      "action": "block"
+    },
+    "conditions": {
+      "match": "any",
+      "rules": [
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b[A-Za-z0-9_-]{32,}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b"
+        },
+        {
+          "field": "clipboard_content",
+          "operator": "matches_regex",
+          "value": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
+        }
+      ]
+    },
+    "actions": {
+      "block": {}
     }
   }
 ]

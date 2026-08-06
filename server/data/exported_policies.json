@@ -2003,7 +2003,7 @@
         ],
         "custom": []
       },
-      "action": "block"
+      "action": "alert"
     },
     "conditions": {
       "match": "any",
@@ -2041,7 +2041,7 @@
       ]
     },
     "actions": {
-      "block": {}
+      "alert": {}
     }
   }
 ]

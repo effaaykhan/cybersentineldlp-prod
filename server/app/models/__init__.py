@@ -6,7 +6,7 @@ Exports all SQLAlchemy models for easy import
 from app.models.role import Role
 from app.models.permission import Permission, RolePermission, UserPermission
 from app.models.user import User, UserRole
-from app.models.ip_allowlist import IPAllowlistEntry
+from app.models.ip_allowlist import IPAllowlistEntry, IPAllowlistConfig
 from app.models.sanctioned_usb_device import SanctionedUsbDevice
 from app.models.sanctioned_printer import SanctionedPrinter
 from app.models.endpoint import Endpoint
@@ -65,4 +65,6 @@ __all__ = [
     "TAXIIFeed",
     "TAXIIShareConfig",
     "RetentionConfig",
+    "IPAllowlistEntry",
+    "IPAllowlistConfig",
 ]

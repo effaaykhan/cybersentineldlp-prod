@@ -12,6 +12,7 @@ import {
   ApplicationControlConfig,
   WirelessTransferControlConfig,
   NetworkShareControlConfig,
+  MessagingAppControlConfig,
   PrintContentConfig,
   USBTransferConfig,
   FileTransferConfig,
@@ -29,6 +30,7 @@ import PrinterControlForm from './PrinterControlForm'
 import ApplicationControlForm from './ApplicationControlForm'
 import WirelessTransferControlForm from './WirelessTransferControlForm'
 import NetworkShareControlForm from './NetworkShareControlForm'
+import MessagingAppControlForm from './MessagingAppControlForm'
 import PrintContentForm from './PrintContentForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
@@ -93,7 +95,7 @@ const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in PO
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
@@ -186,6 +188,9 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
     case 'network_share_control':
       return { mode: 'block_all', exceptions: {} } as NetworkShareControlConfig
 
+    case 'messaging_app_control':
+      return { action: 'alert', apps: [], exceptions: {} } as MessagingAppControlConfig
+
     case 'print_content_prevention':
       return { mode: 'enforce', levels: ['Confidential', 'Restricted'] } as PrintContentConfig
 
@@ -245,7 +250,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -694,6 +699,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'network_share_control' && (
                   <NetworkShareControlForm
                     config={config as NetworkShareControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'messaging_app_control' && (
+                  <MessagingAppControlForm
+                    config={config as MessagingAppControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

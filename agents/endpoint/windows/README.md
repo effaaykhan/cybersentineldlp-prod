@@ -110,21 +110,20 @@ g++ -std=c++23 -O2 agent.cpp -o cybersentineldlp_agent.exe \
 
 ## 🔄 Updating the Agent
 
-The canonical install / update path is the one-liner installer at the
-repo root:
+The canonical install / update / uninstall path is the interactive manager at the
+repo root. Run it elevated and pick from the menu:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
 ```
 
-It's safe to re-run on a host that already has the agent — Step 2 of
-the script cleans the existing scheduled task / process before
-re-installing. The downloaded binary is verified against its SHA-256
-sidecar before it ever runs.
+Pick **Update** to hot-swap just the binary (SHA-256 verified, config/task left
+untouched), or **Install** for a full (re)install — it's safe to re-run on a host
+that already has the agent, as it cleans the existing scheduled task / process
+first. The downloaded binary is verified against its SHA-256 sidecar before it
+ever runs.
 
-For just hot-swapping the binary without rerunning the full installer,
-see the "Re-install / update an existing endpoint" section of
-[`DEPLOYMENT.md`](../../../DEPLOYMENT.md).
+See [`DEPLOYMENT.md`](../../../DEPLOYMENT.md) for the full walkthrough.
 
 ## 🗑️ Uninstallation
 

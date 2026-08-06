@@ -13,7 +13,7 @@ import {
   USBTransferConfig,
   FileTransferConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, UploadCloud, Mail, Network } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, UploadCloud, Mail, Network, MessageSquare } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -40,6 +40,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Mail
     case 'network_exfiltration_prevention':
       return Network
+    case 'messaging_app_control':
+      return MessageSquare
     default:
       return FileText
   }
@@ -70,6 +72,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Email Send Prevention'
     case 'network_exfiltration_prevention':
       return 'Network Prevention'
+    case 'messaging_app_control':
+      return 'Messaging App Control'
     default:
       return 'Unknown'
   }

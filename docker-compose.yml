@@ -299,7 +299,15 @@ services:
     networks:
       - cybersentinel-net
     ports:
+      # TLS 1.3 + HTTP/2 is served on this single port: nginx terminates HTTPS
+      # on container 3000, published to the host as 3023 (unchanged). Reach the
+      # portal at https://<host>:3023; http:// on the same port auto-redirects.
       - "3023:3000"
+    volumes:
+      # Persist the entrypoint's self-signed cert across container recreation so
+      # the cert (and its browser trust exception) stays stable. Drop real certs
+      # here as fullchain.pem / privkey.pem to use a CA-issued cert instead.
+      - dashboard_certs:/etc/nginx/ssl
     depends_on:
       manager:
         condition: service_started
@@ -356,4 +364,6 @@ volumes:
   opensearch_data:
     driver: local
   manager_logs:
+    driver: local
+  dashboard_certs:
     driver: local

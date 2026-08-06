@@ -658,6 +658,61 @@ std::vector<std::string> ExtractFilePathsFromCmdline(const std::string& exeLower
         }
     }
 
+    // --- cloud-storage / secure-copy CLIs --------------------------------
+    //   aws s3 cp <src> s3://...        aws s3 sync <dir> s3://...
+    //   aws s3api put-object --body <file> ...
+    //   rclone copy <src> remote:       s3cmd put <file> s3://...
+    //   azcopy copy <src> https://...   scp/pscp <src> user@host:path
+    // The local source is whatever argv token resolves to an existing local
+    // path. Remote endpoints (s3://, gs://, https://, remote:, user@host:)
+    // never resolve to a local file, so pushIfExists() drops them for free.
+    // Explicit --body / --file / --source flags are honored too.
+    if (exeLower == "aws.exe"   || exeLower == "rclone.exe" ||
+        exeLower == "s3cmd.exe" || exeLower == "azcopy.exe" ||
+        exeLower == "scp.exe"   || exeLower == "pscp.exe"   ||
+        exeLower == "winscp.com") {
+        static const char* valFlags[] = {"--body", "--file", "--source", "--src"};
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            std::string t  = StripQuotes(tokens[i]);
+            if (t.empty()) continue;
+            std::string lc = ToLower(t);
+
+            // --body/--file/--source <next>  and  --flag=<value> forms.
+            bool handledFlag = false;
+            for (const char* vf : valFlags) {
+                if (lc == vf && i + 1 < tokens.size()) {
+                    pushIfExists(StripQuotes(tokens[i + 1]));
+                    handledFlag = true;
+                    break;
+                }
+                std::string pre = std::string(vf) + "=";
+                if (lc.rfind(pre, 0) == 0) {
+                    pushIfExists(t.substr(pre.size()));
+                    handledFlag = true;
+                    break;
+                }
+            }
+            if (handledFlag) continue;
+
+            // Skip option flags and obvious remote endpoints.
+            if (t[0] == '-') continue;
+            if (lc.rfind("s3://", 0) == 0 || lc.rfind("gs://", 0) == 0 ||
+                lc.rfind("http://", 0) == 0 || lc.rfind("https://", 0) == 0 ||
+                lc.rfind("azure://", 0) == 0 || lc.rfind("b2://", 0) == 0) {
+                continue;
+            }
+            // scp/pscp remote "user@host:path" — has both '@' and ':' and is not
+            // a bare "C:\..." drive path. rclone "remote:path" simply fails to
+            // resolve locally, so it needs no special case.
+            if (t.find('@') != std::string::npos &&
+                t.find(':') != std::string::npos) {
+                continue;
+            }
+
+            pushIfExists(t);
+        }
+    }
+
     return results;
 }
 
@@ -712,7 +767,23 @@ bool IsMonitoredExe(const std::string& exeLower) {
         "curl.exe", "wget.exe",
         "powershell.exe", "pwsh.exe", "powershell_ise.exe",
         "python.exe", "python3.exe", "pythonw.exe", "py.exe",
-        "bitsadmin.exe", "certutil.exe"
+        "bitsadmin.exe", "certutil.exe",
+        // Cloud-storage / secure-copy CLIs. Each ships as a single native exe
+        // that names the LOCAL source file on its command line, so the same
+        // suspend -> read source -> classify -> terminate path applies exactly
+        // as it does for curl/wget (see ExtractFilePathsFromCmdline below).
+        //   aws s3 cp|mv|sync <local> s3://...  /  aws s3api put-object --body
+        "aws.exe",
+        //   rclone copy|copyto|sync|move <local> remote:
+        "rclone.exe",
+        //   s3cmd put <local> s3://...
+        "s3cmd.exe",
+        //   azcopy copy <local> https://<acct>.blob.core.windows.net/...
+        "azcopy.exe",
+        //   OpenSSH scp / PuTTY pscp: <local> user@host:path
+        "scp.exe", "pscp.exe",
+        //   WinSCP scripting console (best effort — put path lives in /command)
+        "winscp.com"
     };
     return targets.count(exeLower) > 0;
 }
@@ -1263,12 +1334,20 @@ public:
         if (g_stopRequested.load() || !sender ||
             eventId != UIA_Window_WindowOpenedEventId) return S_OK;
 
-        // Filter: owning process must be a browser
+        // Filter: owning process must be either a browser (alert-only, per spec)
+        // or a managed messaging / thick-client app (Teams/WhatsApp/Telegram/… —
+        // alert or block per server policy). Anything else is ignored.
         int pid = 0;
         sender->get_CurrentProcessId(&pid);
         if (pid <= 0) return S_OK;
         std::string exe = ProcessImageName((DWORD)pid);
-        if (!IsBrowserExe(exe)) return S_OK;
+
+        bool isBrowser = IsBrowserExe(exe);
+        MessagingVerdict mv;
+        if (!isBrowser && g_cfg.messagingPolicy) {
+            try { mv = g_cfg.messagingPolicy(exe, g_cfg.username); } catch (...) {}
+        }
+        if (!isBrowser && !mv.managed) return S_OK;
 
         // Filter: window is a dialog (class #32770) or name indicates file picker
         BSTR className = nullptr;
@@ -1290,7 +1369,8 @@ public:
             nlc.find("select file") != std::string::npos;
         if (!isFileDialog) return S_OK;
 
-        LogDbg("Browser file dialog opened exe=" + exe +
+        LogDbg(std::string(isBrowser ? "Browser" : "Messaging") +
+               " file dialog opened exe=" + exe +
                " class=" + cls + " title=" + winName);
 
         // We don't know the selected file yet (user hasn't clicked Open).
@@ -1301,7 +1381,7 @@ public:
         IUIAutomationElement* senderCopy = sender;
         senderCopy->AddRef();
 
-        std::thread([uia, senderCopy, exe, pid]() {
+        std::thread([uia, senderCopy, exe, pid, isBrowser, mv]() {
             std::unique_ptr<IUIAutomationElement,
                             void(*)(IUIAutomationElement*)>
                 elGuard(senderCopy, [](IUIAutomationElement* p){ if (p) p->Release(); });
@@ -1342,7 +1422,12 @@ public:
             }
             if (resolved.empty()) resolved = captured;
 
-            // Read + classify (BEST EFFORT - we don't block browsers)
+            const std::string chan    = isBrowser ? "BROWSER" : "MESSAGING";
+            const std::string subtype = isBrowser ? "browser_file_selection"
+                                                  : "messaging_file_selection";
+
+            // Read + classify. Browsers are alert-only per spec; messaging apps
+            // alert by default and block only when policy opts in.
             std::string content;
             size_t      sz = 0;
             try {
@@ -1351,35 +1436,60 @@ public:
             } catch (...) {}
 
             if (content.empty()) {
-                LogWarn("CONTENT_EXTRACTION_FAILED browser path=" + resolved);
-                // Still emit a low-severity ALERT for visibility
-                EventFields f;
-                f.eventSubtype = "browser_file_selection";
-                f.channel = "BROWSER";
-                f.processName = exe;
-                f.pid = (DWORD)pid;
-                f.fileName = fs::path(resolved).filename().string();
-                f.filePath = resolved;
-                f.fileSize = sz;
-                f.action = "ALERT";
-                f.severity = "low";
-                f.reason = "Browser file selection detected (content not readable)";
-                EmitEvent(f);
+                LogWarn("CONTENT_EXTRACTION_FAILED " + chan + " path=" + resolved);
+                // Browser: emit a low-severity visibility ALERT even when the file
+                // can't be read. Messaging: stay silent — a messaging window also
+                // raises #32770 for Save/download dialogs where no upload file
+                // exists yet, so a not-readable path there is expected, not a leak.
+                if (isBrowser) {
+                    EventFields f;
+                    f.eventSubtype = subtype;
+                    f.channel = chan;
+                    f.processName = exe;
+                    f.pid = (DWORD)pid;
+                    f.fileName = fs::path(resolved).filename().string();
+                    f.filePath = resolved;
+                    f.fileSize = sz;
+                    f.action = "ALERT";
+                    f.severity = "low";
+                    f.reason = "Browser file selection detected (content not readable)";
+                    EmitEvent(f);
+                }
                 return;
+            }
+
+            // Messaging: honour file-type exceptions (e.g. exempt .png thumbnails)
+            // before we spend effort classifying.
+            if (!isBrowser && !mv.exemptExtensions.empty()) {
+                std::string ext = ToLower(fs::path(resolved).extension().string());
+                if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+                if (!ext.empty() &&
+                    std::find(mv.exemptExtensions.begin(), mv.exemptExtensions.end(),
+                              ext) != mv.exemptExtensions.end()) {
+                    LogDbg("Messaging attachment exempt by file type ext=" + ext +
+                           " path=" + resolved);
+                    return;
+                }
             }
 
             ClassifyResult cls;
             try { cls = g_cfg.classify(content, "network_exfil"); } catch(...) {}
 
-            LogInfo("CLASSIFICATION_RESULT browser pid=" + std::to_string(pid) +
+            LogInfo("CLASSIFICATION_RESULT " + chan + " pid=" + std::to_string(pid) +
                     " category=" + (cls.category.empty() ? "none" : cls.category));
 
             std::string catLower = ToLower(cls.category);
             bool sensitive = (catLower == "confidential" || catLower == "restricted");
 
+            if (!sensitive) {
+                if (!cls.category.empty())
+                    LogDbg(chan + " file selection non-sensitive; no event emitted");
+                return;
+            }
+
             EventFields f;
-            f.eventSubtype = "browser_file_selection";
-            f.channel = "BROWSER";
+            f.eventSubtype = subtype;
+            f.channel = chan;
             f.processName = exe;
             f.pid = (DWORD)pid;
             f.fileName = fs::path(resolved).filename().string();
@@ -1389,17 +1499,32 @@ public:
             f.classificationScore = cls.score;
             f.matchedRule = cls.matchedRule;
             f.labels = cls.labels;
+            f.severity = (catLower == "restricted") ? "critical" : "high";
 
-            if (sensitive) {
-                f.action   = "ALERT";            // Per spec: never block browsers
-                f.severity = (catLower == "restricted") ? "critical" : "high";
-                f.reason   = "Sensitive file selected for upload in " + exe +
-                             " (" + cls.category + "). Alert only - not blocked.";
-                LogWarn("POLICY_DECISION browser decision=ALERT category=" +
-                        cls.category);
+            if (isBrowser) {
+                f.action = "ALERT";              // Per spec: never block browsers
+                f.reason = "Sensitive file selected for upload in " + exe +
+                           " (" + cls.category + "). Alert only - not blocked.";
+                LogWarn("POLICY_DECISION browser decision=ALERT category=" + cls.category);
                 EmitEvent(f);
-            } else if (!cls.category.empty()) {
-                LogDbg("Browser file selection non-sensitive; no event emitted");
+            } else if (mv.block) {
+                // Enforce: terminate the messaging app to stop the attachment
+                // reaching the (TLS-encrypted) upload. Disruptive by nature, so it
+                // is opt-in — the default action is ALERT below.
+                bool killed = TerminatePid((DWORD)pid);
+                f.action = "BLOCK";
+                f.reason = "Blocked sensitive attachment in " + exe + " (" +
+                           cls.category + ")" + (killed ? "" : " [terminate failed]");
+                LogWarn("MESSAGING_BLOCKED pid=" + std::to_string(pid) + " exe=" + exe +
+                        " category=" + cls.category);
+                LogInfo("POLICY_DECISION messaging decision=BLOCK category=" + cls.category);
+                EmitEvent(f);
+            } else {
+                f.action = "ALERT";              // audit-first default
+                f.reason = "Sensitive attachment detected in " + exe + " (" +
+                           cls.category + "). Alert only - not blocked.";
+                LogWarn("POLICY_DECISION messaging decision=ALERT category=" + cls.category);
+                EmitEvent(f);
             }
         }).detach();
 

@@ -462,18 +462,20 @@ DASH_PORT=$(grep -E '^DASHBOARD_HOST_PORT=' "${INSTALL_DIR}/${ENV_FILE}" 2>/dev/
 DASH_PORT="${DASH_PORT:-3023}"
 
 c_blue "Endpoints:"
-echo "  Dashboard      : http://${HOST_IP}:${DASH_PORT}/"
-echo "  Manager API    : http://${HOST_IP}:55000"
-echo "  API Docs       : http://${HOST_IP}:55000/api/v1/docs"
-echo "  Health probe   : http://${HOST_IP}:55000/health"
+echo "  Dashboard   : https://${HOST_IP}:${DASH_PORT}/  (TLS 1.3 + HTTP/2)"
+echo "  Manager API : http://${HOST_IP}:55000"
+echo "  API Docs    : http://${HOST_IP}:55000/api/v1/docs"
+echo "  Health probe: http://${HOST_IP}:55000/health"
 echo
-c_yellow "  NOTE: TLS termination is NOT enabled by default. The dashboard"
-c_yellow "        nginx serves plain HTTP on container port 3000 (published as"
-c_yellow "        ${DASH_PORT} on this host). For HTTPS, front the"
-c_yellow "        deployment with Caddy / Traefik / nginx-proxy + Let's"
-c_yellow "        Encrypt, or mount a custom nginx-ssl.conf into the dashboard"
-c_yellow "        container. Self-signed certs are generated in ${INSTALL_DIR}/certs/"
-c_yellow "        for that purpose."
+c_yellow "  NOTE: The dashboard serves HTTPS (TLS 1.3 + HTTP/2) directly on"
+c_yellow "        port ${DASH_PORT} — the same port as before, now TLS. It uses the"
+c_yellow "        self-signed certs in ${INSTALL_DIR}/certs/, so browsers will warn"
+c_yellow "        until you replace them with a CA-issued cert (drop your own"
+c_yellow "        fullchain.pem / privkey.pem there and recreate the dashboard),"
+c_yellow "        or front the deployment with Caddy / Traefik + Let's Encrypt."
+c_yellow "        Old http://${HOST_IP}:${DASH_PORT} links auto-redirect to HTTPS."
+c_yellow "        Endpoint agents are unaffected — they talk directly to the"
+c_yellow "        manager on :55000."
 echo
 c_blue "First-login credentials:"
 echo "  Username : admin"
@@ -507,5 +509,5 @@ echo "  crontab -e   # edit/disable the auto-update schedule (or reinstall with 
 fi
 echo
 c_blue "Next: install agents on endpoints (run on Windows boxes):"
-echo "  powershell -ExecutionPolicy Bypass -Command \"irm ${RAW_BASE}/install-agent.ps1 | iex\""
+echo "  powershell -ExecutionPolicy Bypass -Command \"irm ${RAW_BASE}/manage-windows-agent.ps1 | iex\""
 echo

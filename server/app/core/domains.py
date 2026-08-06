@@ -40,6 +40,10 @@ POLICY_TYPE_DOMAIN = {
     # wget, netcat, DNS tunnelling, cloud CLIs, …). Enforced agent-side via the
     # real-time evaluate endpoint, exactly like USB file transfer.
     "network_exfiltration_prevention": PolicyDomain.THREAT,
+    # Messaging / thick-client attachment control — alert/block a managed app
+    # (Teams/WhatsApp/Telegram/…) attaching sensitive files. Enforced agent-side
+    # by the UIA file-dialog detector, inspect-before-encryption.
+    "messaging_app_control": PolicyDomain.THREAT,
     "screen_capture": PolicyDomain.THREAT,
     "screen_capture_monitoring": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,

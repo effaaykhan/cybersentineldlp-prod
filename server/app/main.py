@@ -175,6 +175,23 @@ async def _auto_init_schema_and_admin():
                 """
             ))
 
+        # ip_allowlist_config (global master switch for the IP allowlist).
+        # Singleton row (id=1); default is_enabled=true so whitelisting is ON by
+        # default and existing installs keep enforcing after this is introduced.
+        # Same idempotent-create rationale as taxii_share_config above.
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS ip_allowlist_config (
+                    id          INTEGER PRIMARY KEY DEFAULT 1,
+                    is_enabled  BOOLEAN NOT NULL DEFAULT true,
+                    updated_by  UUID,
+                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    CONSTRAINT ck_ip_allowlist_config_singleton CHECK (id = 1)
+                )
+                """
+            ))
+
         # sanctioned_usb_devices (USB device-control allowlist, matched on serial).
         # Same idempotent-create rationale as taxii_share_config above: existing
         # installs skip create_all, so create it on every boot.

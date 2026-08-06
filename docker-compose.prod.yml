@@ -254,19 +254,20 @@ services:
   dashboard:
     image: ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest
     container_name: cybersentineldlp-dashboard
-    # nginx inside the container runs as the unprivileged `nginx` user
-    # and listens on 3000 (non-privileged port). The host port is
-    # configurable via DASHBOARD_HOST_PORT in .env — default 3023.
-    # TLS termination, if enabled, should be done by an external
-    # reverse proxy (Traefik, Let's Encrypt cert-manager, Caddy) or by
-    # adding a mounted nginx-ssl.conf.
+    # nginx inside the container runs as the unprivileged `nginx` user and
+    # terminates TLS 1.3 + HTTP/2 directly on port 3000 (non-privileged, so no
+    # 443 bind needed). TLS is served on this single port using the certs
+    # mounted below — no separate HTTPS port. The host port is configurable:
+    #   DASHBOARD_HOST_PORT  (default 3023)  →  https://<host>:3023
+    # Put DASHBOARD_HOST_PORT behind 443 (or front it with Traefik/Caddy for
+    # automatic Let's Encrypt) as you prefer.
     ports:
       - "${DASHBOARD_HOST_PORT:-3023}:3000"
     volumes:
-      # Mount TLS certificates as read-only so a future nginx-ssl.conf
-      # can pick them up. The bind mount must resolve — install.sh
-      # generates a self-signed pair if the operator hasn't provided
-      # real ones.
+      # TLS certificates the nginx HTTPS listener serves, mounted read-only.
+      # The bind mount must resolve — install.sh generates a self-signed pair
+      # if the operator hasn't provided real ones. Replace with a CA-issued
+      # cert for production.
       - ${TLS_CERT_PATH:-./certs}/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
       - ${TLS_CERT_PATH:-./certs}/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
     depends_on:

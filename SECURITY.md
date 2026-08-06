@@ -160,8 +160,8 @@ used when a lockfile is present.
 propagates. Added `--no-install-recommends` + `apt-get clean` to both
 apt stages.
 
-### H-9 — `install-agent.ps1` downloads agent exe with no integrity check
-**File:** `install-agent.ps1`
+### H-9 — Windows installer downloaded agent exe with no integrity check
+**File:** `manage-windows-agent.ps1` (was `install-agent.ps1`, since consolidated)
 **Fix:** The installer now fetches a sidecar `.sha256` file from the
 repo next to the binary and verifies `Get-FileHash -Algorithm SHA256`
 against it. Mismatch deletes the binary and exits with code 2. Also

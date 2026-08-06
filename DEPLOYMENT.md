@@ -216,13 +216,15 @@ generated locally.
 
 ### One-liner install
 
-Run this **as Administrator** on each Windows endpoint:
+Run this **as Administrator** on each Windows endpoint. It launches the interactive
+manager (`manage-windows-agent.ps1`) — pick **Install** from its menu:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
 ```
 
-What it does:
+The same script also handles **Update** and **Uninstall** from its menu. What the
+**Install** option does:
 
 1. **Step 1 — Configuration.** Prompts for the server hostname/IP
    (`localhost`, an IPv4 literal, or an RFC1123 FQDN like

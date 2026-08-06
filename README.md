@@ -224,38 +224,46 @@ confirmation first (add `--yes` to skip the prompt in automation).
 
 **Requirements:** Windows 10/11 64-bit, PowerShell as Administrator
 
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
-```
-
-This downloads the agent binary, creates configuration, registers a scheduled task (runs as current user for clipboard/screen access), and starts monitoring.
-
-**Upgrading / fleet migration:** the installer first **detects and completely
-removes any previous agent** — old or new — before installing. It stops the
-running process, unregisters the scheduled task (matched by the path it launches,
-so it finds the old one regardless of its name), removes any legacy service, and
-deletes the old `C:\Program Files\CyberSentinel` layout. It **preserves the
-endpoint's `agent_id`** across the change, so a migrated machine keeps its
-dashboard history instead of re-registering as a new agent. Just run the one-liner
-above on every endpoint — no manual cleanup of the old agent is needed.
-
-#### To update the agent (binary only):
-Use this to roll out a **new agent build** without a full reinstall. It fetches only
-the latest CI-compiled `cybersentineldlp_agent.exe`, verifies its SHA-256, stops the
-agent, swaps the binary in place, and restarts it — configuration, logs and the
-scheduled task are left untouched. (The agent `.exe` is rebuilt automatically by CI
-on every change, so this always pulls the newest binary.)
+A single interactive manager handles **install, update, and uninstall**. Run it
+elevated and pick from the menu:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/update-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
 ```
 
-Run it in an **elevated** PowerShell. It is safe to re-run (skips if already up to
-date), verifies the hash before replacing (a corrupt download never clobbers a
-working binary), and keeps the previous binary as `cybersentineldlp_agent.exe.bak`.
+The script self-elevates to Administrator, detects any existing agent and its
+status (running / stopped / error / none), then offers:
 
-To confirm the update took, compare the installed binary's hash against the
-published one — `MATCH` means you're on the latest build:
+- **Install** — fresh install on a clean endpoint (if an agent is already present
+  it says so instead of installing over it). Downloads the agent binary, verifies
+  its SHA-256, writes configuration, registers a scheduled task (runs as current
+  user for clipboard/screen access), installs the OCR deps, and starts monitoring.
+  On an upgrade/migration it first **completely removes any previous agent** — old
+  or new layout — while **preserving the endpoint's `agent_id`**, so a migrated
+  machine keeps its dashboard history instead of re-registering.
+- **Update** — swaps in the latest CI-compiled `cybersentineldlp_agent.exe` without
+  a full reinstall. Verifies the SHA-256, stops the agent, replaces the binary
+  (keeping the previous one as `cybersentineldlp_agent.exe.bak`), and restarts —
+  configuration, logs and the scheduled task are left untouched. Safe to re-run
+  (skips if already up to date). If no agent is installed it tells you to install
+  first.
+- **Uninstall** — stops the agent, removes its task/service, and deletes the install
+  and data folders (both current `CyberSentinelDLP` and legacy `CyberSentinel`
+  layouts). Asks once to confirm. The agent then shows as **disconnected** on the
+  dashboard; delete it there to drop it from the fleet list.
+- **Exit** — does nothing.
+
+#### Manual start / stop
+```powershell
+Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+
+Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
+Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
+```
+
+#### Verify you're on the latest build
+Compare the installed binary's hash against the published one — `MATCH` means
+you're current:
 
 ```powershell
 $exe = 'C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe'
@@ -263,31 +271,6 @@ $installed = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpper()
 $published = (Invoke-WebRequest 'https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256' -UseBasicParsing).Content.Trim().Split()[0].ToUpper()
 if ($installed -eq $published) { 'MATCH - latest build' } else { 'MISMATCH - not updated' }
 ```
-
-> **install vs update:** `install-agent.ps1` does a full (re)install — removes any
-> prior agent, writes config, registers the scheduled task, installs OCR deps.
-> `update-agent.ps1` only swaps the compiled binary and leaves everything else in
-> place. Use install for first setup / migration, update for routine build refreshes.
-
-#### To start the agent:
-```powershell
-Start-ScheduledTask -TaskName "CyberSentinel DLP Agent"
-```
-
-#### To Stop the agent:
-```powershell
-Stop-ScheduledTask -TaskName "CyberSentinel DLP Agent"
-Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
-```
-
-#### To uninstall the agent (removes it completely):
-```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall-agent.ps1 | iex"
-```
-Stops the agent, removes its task/service, and deletes the install and data
-folders — both the current `CyberSentinelDLP` and legacy `CyberSentinel` layouts.
-The agent then shows as **disconnected** on the dashboard; delete it there to
-drop it from the fleet list.
 
 ### Linux Agent
 

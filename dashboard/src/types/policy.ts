@@ -14,6 +14,7 @@ export type PolicyType =
   | 'application_control'
   | 'wireless_transfer_control'
   | 'network_share_control'
+  | 'messaging_app_control'
   | 'google_drive_local_monitoring'
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
@@ -103,6 +104,19 @@ export interface NetworkShareControlConfig {
     users?: string[]        // users / groups exempt
     paths?: string[]        // source path prefixes exempt
     file_types?: string[]   // extensions exempt (no leading dot)
+  }
+}
+
+export interface MessagingAppControlConfig {
+  // alert = log + raise an event only (never terminates the app); block = kill the
+  // messaging app when it attaches a Confidential/Restricted file. Defaults to alert.
+  action?: 'alert' | 'block'
+  // Managed messaging / thick-client exe names (lowercased). Empty = the built-in
+  // set (Teams, WhatsApp, Telegram, Slack, Discord, Signal).
+  apps?: string[]
+  exceptions?: {
+    users?: string[]        // users / groups exempt
+    file_types?: string[]   // extensions never inspected (no leading dot)
   }
 }
 
@@ -242,6 +256,7 @@ export type PolicyConfig =
   | ApplicationControlConfig
   | WirelessTransferControlConfig
   | NetworkShareControlConfig
+  | MessagingAppControlConfig
   | PrinterControlConfig
   | PrintContentConfig
   | USBTransferConfig

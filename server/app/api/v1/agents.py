@@ -1631,6 +1631,80 @@ async def network_share_policy(
     )
 
 
+# ── Messaging / thick-client attachment control ───────────────────────────
+# Alert or block when a managed messaging/thick-client app (Teams, WhatsApp,
+# Telegram, Slack, Discord, Signal, …) attaches a sensitive file for upload. The
+# agent's UIA file-dialog detector attributes the acting app locally and enforces
+# the verdict before the file enters the app's (TLS-encrypted) upload — the same
+# inspect-before-encryption model as the CLI exfil path, so pinned thick clients
+# are covered without breaking their TLS. Action defaults to "alert" (audit-first)
+# so enabling a policy never terminates an app until an admin opts into "block".
+# NOTE: only file-picker attachments are seen; drag-and-drop needs a filesystem
+# minifilter and is out of scope for the user-mode agent.
+class MessagingAppPolicyResponse(BaseModel):
+    enforced: bool                        # an active messaging_app_control policy exists
+    action: str                           # "alert" (log/event only) | "block" (terminate app)
+    apps: List[str]                       # managed messaging exe names (lowercased)
+    exception_users: List[str]            # users/groups exempt (lowercased)
+    exempt_file_types: List[str]          # extensions never inspected (no leading dot)
+    generated_at: datetime
+
+
+# Built-in managed set used when a policy is active but names no apps of its own,
+# so the feature works out of the box. Mirrors the agent's fallback list.
+_DEFAULT_MESSAGING_APPS = [
+    "teams.exe", "ms-teams.exe", "msteams.exe", "whatsapp.exe",
+    "telegram.exe", "slack.exe", "discord.exe", "signal.exe",
+]
+
+
+@router.get("/{agent_id}/messaging-app-policy", response_model=MessagingAppPolicyResponse)
+async def messaging_app_policy(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    The messaging / thick-client attachment-control policy the endpoint enforces
+    locally. For a file selected in a managed app's file picker, the agent reads +
+    classifies it and, if Confidential/Restricted, alerts (default) or terminates
+    the app (action == "block"), unless the user or file type is excepted.
+    Requires X-Agent-Key (backward-compatible: no key -> allowed).
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "messaging_app_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    if not policy:
+        return MessagingAppPolicyResponse(
+            enforced=False, action="alert", apps=[],
+            exception_users=[], exempt_file_types=[],
+            generated_at=datetime.now(timezone.utc),
+        )
+
+    cfg = policy.config or {}
+    # Default to alert so enabling a policy never terminates an app until opted in.
+    action = (cfg.get("action") or "alert").lower()
+    if action not in ("alert", "block"):
+        action = "alert"
+    apps = _lc_list(cfg.get("apps")) or list(_DEFAULT_MESSAGING_APPS)
+    exc = cfg.get("exceptions") or {}
+    return MessagingAppPolicyResponse(
+        enforced=True, action=action, apps=apps,
+        exception_users=_lc_list(exc.get("users")),
+        exempt_file_types=[str(t).strip().lower().lstrip(".") for t in (exc.get("file_types") or []) if str(t).strip()],
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 # ── Wireless / Bluetooth transfer control ─────────────────────────────────
 # Block file transfer over Bluetooth (Object Push / File Transfer profiles) and
 # Wi-Fi Direct / Nearby Sharing, while leaving audio (headphones) + input (HID)

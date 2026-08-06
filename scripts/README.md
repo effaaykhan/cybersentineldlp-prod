@@ -3,10 +3,12 @@
 This directory holds the **Linux agent installer**.
 
 The Windows agent installer used to live here too (`install_windows_agent.ps1`),
-along with several legacy duplicates. They have all been removed in
-favour of the single canonical script at the repo root:
+along with several legacy duplicates (`install-agent.ps1`, `update-agent.ps1`,
+`uninstall-agent.ps1`). They have all been removed in favour of the single
+canonical, interactive manager at the repo root:
 
-> **`install-agent.ps1`** (in the repo root)
+> **`manage-windows-agent.ps1`** (in the repo root) — one menu-driven script that
+> installs, updates, and uninstalls the Windows agent.
 
 For the full deployment walkthrough — server install, agent build, agent
 install, day-2 ops — see **[`DEPLOYMENT.md`](../DEPLOYMENT.md)** at the

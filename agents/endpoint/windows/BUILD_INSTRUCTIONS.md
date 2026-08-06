@@ -127,16 +127,16 @@ The executable should be around 3-4 MB.
    Get-Process -Name "cybersentineldlp_agent"
    ```
 
-### Option 2: re-run the canonical one-liner installer
+### Option 2: re-run the canonical interactive manager
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
 ```
 
-This is the recommended path. The installer cleans the previous
-install in Step 2 and verifies the downloaded binary against its
-SHA-256 sidecar. See [`DEPLOYMENT.md`](../../../DEPLOYMENT.md) for the
-full walkthrough.
+This is the recommended path. Pick **Install** for a full (re)install (it cleans
+the previous install first) or **Update** to hot-swap just the binary; both verify
+the downloaded binary against its SHA-256 sidecar. See
+[`DEPLOYMENT.md`](../../../DEPLOYMENT.md) for the full walkthrough.
 
 ## Testing the New Functionality
 

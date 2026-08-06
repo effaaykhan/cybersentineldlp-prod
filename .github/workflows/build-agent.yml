@@ -2,12 +2,12 @@ name: Build Windows Agent
 
 # Compiles the Windows endpoint agent on a Windows + MSYS2 runner (the same
 # toolchain build.sh expects locally) and commits the built .exe + regenerated
-# .sha256 back to the repo, so install-agent.ps1 keeps serving them unchanged.
+# .sha256 back to the repo, so manage-windows-agent.ps1 keeps serving them unchanged.
 #
 # SAFETY:
 #  * a compile failure or an undersized binary aborts BEFORE any commit, so a
 #    broken build never replaces the working .exe;
-#  * endpoints are NOT auto-updated — you still run install-agent.ps1 to deploy,
+#  * endpoints are NOT auto-updated — you still run manage-windows-agent.ps1 to deploy,
 #    so you validate one box before rolling out (a bad build cannot reach the
 #    fleet on its own);
 #  * the exact binary is also uploaded as a run artifact for testing.

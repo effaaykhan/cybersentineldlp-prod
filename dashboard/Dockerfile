@@ -42,8 +42,17 @@ RUN npm run build
 # Production image with nginx
 FROM nginx:alpine AS runner
 
-# Copy nginx configuration
+# openssl is needed by the entrypoint to generate a self-signed TLS cert when
+# no real one is mounted, so the TLS 1.3 / HTTP/2 listener always comes up.
+RUN apk add --no-cache openssl
+
+# Copy nginx configuration (main conf + shared server-body snippet)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY snippets/dashboard-app.conf /etc/nginx/snippets/dashboard-app.conf
+
+# Container entrypoint: ensures /etc/nginx/ssl holds a cert before nginx starts.
+COPY docker-entrypoint.sh /usr/local/bin/dashboard-entrypoint.sh
+RUN chmod +x /usr/local/bin/dashboard-entrypoint.sh
 
 # Copy built files
 COPY --from=builder /app/dist /usr/share/nginx/html
@@ -51,18 +60,22 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Drop privileges — run nginx as the unprivileged `nginx` user that the
 # official image already ships with. nginx:alpine's default /etc/nginx/
 # nginx.conf has `user  nginx;` so the worker processes already drop
-# privs, but the master runs as root. We rebind ports to 3000/ (unpriv)
-# and run the master as `nginx` too.
+# privs, but the master runs as root. nginx binds the unprivileged port 3000
+# (where it terminates TLS 1.3 + HTTP/2) and runs the master as `nginx` too.
 #
-# The /var/cache/nginx, /var/run, and /var/log/nginx directories must be
-# writable by the nginx user — the base image already chowns them.
-RUN touch /var/run/nginx.pid \
- && chown -R nginx:nginx /var/cache/nginx /var/run/nginx.pid /var/log/nginx /usr/share/nginx/html
+# /etc/nginx/ssl is created and chowned to nginx so the entrypoint's
+# self-signed fallback can write the cert there when none is mounted. The
+# /var/cache/nginx, /var/run, and /var/log/nginx directories must be writable
+# by the nginx user — the base image already chowns them.
+RUN mkdir -p /etc/nginx/ssl \
+ && touch /var/run/nginx.pid \
+ && chown -R nginx:nginx /etc/nginx/ssl /var/cache/nginx /var/run/nginx.pid /var/log/nginx /usr/share/nginx/html
 
 USER nginx
 
-# Expose the unprivileged port nginx.conf listens on.
+# Expose the single unprivileged port nginx listens on: 3000 (HTTPS/TLS 1.3).
 EXPOSE 3000
 
-# Run nginx in the foreground
+# Ensure a TLS cert exists, then run nginx in the foreground.
+ENTRYPOINT ["/usr/local/bin/dashboard-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]

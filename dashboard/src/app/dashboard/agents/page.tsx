@@ -107,7 +107,7 @@ echo "Agent will start automatically and connect to $SERVER_IP"`
   }
 
   const downloadScript = () => {
-    const filename = deployConfig.os === 'windows' ? 'install-agent.ps1' : 'install-agent.sh'
+    const filename = deployConfig.os === 'windows' ? 'manage-windows-agent.ps1' : 'install-agent.sh'
     const blob = new Blob([generatedScript], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

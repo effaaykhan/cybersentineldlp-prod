@@ -2044,6 +2044,20 @@ static ClassificationResult Classify(const std::string& content,
     std::set<std::string> appControlExceptTypes;        // extensions, no leading dot
     std::mutex appControlMutex;
 
+    // ── MESSAGING / THICK-CLIENT APP ATTACHMENT CONTROL ────────────────────
+    // Synced from GET /agents/{id}/messaging-app-policy. The network-exfil
+    // monitor's UIA file-dialog detector consults GetMessagingVerdict() when a
+    // file-open dialog is raised by one of these apps (Teams/WhatsApp/Telegram/…)
+    // and alerts (default) or blocks the app on a sensitive attachment. All app
+    // names / users / extensions stored lowercase. Alert-first: action defaults
+    // to "alert" so enabling a policy never kills an app until an admin opts in.
+    std::atomic<bool> messagingEnforced{false};
+    std::string messagingAction;                        // "alert" | "block"
+    std::set<std::string> messagingApps;                // managed messaging exe names
+    std::set<std::string> messagingExceptUsers;         // users exempt
+    std::vector<std::string> messagingExemptTypes;      // extensions, no leading dot
+    std::mutex messagingMutex;
+
     // ── WIRELESS / BLUETOOTH TRANSFER CONTROL ──────────────────────────────
     // Synced from GET /agents/{id}/wireless-policy. Blocks Bluetooth file transfer
     // (the built-in fsquirt wizard) + Wi-Fi Direct / Nearby Sharing while leaving
@@ -2669,6 +2683,68 @@ if (!shouldBlock) {
          bool listed = appControlApps.count(proc) > 0;
          if (appControlMode == "blocklist") return !listed;   // block listed apps
          return listed;                                       // allowlist: allow only listed
+     }
+
+     // Fetch the managed messaging / thick-client attachment-control policy. Called
+     // each sync; keeps last-known config on any transient error/outage.
+     void FetchMessagingAppPolicy() {
+         try {
+             if (!httpClient) return;
+             auto [status, response] = httpClient->Get(
+                 "/agents/" + config.agentId + "/messaging-app-policy");
+             if (status != 200) return;   // keep last-known on error/outage
+             bool enforced = JsonBoolTrue(response, "enforced");
+             std::string action = ToLower(config.ExtractJsonValue(response, "action"));
+             if (action != "block") action = "alert";   // audit-first default
+             auto lcvec = [](std::vector<std::string> v) {
+                 for (auto& s : v) s = ToLower(s);
+                 return v;
+             };
+             auto apps    = lcvec(ParseJsonStrArray(response, "apps"));
+             auto exUsers = lcvec(ParseJsonStrArray(response, "exception_users"));
+             auto exTypes = lcvec(ParseJsonStrArray(response, "exempt_file_types"));
+             for (auto& t : exTypes) if (!t.empty() && t[0] == '.') t.erase(0, 1);
+
+             // Safety net: an enforced policy that names no apps falls back to the
+             // built-in managed set, so the feature works even with a bare policy.
+             if (enforced && apps.empty()) {
+                 apps = {"teams.exe", "ms-teams.exe", "msteams.exe",
+                         "whatsapp.exe", "telegram.exe", "slack.exe",
+                         "discord.exe", "signal.exe"};
+             }
+             {
+                 std::lock_guard<std::mutex> lock(messagingMutex);
+                 messagingAction      = action;
+                 messagingApps        = std::set<std::string>(apps.begin(), apps.end());
+                 messagingExceptUsers = std::set<std::string>(exUsers.begin(), exUsers.end());
+                 messagingExemptTypes = exTypes;
+             }
+             messagingEnforced.store(enforced);
+             logger.Info("Messaging app control: enforced=" +
+                         std::string(enforced ? "true" : "false") +
+                         " action=" + action + " apps=" + std::to_string(apps.size()));
+         } catch (...) {
+             logger.Error("FetchMessagingAppPolicy failed");
+         }
+     }
+
+     // Local verdict for the messaging-app attachment detector. Given the dialog-
+     // owning process exe (lowercased) and the current user, report whether it's a
+     // managed messaging app, whether to BLOCK (vs alert) on a sensitive attachment,
+     // and the exempt file types. Fail-closed to "not managed" when no policy active.
+     NetworkExfilMonitor::MessagingVerdict GetMessagingVerdict(
+             const std::string& exeLower, const std::string& userName) {
+         NetworkExfilMonitor::MessagingVerdict v;
+         if (!messagingEnforced.load()) return v;   // managed=false => detector ignores it
+         std::lock_guard<std::mutex> lock(messagingMutex);
+         std::string u = ToLower(userName);
+         if (!u.empty() && messagingExceptUsers.count(u)) return v;   // user exempt
+         if (messagingApps.count(exeLower)) {
+             v.managed          = true;
+             v.block            = (messagingAction == "block");
+             v.exemptExtensions = messagingExemptTypes;
+         }
+         return v;
      }
 
      // ── Wireless / Bluetooth transfer control ──────────────────────────────
@@ -4505,6 +4581,16 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  return !IsAppActionAllowed("network", proc, GetUsername(), path, ext);
              };
 
+             // Managed messaging / thick-client attachment control: the UIA file-
+             // dialog detector asks whether the dialog-owning app (Teams/WhatsApp/
+             // Telegram/…) is managed and, if so, whether to block or only alert on a
+             // sensitive attachment. Driven from GET /messaging-app-policy each sync;
+             // returns managed=false when no policy is active, so this is a no-op then.
+             nemCfg.messagingPolicy = [this](const std::string& exeLower,
+                                             const std::string& user) {
+                 return GetMessagingVerdict(exeLower, user);
+             };
+
              if (NetworkExfilMonitor::Start(nemCfg)) {
                  logger.Info("Network Exfiltration Monitor started");
              } else {
@@ -4648,6 +4734,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              FetchPrinterPolicy();
              // Refresh the managed-application file-control policy too.
              FetchApplicationControl();
+             // Refresh the messaging / thick-client attachment-control policy too.
+             FetchMessagingAppPolicy();
              // Refresh the wireless / Bluetooth transfer-control policy too.
              FetchWirelessPolicy();
              // Refresh the network file-share transfer-control policy too.

@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer, AppWindow, Bluetooth, FolderInput } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer, AppWindow, Bluetooth, FolderInput, MessageSquare } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -73,6 +73,12 @@ const policyTypes: Array<{
     label: 'Network Share Control',
     description: 'Allow or block copying files to network file shares (mapped drives) — block all or only sensitive, with exceptions',
     icon: FolderInput
+  },
+  {
+    type: 'messaging_app_control',
+    label: 'Messaging App Control',
+    description: 'Alert or block sensitive file attachments in Teams, WhatsApp, Telegram, Slack, Discord and Signal — inspected before the app encrypts them',
+    icon: MessageSquare
   },
   {
     type: 'classification_aware_policy',

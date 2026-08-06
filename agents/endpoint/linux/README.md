@@ -13,7 +13,7 @@ There are two entry points, and which one you want depends on who is running it:
 
 ## Client install (the one-liner)
 
-This is the Linux counterpart of `install-agent.ps1`. It is the **only** file a
+This is the Linux counterpart of the Windows `manage-windows-agent.ps1`. It is the **only** file a
 client machine needs; the executable, its checksum and the systemd unit are all
 fetched from the repo.
 

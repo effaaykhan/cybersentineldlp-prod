@@ -41,7 +41,7 @@ _LOOPBACK = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128"
 _AGENT_HEARTBEAT = re.compile(r"^/api/v1/agents/[^/]+/heartbeat/?$")
 _AGENT_SYNC = re.compile(r"^/api/v1/agents/[^/]+/(policies/sync|policy/evaluate|device/authorize)/?$")
 _AGENT_UNREG = re.compile(r"^/api/v1/agents/[^/]+/unregister/?$")
-_AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/(usb-allowlist|printer-policy|application-control|wireless-policy|network-share-policy)/?$")
+_AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/(usb-allowlist|printer-policy|application-control|wireless-policy|network-share-policy|messaging-app-policy)/?$")
 
 
 def bump_ip_allowlist_cache() -> None:
@@ -102,6 +102,30 @@ async def _load_nets() -> List[ipaddress._BaseNetwork]:
         import app.core.database as db
         from sqlalchemy import text
         if db.postgres_session_factory is not None:
+            # Global master switch — its own session so a missing/unreadable
+            # config table can't poison the entries query below. A missing row is
+            # treated as ON (default), so enforcement is never silently disabled
+            # by the config's absence; only an explicit is_enabled=false turns
+            # whitelisting off.
+            enabled = True
+            try:
+                async with db.postgres_session_factory() as cfg_session:
+                    cfg = await cfg_session.execute(
+                        text("SELECT is_enabled FROM ip_allowlist_config WHERE id = 1")
+                    )
+                    row = cfg.first()
+                    if row is not None:
+                        enabled = bool(row[0])
+            except Exception:
+                enabled = True
+            if not enabled:
+                # Whitelisting turned off in Settings — cache empty so the
+                # dispatch short-circuit (``if not nets``) fails open.
+                _cache_nets = []
+                _cache_time = now
+                _cache_gen = _current_gen
+                return []
+
             async with db.postgres_session_factory() as session:
                 rows = await session.execute(
                     text("SELECT cidr FROM ip_allowlist WHERE is_enabled = true")

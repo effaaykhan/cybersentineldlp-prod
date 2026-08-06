@@ -81,11 +81,12 @@ New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinelDLP\cache" -Forc
 
 ## Step 6: Register as a Scheduled Task (canonical method)
 
-> **Recommended:** use the one-liner installer which performs all of steps 3–7
-> automatically, including SHA-256 verification of the downloaded binary:
+> **Recommended:** use the interactive manager and pick **Install** — it performs
+> all of steps 3–7 automatically, including SHA-256 verification of the downloaded
+> binary:
 >
 > ```powershell
-> powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install-agent.ps1 | iex"
+> powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
 > ```
 
 If you are registering manually, create a scheduled task named

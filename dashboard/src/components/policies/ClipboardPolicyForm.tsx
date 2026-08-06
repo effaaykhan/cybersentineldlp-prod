@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { ClipboardConfig } from '@/types/policy'
 import { predefinedPatterns, validateRegex, testRegex } from '@/utils/policyUtils'
 import { Check, X, Plus, Trash2 } from 'lucide-react'
@@ -28,6 +28,29 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
   const [customDescription, setCustomDescription] = useState('')
   const [testText, setTestText] = useState('')
   const [testResult, setTestResult] = useState<boolean | null>(null)
+
+  // Select-all state for the predefined Detection Patterns.
+  const allPatternIds = predefinedPatterns.map((p) => p.id)
+  const selectedCount = allPatternIds.filter((id) => config.patterns.predefined.includes(id)).length
+  const allSelected = allPatternIds.length > 0 && selectedCount === allPatternIds.length
+  const someSelected = selectedCount > 0 && !allSelected
+
+  // Native checkboxes can't express the "indeterminate" (partial) look via a
+  // prop, so drive it imperatively whenever the partial state changes.
+  const selectAllRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected
+  }, [someSelected])
+
+  const handleToggleAll = () => {
+    onChange({
+      ...config,
+      patterns: {
+        ...config.patterns,
+        predefined: allSelected ? [] : allPatternIds,
+      },
+    })
+  }
 
   const handlePredefinedToggle = (patternId: string) => {
     const newPredefined = config.patterns.predefined.includes(patternId)
@@ -100,9 +123,24 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
     <div className="space-y-6">
       {/* Predefined Patterns */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
-          Detection Patterns
-        </label>
+        <div className="flex items-center justify-between mb-3">
+          <label className="block text-sm font-medium text-gray-200">
+            Detection Patterns
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-medium text-gray-300 hover:text-white transition-colors">
+            <input
+              ref={selectAllRef}
+              type="checkbox"
+              checked={allSelected}
+              onChange={handleToggleAll}
+              className="w-4 h-4 rounded border-2 border-gray-600 bg-gray-900 text-indigo-600 focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
+            />
+            <span>
+              {allSelected ? 'Deselect all' : 'Select all'}
+              <span className="ml-1 text-gray-500">({selectedCount}/{allPatternIds.length})</span>
+            </span>
+          </label>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {predefinedPatterns.map((pattern) => {
             const isSelected = config.patterns.predefined.includes(pattern.id)

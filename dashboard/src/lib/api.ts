@@ -628,11 +628,17 @@ export type IPAllowlistEntry = {
 export type IPAllowlistResponse = {
   entries: IPAllowlistEntry[]
   your_ip: string
-  enforced: boolean
+  enabled: boolean   // master switch: is whitelisting turned on
+  enforced: boolean  // actually blocking right now (switch on AND ≥1 range)
 }
 
 export const getIpAllowlist = async (): Promise<IPAllowlistResponse> => {
   const { data } = await apiClient.get('/security/ip-allowlist')
+  return data
+}
+
+export const toggleIpAllowlist = async (enabled: boolean): Promise<{ enabled: boolean }> => {
+  const { data } = await apiClient.put('/security/ip-allowlist/toggle', { enabled })
   return data
 }
 

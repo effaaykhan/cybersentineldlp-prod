@@ -1,20 +1,14 @@
 <#
-  manage-windows-agent.ps1 — CyberSentinel DLP WINDOWS agent MANAGER (universal, one file).
+  manage-windows-agent.ps1 — CyberSentinel DLP WINDOWS agent MANAGER.
 
-  Self-elevates to Administrator, detects any existing agent (current OR legacy
-  layout) and reports its live status (running / stopped / broken / not installed,
-  plus recent log errors and whether a newer build is available), then offers:
+  A single, self-contained console app. Self-elevates to Administrator, detects any
+  existing agent (current OR legacy layout), reports its live status, and offers:
 
       [1] Install    [2] Update    [3] Uninstall    [4] Exit
 
-  Behaviour:
-    - Install    : if an agent already exists, says so and does nothing; on a fresh
-                   device it runs the full base installer.
-    - Update     : swaps in the latest binary; if nothing is installed it tells you
-                   to Install instead.
-    - Uninstall  : asks ONCE to confirm, then fully stops and removes the agent,
-                   its task/service and its files (both current and legacy layouts).
-    - Exit       : does nothing.
+  Everything (install, update, uninstall) is implemented INLINE in this one file —
+  it does not download or depend on any other script. The only things it fetches
+  from GitHub are the agent binary and its SHA-256 sidecar (the actual artifacts).
 
   Run either form (both self-elevate to Administrator):
     powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
@@ -23,41 +17,69 @@
 
 & {
   $ErrorActionPreference = 'Continue'
+  $ProgressPreference    = 'SilentlyContinue'   # hide the noisy Invoke-WebRequest bar
 
-  # ---- Shared constants (MUST match install/update/uninstall scripts) ----
+  # ============================================================
+  #  Constants
+  # ============================================================
   $GITHUB_REPO = 'effaaykhan/cybersentineldlp-prod'
   $RAW_BASE    = "https://raw.githubusercontent.com/$GITHUB_REPO/main"
-  $SELF_URL    = "$RAW_BASE/manage-windows-agent.ps1"
-  $INSTALL_URL = "$RAW_BASE/install-agent.ps1"
-  $UPDATE_URL  = "$RAW_BASE/update-agent.ps1"
-  $SUM_URL     = "$RAW_BASE/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256"
+  $SELF_URL    = "$RAW_BASE/manage-windows-agent.ps1"                                   # for self-elevation re-fetch
+  $EXE_URL     = "$RAW_BASE/agents/endpoint/windows/cybersentineldlp_agent.exe"         # agent binary artifact
+  $SUM_URL     = "$EXE_URL.sha256"                                                      # its checksum sidecar
 
   $INSTALL_DIR = 'C:\Program Files\CyberSentinelDLP'
   $DATA_DIR    = 'C:\ProgramData\CyberSentinelDLP'
   $EXE_NAME    = 'cybersentineldlp_agent.exe'
   $CONFIG_NAME = 'agent_config.json'
   $LOG_NAME    = 'cybersentineldlp_agent.log'
+  $VBS_NAME    = 'launch_agent.vbs'
   $TASK_NAME   = 'CyberSentinel DLP Agent'
   $PROC_NAME   = 'cybersentineldlp_agent'
 
-  # Legacy (pre-rename) layout — detected so we can flag/clean it too.
+  # Legacy (pre-rename) layout — detected so we can flag / clean it too.
   $LEGACY_DIR   = 'C:\Program Files\CyberSentinel'
   $LEGACY_DATA  = 'C:\ProgramData\CyberSentinel'
   $LEGACY_PROC  = 'cybersentinel_agent'
   $TASK_NAMES   = @($TASK_NAME, 'CyberSentinelAgent', 'CyberSentinel Agent')
   $SVC_NAMES    = @('CyberSentinelAgent', 'CyberSentinelDLPAgent')
 
-  function Info($m){ Write-Host "[*] $m" -ForegroundColor Cyan }
-  function Ok($m)  { Write-Host "[+] $m" -ForegroundColor Green }
-  function Warn($m){ Write-Host "[!] $m" -ForegroundColor Yellow }
-  function Err($m) { Write-Host "[x] $m" -ForegroundColor Red }
+  $BOX_W = 64
 
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-  # ================= Look & feel: banner + spinner =================
+  # ============================================================
+  #  UI primitives  (ASCII-only, so every console code page renders it)
+  # ============================================================
+  function Hr        { param([string]$ch='-',[string]$c='DarkCyan') Write-Host ('  ' + ($ch * $BOX_W)) -ForegroundColor $c }
+  function Blank     { Write-Host '' }
+  function Info      { param([string]$m) Write-Host "   [..] $m" -ForegroundColor Gray }
+  function Ok        { param([string]$m) Write-Host "   [OK] $m" -ForegroundColor Green }
+  function Warn      { param([string]$m) Write-Host "   [!!] $m" -ForegroundColor Yellow }
+  function Err       { param([string]$m) Write-Host "   [xx] $m" -ForegroundColor Red }
+  function Hint      { param([string]$m) Write-Host "   $m" -ForegroundColor DarkGray }
 
-  # Animated (or instant) product banner. Pure-ASCII slant wordmark so it renders
-  # correctly on every Windows console code page (no unicode box characters).
+  function Header {
+    param([string]$Title,[string]$Color='Cyan')
+    Hr '=' $Color
+    Write-Host ('   ' + $Title) -ForegroundColor $Color
+    Hr '=' $Color
+  }
+
+  function Step {
+    param([int]$N,[int]$Total,[string]$Title)
+    Blank
+    Write-Host ("   [ Step {0}/{1} ]  {2}" -f $N,$Total,$Title) -ForegroundColor Cyan
+    Hr '-' 'DarkCyan'
+  }
+
+  function Field {
+    param([string]$Label,[string]$Value,[string]$Color='Gray')
+    Write-Host ('   {0} : ' -f $Label.PadRight(8)) -ForegroundColor DarkGray -NoNewline
+    Write-Host $Value -ForegroundColor $Color
+  }
+
+  # Animated (or instant) product banner. Pure-ASCII slant wordmark.
   function Show-Banner {
     param([switch]$Animate)
     $art = @(
@@ -68,8 +90,8 @@
       ' \____/\__, /_.___/\___/_/   /____/\___/_/ /_/\__/_/_/ /_/\___/_/',
       '      /____/'
     )
-    # cyan gradient for a bit of depth
     $colors = @('DarkCyan','Cyan','Cyan','Cyan','DarkCyan','DarkCyan')
+    Blank
     for ($i = 0; $i -lt $art.Count; $i++) {
       Write-Host $art[$i] -ForegroundColor $colors[$i]
       if ($Animate) { Start-Sleep -Milliseconds 55 }
@@ -77,14 +99,13 @@
     Write-Host '        D A T A   L O S S   P R E V E N T I O N   ---   A G E N T' -ForegroundColor White
     if ($Animate) { Start-Sleep -Milliseconds 120 }
     Write-Host '                  W i n d o w s   M a n a g e r   C o n s o l e' -ForegroundColor DarkGray
-    Write-Host ''
+    Blank
   }
 
   # Run a scriptblock while showing an animated spinner. Uses a background runspace
-  # so the spinner really animates during the work. Returns the work's output (last
-  # value). If the work throws, the exception is re-thrown for the caller's
-  # try/catch to handle (same as a plain synchronous call). Only a failure to
-  # CREATE the runspace falls back to running the work inline.
+  # so it truly animates. Returns the work's last output value; re-throws if the
+  # work throws (so the caller's try/catch reports it). Only a runspace-CREATION
+  # failure falls back to running inline.
   function Invoke-Spinner {
     param(
       [Parameter(Mandatory=$true)][scriptblock]$Work,
@@ -93,7 +114,7 @@
     )
     $ps = $null
     try { $ps = [PowerShell]::Create() } catch { $ps = $null }
-    if (-not $ps) { return (& $Work @ArgumentList) }   # no runspace: run inline
+    if (-not $ps) { return (& $Work @ArgumentList) }
 
     $cursorHidden = $false
     try { [Console]::CursorVisible = $false; $cursorHidden = $true } catch {}
@@ -101,26 +122,57 @@
       [void]$ps.AddScript($Work)
       foreach ($a in $ArgumentList) { [void]$ps.AddArgument($a) }
       $handle = $ps.BeginInvoke()
-
       $frames = @('|','/','-','\')
       $i = 0
       while (-not $handle.IsCompleted) {
-        Write-Host -NoNewline ("`r  {0} {1}..." -f $frames[$i % $frames.Count], $Text) -ForegroundColor Cyan
+        Write-Host -NoNewline ("`r   {0} {1}..." -f $frames[$i % $frames.Count], $Text) -ForegroundColor Cyan
         Start-Sleep -Milliseconds 90
         $i++
       }
-      $out = @($ps.EndInvoke($handle))   # re-throws if the work threw unhandled
+      $out = @($ps.EndInvoke($handle))
       return ($out | Select-Object -Last 1)
     } finally {
       if ($cursorHidden) { try { [Console]::CursorVisible = $true } catch {} }
-      Write-Host -NoNewline ("`r{0}`r" -f (' ' * ($Text.Length + 8)))   # wipe spinner line
+      Write-Host -NoNewline ("`r{0}`r" -f (' ' * ($Text.Length + 10)))
       try { $ps.Dispose() } catch {}
     }
   }
 
-  # ================= Elevation =================
+  # ============================================================
+  #  Small validators / helpers
+  # ============================================================
+  function Test-ServerHost {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+    if ($Value -eq 'localhost') { return $true }
+    if ($Value -match '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$') { return $true }
+    if ($Value.Length -le 253 -and `
+        $Value -match '^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$') { return $true }
+    return $false
+  }
+  function Test-PositiveInteger {
+    param([string]$Value)
+    $n = 0
+    if ([int]::TryParse($Value, [ref]$n)) { return $n -gt 0 }
+    return $false
+  }
+  function Test-CommandExists {
+    param([string]$Command)
+    $null = Get-Command $Command -ErrorAction SilentlyContinue
+    return $?
+  }
+  function Get-RemoteSha {
+    param([string]$Url)
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      $c = (Invoke-WebRequest -Uri $Url -UseBasicParsing -ErrorAction Stop).Content
+      return $c.Trim().Split()[0].ToUpper()
+    } catch { return $null }
+  }
 
-  # Self-elevate to Administrator (works from a file OR from irm|iex).
+  # ============================================================
+  #  Elevation
+  # ============================================================
   $isAdmin = ([Security.Principal.WindowsPrincipal] `
       [Security.Principal.WindowsIdentity]::GetCurrent()
     ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -131,7 +183,6 @@
         Start-Process powershell.exe -Verb RunAs -ArgumentList @(
           '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"")
       } else {
-        # Running via irm|iex (no file on disk): re-fetch self in an elevated shell.
         Start-Process powershell.exe -Verb RunAs -ArgumentList @(
           '-NoProfile','-ExecutionPolicy','Bypass','-Command',"irm $SELF_URL | iex")
       }
@@ -142,8 +193,9 @@
     return
   }
 
-  # ================= Detection =================
-
+  # ============================================================
+  #  Detection
+  # ============================================================
   function Get-AgentStatus {
     $curExe = Join-Path $INSTALL_DIR $EXE_NAME
     $curCfg = Join-Path $INSTALL_DIR $CONFIG_NAME
@@ -159,12 +211,10 @@
       if ($t) { $task = $t; break }
     }
 
-    # Legacy artifacts — only treated as "the install" if no current layout exists.
     $legProc = Get-Process -Name $LEGACY_PROC -ErrorAction SilentlyContinue | Select-Object -First 1
     $legDir  = Test-Path $LEGACY_DIR
     $isLegacy = (($legDir) -or ($legProc)) -and (-not ($dirExists -or $exeExists -or $proc -or $task))
 
-    # Config details
     $agentId = $null; $serverUrl = $null; $agentName = $null
     if (Test-Path $curCfg) {
       try {
@@ -173,7 +223,6 @@
       } catch {}
     }
 
-    # Installed binary hash + size
     $exeHash = $null; $exeSize = $null
     if ($exeExists) {
       try { $exeHash = (Get-FileHash -Algorithm SHA256 -Path $curExe).Hash.ToUpper() } catch {}
@@ -182,22 +231,20 @@
 
     $installed = $dirExists -or $exeExists -or [bool]$proc -or [bool]$task -or $isLegacy
 
-    # Health verdict
     $health = 'NOT INSTALLED'; $healthColor = 'Yellow'
     if ($isLegacy) {
       $health = 'LEGACY INSTALL (pre-rename) - Uninstall then Install recommended'; $healthColor = 'Yellow'
     } elseif ($installed) {
       if ($exeExists) {
-        if ($proc)     { $health = 'RUNNING';                                    $healthColor = 'Green' }
-        elseif ($task) { $health = 'STOPPED (installed, autostart configured)';   $healthColor = 'Yellow' }
-        else           { $health = 'BROKEN - installed but no autostart task';    $healthColor = 'Red' }
+        if ($proc)     { $health = 'RUNNING';                                  $healthColor = 'Green' }
+        elseif ($task) { $health = 'STOPPED (installed, autostart configured)'; $healthColor = 'Yellow' }
+        else           { $health = 'BROKEN - installed but no autostart task';  $healthColor = 'Red' }
       } else {
-        if ($proc) { $health = 'RUNNING but binary missing on disk!';            $healthColor = 'Red' }
-        else       { $health = 'BROKEN - install dir present, binary missing';   $healthColor = 'Red' }
+        if ($proc) { $health = 'RUNNING but binary missing on disk!';          $healthColor = 'Red' }
+        else       { $health = 'BROKEN - install dir present, binary missing';  $healthColor = 'Red' }
       }
     }
 
-    # Recent log errors (best-effort)
     $logErrCount = 0; $lastErr = $null
     if (Test-Path $curLog) {
       try {
@@ -224,74 +271,371 @@
     }
   }
 
-  # ================= Status banner =================
-
-  function Show-Status($s, $remoteHash) {
-    Write-Host '  +----------------------------------------------------------------+' -ForegroundColor DarkCyan
-    Write-Host -NoNewline '   Status  : '
+  function Show-Status {
+    param($s, $remoteHash)
+    Hr '-' 'DarkCyan'
+    Write-Host -NoNewline '   STATUS  : '
     Write-Host $s.Health -ForegroundColor $s.HealthColor
 
     if ($s.Installed -and -not $s.IsLegacy) {
-      if ($s.ProcRunning) { Write-Host "   PID     : $($s.ProcId)" }
-      Write-Host "   Path    : $($s.InstallDir)"
-      if ($s.AgentName) { Write-Host "   Agent   : $($s.AgentName)" }
-      if ($s.AgentId)   { Write-Host "   ID      : $($s.AgentId)" }
-      if ($s.ServerUrl) { Write-Host "   Server  : $($s.ServerUrl)" }
+      if ($s.ProcRunning) { Field 'PID' "$($s.ProcId)" }
+      Field 'Path' $s.InstallDir
+      if ($s.AgentName) { Field 'Agent' $s.AgentName }
+      if ($s.AgentId)   { Field 'ID'    $s.AgentId }
+      if ($s.ServerUrl) { Field 'Server' $s.ServerUrl }
       if ($s.ExeExists -and $s.ExeHash) {
-        Write-Host "   Binary  : $($s.ExeSize) MB  sha $($s.ExeHash.Substring(0,12))..."
+        Field 'Binary' ("{0} MB  sha {1}..." -f $s.ExeSize, $s.ExeHash.Substring(0,12))
       }
-      if ($s.TaskExists) { Write-Host "   Task    : $($s.TaskName) [$($s.TaskState)]" }
-      else { Write-Host "   Task    : (none - agent will NOT auto-start)" -ForegroundColor Red }
+      if ($s.TaskExists) { Field 'Task' ("{0} [{1}]" -f $s.TaskName, $s.TaskState) }
+      else { Field 'Task' '(none - agent will NOT auto-start)' 'Red' }
 
-      # Update-available hint (remoteHash is $null when offline / not checked)
       if ($s.ExeExists -and $s.ExeHash) {
         if ($remoteHash) {
-          if ($remoteHash -eq $s.ExeHash) {
-            Write-Host '   Update  : up to date' -ForegroundColor Green
-          } else {
-            Write-Host "   Update  : AVAILABLE (latest sha $($remoteHash.Substring(0,12))...) - use [2] Update" -ForegroundColor Yellow
-          }
+          if ($remoteHash -eq $s.ExeHash) { Field 'Update' 'up to date' 'Green' }
+          else { Field 'Update' ("AVAILABLE (latest sha {0}...) - use [2]" -f $remoteHash.Substring(0,12)) 'Yellow' }
         } else {
-          Write-Host '   Update  : could not check (offline / GitHub unreachable)' -ForegroundColor DarkGray
+          Field 'Update' 'could not check (offline / GitHub unreachable)' 'DarkGray'
         }
       }
-
       if ($s.LogErrCount -gt 0) {
-        Write-Host "   Log     : $($s.LogErrCount) recent error line(s) in $($s.LogPath)" -ForegroundColor Yellow
+        Field 'Log' ("{0} recent error line(s)" -f $s.LogErrCount) 'Yellow'
         if ($s.LastErr) {
           $le = $s.LastErr.Trim()
-          if ($le.Length -gt 100) { $le = $le.Substring(0,100) + '...' }
-          Write-Host "             last: $le" -ForegroundColor DarkYellow
+          if ($le.Length -gt 90) { $le = $le.Substring(0,90) + '...' }
+          Write-Host "             $le" -ForegroundColor DarkYellow
         }
       }
     } elseif ($s.IsLegacy) {
-      Write-Host "   Note    : found legacy 'CyberSentinel' files/process." -ForegroundColor Yellow
+      Write-Host "   NOTE    : found legacy 'CyberSentinel' files/process." -ForegroundColor Yellow
       Write-Host '             Uninstall (3) then Install (1) for the current agent.' -ForegroundColor Yellow
     }
-    Write-Host '  +----------------------------------------------------------------+' -ForegroundColor DarkCyan
+    Hr '-' 'DarkCyan'
   }
 
-  # ================= Uninstall (both layouts, offline-capable) =================
+  # ============================================================
+  #  INSTALL  (fully inline - no external script)
+  # ============================================================
+  function Invoke-Install {
+    param($Status)
+    $TOTAL = 9
+    Blank
+    Header 'INSTALL CyberSentinel DLP Agent' 'Green'
 
+    # -- Step 1: configuration ------------------------------------------------
+    Step 1 $TOTAL 'Configuration'
+    do {
+      $serverIP = Read-Host '   Server IP or hostname (default: localhost)'
+      if ([string]::IsNullOrWhiteSpace($serverIP)) { $serverIP = 'localhost' }
+      if (-not (Test-ServerHost $serverIP)) { Err "Invalid host. Use an IPv4 literal, 'localhost', or a hostname/FQDN." }
+    } while (-not (Test-ServerHost $serverIP))
+    $serverURL = "http://${serverIP}:55000/api/v1"
+
+    $reachable = Invoke-Spinner -Text "Testing server at ${serverIP}:55000" -ArgumentList @($serverIP) -Work {
+      param($ip)
+      try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $r = Invoke-RestMethod -Uri "http://${ip}:55000/health" -TimeoutSec 8
+        if ($r.status -eq 'healthy') { 'healthy' } else { 'reachable' }
+      } catch { $null }
+    }
+    if ($reachable) { Ok "Server reachable ($reachable)" } else { Warn 'Could not reach the server - continuing anyway.' }
+
+    $defaultAgentName = $env:COMPUTERNAME
+    $agentName = Read-Host "   Agent name (default: $defaultAgentName)"
+    if ([string]::IsNullOrWhiteSpace($agentName)) { $agentName = $defaultAgentName }
+
+    do {
+      $hb = Read-Host '   Heartbeat interval seconds (default: 30)'
+      if ([string]::IsNullOrWhiteSpace($hb)) { $heartbeat = 30; break }
+      if (-not (Test-PositiveInteger $hb)) { Err 'Enter a positive number.' } else { $heartbeat = [int]$hb; break }
+    } while ($true)
+
+    do {
+      $ps = Read-Host '   Policy sync interval seconds (default: 60)'
+      if ([string]::IsNullOrWhiteSpace($ps)) { $policySync = 60; break }
+      if (-not (Test-PositiveInteger $ps)) { Err 'Enter a positive number.' } else { $policySync = [int]$ps; break }
+    } while ($true)
+
+    Blank
+    Header 'Configuration summary' 'Yellow'
+    Field 'Server'    $serverURL
+    Field 'Agent'     $agentName
+    Field 'Heartbeat' "$heartbeat s"
+    Field 'PolicySnc' "$policySync s"
+    Hr '=' 'Yellow'
+    $go = Read-Host '   Proceed with installation? (Y/N)'
+    if ($go -ne 'Y' -and $go -ne 'y') { Warn 'Installation cancelled.'; return }
+
+    # -- Step 2: remove previous installs (recover identity first) ------------
+    Step 2 $TOTAL 'Removing any previous agent'
+    $recoveredId = $null
+    foreach ($cfg in @((Join-Path $INSTALL_DIR $CONFIG_NAME), (Join-Path $LEGACY_DIR $CONFIG_NAME))) {
+      if ((Test-Path $cfg) -and -not $recoveredId) {
+        try {
+          $id = (Get-Content $cfg -Raw -ErrorAction Stop | ConvertFrom-Json).agent_id
+          if ($id) { $recoveredId = $id; Info "Found existing agent identity: $id" }
+        } catch {}
+      }
+    }
+    foreach ($p in @($PROC_NAME, $LEGACY_PROC)) {
+      Get-Process -Name $p -ErrorAction SilentlyContinue | ForEach-Object {
+        Info "Stopping $($_.Name) (PID $($_.Id))"; Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+      }
+    }
+    $handled = @{}
+    foreach ($n in $TASK_NAMES) {
+      if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
+        $handled[$n] = $true
+      }
+    }
+    Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+      (($_.Actions.Arguments -join ' ') -match '\\CyberSentinel\\') -or
+      (($_.Actions.Execute   -join ' ') -match '\\CyberSentinel\\')
+    } | ForEach-Object {
+      if (-not $handled[$_.TaskName]) {
+        Info "Removing legacy task: $($_.TaskName)"
+        Stop-ScheduledTask -TaskName $_.TaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+      }
+    }
+    foreach ($svc in $SVC_NAMES) {
+      if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
+        Stop-Service $svc -Force -ErrorAction SilentlyContinue; sc.exe delete $svc 2>$null | Out-Null
+      }
+    }
+    foreach ($d in @($LEGACY_DIR, $LEGACY_DATA)) {
+      if (Test-Path $d) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue; Info "Removed legacy dir: $d" }
+    }
+    if ($recoveredId) { Ok "Previous agent removed; identity $recoveredId will be carried over" }
+    else { Ok 'Clean install (no previous agent found)' }
+
+    # -- Step 3: directories --------------------------------------------------
+    Step 3 $TOTAL 'Creating directories'
+    foreach ($d in @($INSTALL_DIR, "$DATA_DIR\logs", "$DATA_DIR\quarantine", "$DATA_DIR\cache")) {
+      if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+    }
+    Ok 'Directories ready'
+
+    # -- Step 4: OCR deps (optional) -----------------------------------------
+    Step 4 $TOTAL 'OCR dependencies (Chocolatey + Tesseract, optional)'
+    Hint 'Used only by the screen-capture OCR fallback; the agent runs without them.'
+    if (Test-CommandExists 'choco') {
+      Ok 'Chocolatey already present'
+    } else {
+      Info 'Installing Chocolatey...'
+      try {
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        $env:Path = "$([Environment]::GetEnvironmentVariable('Path','Machine'));$([Environment]::GetEnvironmentVariable('Path','User'))"
+        if (Test-Path "$env:ProgramData\chocolatey\bin") { $env:Path = "$env:ProgramData\chocolatey\bin;$env:Path" }
+      } catch { Warn "Chocolatey install failed: $($_.Exception.Message)" }
+    }
+    if (Test-CommandExists 'choco') {
+      if (Test-CommandExists 'tesseract') {
+        Ok 'Tesseract already present'
+      } else {
+        Info 'Installing Tesseract (this can take a minute)...'
+        try {
+          $p = Start-Process -FilePath 'choco' -ArgumentList 'install','tesseract','-y','--no-progress' -Wait -PassThru -NoNewWindow
+          $env:Path = "$([Environment]::GetEnvironmentVariable('Path','Machine'));$([Environment]::GetEnvironmentVariable('Path','User'))"
+          if (Test-Path 'C:\Program Files\Tesseract-OCR\tesseract.exe') { $env:Path = "C:\Program Files\Tesseract-OCR;$env:Path" }
+          if (Test-CommandExists 'tesseract') { Ok 'Tesseract installed' }
+          else { Warn 'Tesseract not on PATH yet - screen OCR fallback may need a new session/reboot' }
+        } catch { Warn "Tesseract install failed: $($_.Exception.Message)" }
+      }
+    } else {
+      Warn 'Chocolatey unavailable - skipping Tesseract (screen OCR fallback disabled)'
+    }
+
+    # -- Step 5: download + verify binary ------------------------------------
+    Step 5 $TOTAL 'Downloading + verifying the agent binary'
+    $exePath = Join-Path $INSTALL_DIR $EXE_NAME
+    try {
+      Invoke-Spinner -Text 'Downloading binary' -ArgumentList @($EXE_URL, $exePath) -Work {
+        param($u,$out)
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing
+      } | Out-Null
+    } catch { Err "Download failed: $($_.Exception.Message)"; return }
+    if (-not (Test-Path $exePath)) { Err 'Download failed (no file written).'; return }
+    $sizeMB = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
+    Ok "Downloaded ($sizeMB MB)"
+
+    $expected = Get-RemoteSha $SUM_URL
+    if ($expected) {
+      $actual = (Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToUpper()
+      if ($actual -ne $expected) {
+        Err 'SHA-256 MISMATCH - refusing to install a tampered/corrupt binary.'
+        Hint "expected $expected"
+        Hint "actual   $actual"
+        Remove-Item $exePath -Force -ErrorAction SilentlyContinue
+        return
+      }
+      Ok "SHA-256 verified ($($actual.Substring(0,16))...)"
+    } else {
+      Warn 'No checksum sidecar reachable - integrity check skipped.'
+    }
+
+    # -- Step 6: environment + config ----------------------------------------
+    Step 6 $TOTAL 'Writing configuration'
+    [Environment]::SetEnvironmentVariable('CYBERSENTINELDLP_SERVER_URL', $serverURL, 'Machine')
+    $env:CYBERSENTINELDLP_SERVER_URL = $serverURL
+
+    $config = @{
+      server_url = $serverURL; agent_name = $agentName
+      heartbeat_interval = $heartbeat; policy_sync_interval = $policySync
+      ransomware_detection_enabled = $true; ransomware_burst_threshold = 15
+      ransomware_window_seconds = 10; ransomware_cooldown_seconds = 60
+      monitoring = @{
+        file_system = $true; clipboard = $true; usb_devices = $true
+        screen_capture = $true; print_jobs = $true
+        monitored_paths = @("C:\Users\$env:USERNAME\Documents","C:\Users\$env:USERNAME\Desktop","C:\Users\$env:USERNAME\Downloads")
+        file_extensions = @('.pdf','.docx','.xlsx','.csv','.txt','.json','.xml','.sql','.pem','.key','.env','.conf')
+      }
+      quarantine_path = "$DATA_DIR\quarantine"; log_path = "$DATA_DIR\logs"; cache_path = "$DATA_DIR\cache"
+    }
+    if ($recoveredId) { $config.agent_id = $recoveredId; Info "Preserving identity $recoveredId" }
+    $configPath = Join-Path $INSTALL_DIR $CONFIG_NAME
+    $config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding ASCII -Force   # ASCII = no BOM
+    Ok 'Configuration written'
+
+    # -- Step 7: launcher -----------------------------------------------------
+    Step 7 $TOTAL 'Creating hidden background launcher'
+    $vbsPath = Join-Path $INSTALL_DIR $VBS_NAME
+    @"
+Set objShell = CreateObject("Wscript.Shell")
+objShell.Run """$exePath""", 0, False
+"@ | Out-File -FilePath $vbsPath -Encoding ASCII -Force
+    Ok 'Launcher created (no console window on start)'
+
+    # -- Step 8: scheduled task ----------------------------------------------
+    Step 8 $TOTAL 'Registering auto-start scheduled task'
+    try {
+      if (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
+      }
+      $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vbsPath`"" -WorkingDirectory $INSTALL_DIR
+      $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+      $tBoot  = New-ScheduledTaskTrigger -AtStartup
+      $tBoot.Delay = 'PT30S'
+      $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+      $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Days 9999) -MultipleInstances IgnoreNew
+      Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger @($tLogon,$tBoot) `
+        -Principal $principal -Settings $settings -Description 'CyberSentinel DLP Agent - endpoint monitoring' -Force | Out-Null
+      Ok "Scheduled task '$TASK_NAME' registered (logon + startup)"
+    } catch {
+      Err "Could not create scheduled task: $($_.Exception.Message)"
+      Hint "You can start it manually: wscript.exe `"$vbsPath`""
+    }
+
+    # -- Step 9: start --------------------------------------------------------
+    Step 9 $TOTAL 'Starting the agent'
+    try { Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue } catch {}
+    $proc = $null
+    for ($i = 0; $i -lt 6 -and -not $proc; $i++) {
+      Start-Sleep -Seconds 2
+      $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    Blank
+    if ($proc) {
+      Header 'INSTALL COMPLETE' 'Green'
+      Ok "Agent is running (PID $($proc.Id))"
+    } else {
+      Header 'INSTALL FINISHED (agent not detected yet)' 'Yellow'
+      Warn 'Process not seen yet - it may still be initializing. Check the log.'
+    }
+    Field 'Path'   $INSTALL_DIR
+    Field 'Server' $serverURL
+    Field 'Log'    (Join-Path $INSTALL_DIR $LOG_NAME)
+    if ($recoveredId) { Field 'ID' "$recoveredId (migrated)" 'Yellow' }
+  }
+
+  # ============================================================
+  #  UPDATE  (fully inline - no external script)
+  # ============================================================
+  function Invoke-Update {
+    Blank
+    Header 'UPDATE agent binary' 'Cyan'
+    $exePath = Join-Path $INSTALL_DIR $EXE_NAME
+    $tmpExe  = Join-Path $env:TEMP $EXE_NAME
+
+    Info 'Downloading the latest published binary...'
+    try {
+      Invoke-Spinner -Text 'Downloading + verifying' -ArgumentList @($EXE_URL, $tmpExe) -Work {
+        param($u,$out)
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing
+      } | Out-Null
+    } catch { Err "Download failed: $($_.Exception.Message)"; return }
+    if (-not (Test-Path $tmpExe)) { Err 'Download failed (no file written).'; return }
+
+    $expected = Get-RemoteSha $SUM_URL
+    $actual   = (Get-FileHash -Algorithm SHA256 -Path $tmpExe).Hash.ToUpper()
+    if ($expected -and $expected -ne $actual) {
+      Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+      Err 'SHA-256 mismatch - download corrupt. Installed agent left untouched.'
+      return
+    }
+    $sizeMB = [math]::Round((Get-Item $tmpExe).Length / 1MB, 1)
+    Ok "Downloaded + verified ($sizeMB MB, sha $($actual.Substring(0,12))...)"
+
+    if (Test-Path $exePath) {
+      $current = (Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToUpper()
+      if ($current -eq $actual) {
+        Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+        Ok 'Already up to date - nothing to do.'
+        return
+      }
+    }
+
+    Info 'Stopping the agent...'
+    Stop-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
+    Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+    if (Test-Path $exePath) { Copy-Item $exePath "$exePath.bak" -Force -ErrorAction SilentlyContinue }
+    $replaced = $false
+    for ($i = 1; $i -le 10 -and -not $replaced; $i++) {
+      try { Copy-Item $tmpExe $exePath -Force; $replaced = $true } catch { Start-Sleep -Milliseconds 700 }
+    }
+    Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+    if (-not $replaced) { Err "Could not replace $exePath (file locked). Agent is stopped - retry or reboot."; return }
+    Ok "Binary replaced (previous kept as $EXE_NAME.bak)"
+
+    Info 'Restarting the agent...'
+    Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+    Blank
+    if ($proc) { Ok "Update complete - agent running (PID $($proc.Id))." }
+    else { Warn "Agent not detected yet - start it with: Start-ScheduledTask -TaskName '$TASK_NAME'" }
+  }
+
+  # ============================================================
+  #  UNINSTALL  (both layouts, offline-capable)
+  # ============================================================
   function Uninstall-Agent {
+    Blank
+    Header 'UNINSTALL agent' 'Red'
     $removed = $false
 
-    # 1) Stop processes (exact names, so old/new never cross-match).
     foreach ($p in @($PROC_NAME, $LEGACY_PROC)) {
       Get-Process -Name $p -ErrorAction SilentlyContinue | ForEach-Object {
         Info "Stopping $($_.Name) (PID $($_.Id))"
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-        $removed = $true
+        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; $removed = $true
       }
     }
-    Start-Sleep -Milliseconds 150
+    Start-Sleep -Milliseconds 200
 
-    # 2) Remove scheduled tasks by known name AND by the path they launch.
     $handled = @{}
     foreach ($n in $TASK_NAMES) {
       if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
         Info "Removing scheduled task: $n"
-        Stop-ScheduledTask   -TaskName $n -ErrorAction SilentlyContinue
+        Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
         $handled[$n] = $true; $removed = $true
       }
@@ -302,46 +646,38 @@
     } | ForEach-Object {
       if (-not $handled[$_.TaskName]) {
         Info "Removing scheduled task: $($_.TaskName)"
-        Stop-ScheduledTask   -TaskName $_.TaskName -ErrorAction SilentlyContinue
-        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
-        $removed = $true
+        Stop-ScheduledTask -TaskName $_.TaskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue; $removed = $true
       }
     }
 
-    # 3) Remove any legacy Windows service.
     foreach ($svc in $SVC_NAMES) {
       if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
         Info "Removing service: $svc"
-        Stop-Service $svc -Force -ErrorAction SilentlyContinue
-        sc.exe delete $svc 2>$null | Out-Null
-        $removed = $true
+        Stop-Service $svc -Force -ErrorAction SilentlyContinue; sc.exe delete $svc 2>$null | Out-Null; $removed = $true
       }
     }
 
-    # 4) Delete install + data directories (both layouts).
     foreach ($d in @($INSTALL_DIR, $DATA_DIR, $LEGACY_DIR, $LEGACY_DATA)) {
       if (Test-Path $d) {
         Info "Deleting $d"
         Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $d) { Warn "Could not fully delete $d (a file may be locked - reboot and re-run)" }
-        else { $removed = $true }
+        if (Test-Path $d) { Warn "Could not fully delete $d (a file may be locked - reboot and re-run)" } else { $removed = $true }
       }
     }
 
-    # 5) Clear the machine-wide server URL env var the installer set.
     try { [Environment]::SetEnvironmentVariable('CYBERSENTINELDLP_SERVER_URL', $null, 'Machine') } catch {}
 
-    Write-Host ''
+    Blank
     if ($removed) {
       Ok 'CyberSentinel DLP agent removed from this endpoint.'
       Warn "It will show as 'disconnected' on the dashboard until you delete it there."
-    } else {
-      Ok 'Nothing to remove.'
-    }
+    } else { Ok 'Nothing to remove.' }
   }
 
-  # ================= Main menu loop =================
-
+  # ============================================================
+  #  Main menu loop
+  # ============================================================
   $first = $true
   while ($true) {
     Clear-Host
@@ -349,8 +685,6 @@
     $first = $false
 
     $s = Get-AgentStatus
-
-    # Check the latest published build (animated; only when a binary is installed).
     $remoteHash = $null
     if ($s.ExeExists -and $s.ExeHash) {
       $remoteHash = Invoke-Spinner -Text 'Checking for the latest agent build' -ArgumentList @($SUM_URL) -Work {
@@ -361,99 +695,56 @@
         } catch { }
       }
     }
-
     Show-Status $s $remoteHash
 
-    Write-Host ''
-    Write-Host '   [1] Install    ' -ForegroundColor Green  -NoNewline; Write-Host '- set up the agent on this device (fresh install)'
-    Write-Host '   [2] Update     ' -ForegroundColor Cyan   -NoNewline; Write-Host '- replace the agent binary with the latest build'
-    Write-Host '   [3] Uninstall  ' -ForegroundColor Red    -NoNewline; Write-Host '- stop and completely remove the agent + files'
-    Write-Host '   [4] Exit       ' -ForegroundColor Gray   -NoNewline; Write-Host '- do nothing and quit'
-    Write-Host ''
+    Blank
+    Write-Host '   [1] Install    ' -ForegroundColor Green -NoNewline; Write-Host '- set up the agent on this device'
+    Write-Host '   [2] Update     ' -ForegroundColor Cyan  -NoNewline; Write-Host '- replace the binary with the latest build'
+    Write-Host '   [3] Uninstall  ' -ForegroundColor Red   -NoNewline; Write-Host '- stop and completely remove the agent'
+    Write-Host '   [4] Exit       ' -ForegroundColor Gray  -NoNewline; Write-Host '- do nothing and quit'
+    Blank
     $choice = Read-Host '   Choose an option (1-4)'
 
     switch ($choice.Trim()) {
       '1' {
-        Write-Host ''
         if ($s.Installed -and -not $s.IsLegacy) {
+          Blank
           Warn "Agent is already installed (status: $($s.Health))."
           Warn 'No need to install. Use [2] Update to refresh the binary,'
-          Warn 'or [3] Uninstall first if you want a clean reinstall.'
+          Warn 'or [3] Uninstall first for a clean reinstall.'
         } else {
-          if ($s.IsLegacy) {
-            Info 'A legacy install was found - the installer migrates it and preserves the old agent ID.'
-          }
-          Info 'Launching the base installer (it will ask for the server address, etc.)...'
-          Write-Host ''
-          try {
-            $installer = Invoke-Spinner -Text 'Downloading installer' -ArgumentList @($INSTALL_URL) -Work {
-              param($u)
-              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-              Invoke-RestMethod -Uri $u -UseBasicParsing
-            }
-            if ($installer) { Invoke-Expression $installer }
-            else { Err 'Could not download the installer (offline / GitHub unreachable).' }
-          } catch { Err "Installer failed: $($_.Exception.Message)" }
+          try { Invoke-Install $s } catch { Err "Install failed: $($_.Exception.Message)" }
         }
-        Write-Host ''
-        Read-Host '   Press Enter to return to the menu' | Out-Null
+        Blank; Read-Host '   Press Enter to return to the menu' | Out-Null
       }
-
       '2' {
-        Write-Host ''
         if (-not $s.Installed -or $s.IsLegacy) {
-          Warn 'No current agent is installed - there is nothing to update.'
+          Blank
+          Warn 'No current agent is installed - nothing to update.'
           Warn 'Choose [1] Install to set it up first.'
         } else {
-          Info 'Launching the updater (binary-only swap; config and task are kept)...'
-          Write-Host ''
-          try {
-            $updater = Invoke-Spinner -Text 'Downloading updater' -ArgumentList @($UPDATE_URL) -Work {
-              param($u)
-              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-              Invoke-RestMethod -Uri $u -UseBasicParsing
-            }
-            if ($updater) { Invoke-Expression $updater }
-            else { Err 'Could not download the updater (offline / GitHub unreachable).' }
-          } catch { Err "Updater failed: $($_.Exception.Message)" }
+          try { Invoke-Update } catch { Err "Update failed: $($_.Exception.Message)" }
         }
-        Write-Host ''
-        Read-Host '   Press Enter to return to the menu' | Out-Null
+        Blank; Read-Host '   Press Enter to return to the menu' | Out-Null
       }
-
       '3' {
-        Write-Host ''
         if (-not $s.Installed) {
-          Warn 'No CyberSentinel DLP agent found - nothing to uninstall.'
+          Blank; Warn 'No CyberSentinel DLP agent found - nothing to uninstall.'
         } else {
-          Warn 'This STOPS and COMPLETELY REMOVES the CyberSentinel DLP agent:'
-          Warn '  - kills the running process'
-          Warn '  - removes the scheduled task / any legacy service'
-          Warn '  - deletes the install and data directories (current + legacy)'
-          Write-Host ''
+          Blank
+          Warn 'This STOPS and COMPLETELY REMOVES the agent:'
+          Hint '  - kills the running process'
+          Hint '  - removes the scheduled task / any legacy service'
+          Hint '  - deletes the install and data directories (current + legacy)'
+          Blank
           $confirm = Read-Host "   Type 'y' to confirm uninstall (anything else cancels)"
-          if ($confirm -eq 'y' -or $confirm -eq 'Y') {
-            Write-Host ''
-            Uninstall-Agent
-          } else {
-            Warn 'Uninstall cancelled - no changes made.'
-          }
+          if ($confirm -eq 'y' -or $confirm -eq 'Y') { try { Uninstall-Agent } catch { Err "Uninstall failed: $($_.Exception.Message)" } }
+          else { Warn 'Uninstall cancelled - no changes made.' }
         }
-        Write-Host ''
-        Read-Host '   Press Enter to return to the menu' | Out-Null
+        Blank; Read-Host '   Press Enter to return to the menu' | Out-Null
       }
-
-      '4' {
-        Write-Host ''
-        Info 'Exiting - no changes made.'
-        return
-      }
-
-      default {
-        Write-Host ''
-        Warn 'Invalid choice - please enter 1, 2, 3, or 4.'
-        Start-Sleep -Milliseconds 900
-      }
+      '4' { Blank; Info 'Exiting - no changes made.'; return }
+      default { Blank; Warn 'Invalid choice - please enter 1, 2, 3, or 4.'; Start-Sleep -Milliseconds 900 }
     }
   }
 }

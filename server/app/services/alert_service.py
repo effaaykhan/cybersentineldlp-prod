@@ -2,12 +2,31 @@
 Alert Service - Business logic for DLP alert management
 """
 
+import uuid
 from typing import Optional, List
 from datetime import datetime, timedelta
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import Alert
+
+
+# Alert.priority is an INTEGER column (lower = more urgent). Map the alert
+# severity onto a sane numeric priority so a string is never stored there.
+_PRIORITY_BY_SEVERITY = {"critical": 10, "high": 25, "medium": 50, "low": 75, "info": 90}
+
+
+def _as_uuid(value):
+    """Loosely coerce an optional identifier to a UUID, or None. Keeps a
+    non-UUID id from aborting the insert on the UUID-typed columns."""
+    if not value:
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 class AlertService:
@@ -137,19 +156,20 @@ class AlertService:
             alert_type=alert_type,
             severity=severity,
             title=title,
+            description=message,              # `description` is NOT NULL on the model
             message=message,
-            source_type=source_type,
+            source=source_type,               # model column is `source`, not `source_type`
             source_id=source_id,
-            policy_id=policy_id,
-            event_id=event_id,
+            policy_id=_as_uuid(policy_id),
+            event_id=_as_uuid(event_id),
             user_email=user_email,
             agent_id=agent_id,
             status="new",
-            priority=priority,
-            assigned_to=assigned_to,
+            priority=_PRIORITY_BY_SEVERITY.get((severity or "").lower(), 100),
+            assigned_to=_as_uuid(assigned_to),
             resolved=False,
             escalation_level=0,
-            metadata=metadata or {},
+            alert_metadata=metadata or {},    # mapped attr for the "metadata" column
         )
 
         self.db.add(alert)

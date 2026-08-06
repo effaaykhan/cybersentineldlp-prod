@@ -8109,45 +8109,71 @@ if (shouldMonitor) {
                 
                 logger.Info("Scanning directory: " + dir);
                 
-                for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+                // Walk the tree defensively. skip_permission_denied handles ACL'd
+                // folders; we also refuse to recurse INTO reparse points / junctions
+                // (the legacy "My Music/Pictures/Videos" links under C:\Users\Public
+                // throw "cannot increment ... Invalid argument" and previously aborted
+                // the WHOLE directory scan). A non-throwing increment lets one bad
+                // node be skipped instead of killing the scan. NOTE: the loop body
+                // must not `continue` (the increment is at the bottom), so the
+                // per-file logic below is written as nested ifs.
+                std::error_code recEc;
+                fs::recursive_directory_iterator it(
+                    dir, fs::directory_options::skip_permission_denied, recEc);
+                const fs::recursive_directory_iterator end;
+                if (recEc) {
+                    logger.Debug("Cannot open directory for scan " + dir + ": " + recEc.message());
+                    continue;
+                }
+                while (it != end) {
                     try {
-                        if (!entry.is_regular_file()) continue;
-                        
-                        std::string filePath = entry.path().string();
-                        filesScanned++;
-                        
-                        // Check if file should be monitored
-                        if (!ShouldMonitorFile(filePath)) {
-                            continue;
+                        const fs::directory_entry& entry = *it;
+
+                        // Never descend into symlinks / junctions / reparse points.
+                        std::error_code sec;
+                        if (entry.is_directory(sec) && !sec &&
+                            fs::is_symlink(entry.symlink_status(sec))) {
+                            it.disable_recursion_pending();
                         }
-                        
-                        // Check if already stored
-                        bool alreadyStored = false;
-                        {
-                            std::lock_guard<std::mutex> lock(originalContentsMutex);
-                            alreadyStored = (originalFileContents.find(filePath) != originalFileContents.end());
-                        }
-                        
-                        if (alreadyStored) {
-                            continue;
-                        }
-                        
-                        // Read and store content
-                        size_t fileSize = fs::file_size(filePath);
-                        if (fileSize < config.GetClassification().maxFileSizeMB * 1024 * 1024) {
-                            std::string content = ReadFileContent(filePath);
-                            if (!content.empty()) {
-                                std::lock_guard<std::mutex> lock(originalContentsMutex);
-                                originalFileContents[filePath] = content;
-                                filesStored++;
-                                
-                                logger.Info("  ✓ Stored baseline for existing file: " + entry.path().filename().string() + 
-                                          " (" + std::to_string(content.size()) + " bytes)");
+
+                        if (entry.is_regular_file(sec) && !sec) {
+                            std::string filePath = entry.path().string();
+                            filesScanned++;
+
+                            // Only monitored + not-already-stored files get a baseline.
+                            if (ShouldMonitorFile(filePath)) {
+                                bool alreadyStored = false;
+                                {
+                                    std::lock_guard<std::mutex> lock(originalContentsMutex);
+                                    alreadyStored = (originalFileContents.find(filePath) != originalFileContents.end());
+                                }
+                                if (!alreadyStored) {
+                                    size_t fileSize = fs::file_size(filePath);
+                                    if (fileSize < config.GetClassification().maxFileSizeMB * 1024 * 1024) {
+                                        std::string content = ReadFileContent(filePath);
+                                        if (!content.empty()) {
+                                            std::lock_guard<std::mutex> lock(originalContentsMutex);
+                                            originalFileContents[filePath] = content;
+                                            filesStored++;
+
+                                            logger.Info("  ✓ Stored baseline for existing file: " + entry.path().filename().string() +
+                                                      " (" + std::to_string(content.size()) + " bytes)");
+                                        }
+                                    }
+                                }
                             }
                         }
-                        
                     } catch (const std::exception& e) {
                         logger.Debug("Error scanning file: " + std::string(e.what()));
+                    }
+
+                    // Advance without throwing. If we still can't step past a node
+                    // (e.g. a reparse point that wasn't flagged as a symlink), log it
+                    // and stop THIS directory rather than aborting via an exception.
+                    it.increment(recEc);
+                    if (recEc) {
+                        logger.Debug("Stopping scan of " + dir + " after iterator error: " + recEc.message());
+                        break;
                     }
                 }
                 

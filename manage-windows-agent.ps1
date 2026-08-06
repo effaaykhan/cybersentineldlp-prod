@@ -4,7 +4,7 @@
   A single, self-contained console app. Self-elevates to Administrator, detects any
   existing agent (current OR legacy layout), reports its live status, and offers:
 
-      [1] Install    [2] Update    [3] Uninstall    [4] Exit
+      [1] Install    [2] Update    [3] Uninstall    [4] Logs    [5] Exit
 
   Everything (install, update, uninstall) is implemented INLINE in this one file —
   it does not download or depend on any other script. The only things it fetches
@@ -676,6 +676,127 @@ objShell.Run """$exePath""", 0, False
   }
 
   # ============================================================
+  #  VIEW LOGS
+  # ============================================================
+  # Colourise a single log line by the severity keyword it carries.
+  function Write-LogLine {
+    param([string]$Line)
+    if ($null -eq $Line) { return }
+    $c = 'Gray'
+    if     ($Line -match '(?i)\b(error|critical|fatal|exception|traceback)\b')                     { $c = 'Red' }
+    elseif ($Line -match '(?i)\b(warn|warning)\b')                                                 { $c = 'Yellow' }
+    elseif ($Line -match '(?i)\b(started|running|connected|registered|success|heartbeat)\b')       { $c = 'Green' }
+    elseif ($Line -match '(?i)\bdebug\b')                                                          { $c = 'DarkGray' }
+    Write-Host "   $Line" -ForegroundColor $c
+  }
+  function Write-LogLines {
+    param($Lines)
+    $arr = @($Lines)
+    if ($arr.Count -eq 0) { Warn 'No matching lines.'; return }
+    foreach ($l in $arr) { Write-LogLine $l }
+  }
+
+  # Locate the agent's active log. Default location is next to the EXE
+  # (INSTALL_DIR\cybersentineldlp_agent.log); the agent rotates old logs to
+  # <log>.<timestamp> in the same folder. Also checks the data-dir logs folder
+  # and the legacy layout. Returns the most-recently-written FileInfo, or $null.
+  function Resolve-LogFile {
+    $cands = New-Object System.Collections.Generic.List[string]
+    $cands.Add((Join-Path $INSTALL_DIR $LOG_NAME))
+    $cands.Add((Join-Path $LEGACY_DIR  $LOG_NAME))
+    foreach ($dir in @($INSTALL_DIR, $LEGACY_DIR, "$DATA_DIR\logs", "$LEGACY_DATA\logs")) {
+      if (Test-Path $dir) {
+        Get-ChildItem -Path $dir -Filter "$LOG_NAME*" -File -ErrorAction SilentlyContinue |
+          ForEach-Object { $cands.Add($_.FullName) }
+        Get-ChildItem -Path $dir -Filter '*.log' -File -ErrorAction SilentlyContinue |
+          ForEach-Object { $cands.Add($_.FullName) }
+      }
+    }
+    $cands |
+      Where-Object { $_ -and (Test-Path $_) } |
+      Select-Object -Unique |
+      Get-Item -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending |
+      Select-Object -First 1
+  }
+
+  function Show-Logs {
+    Blank
+    Header 'AGENT LOGS' 'Cyan'
+
+    $log = Resolve-LogFile
+    if (-not $log) {
+      Warn 'No log file found yet.'
+      Hint "Looked next to the binary ($INSTALL_DIR) and in $DATA_DIR\logs"
+      Hint 'The agent creates its log the first time it runs - install/start it, then look here.'
+      Blank; Read-Host '   Press Enter to return to the menu' | Out-Null
+      return
+    }
+
+    $sizeKB = [math]::Round($log.Length / 1KB, 1)
+    Hr '-' 'DarkCyan'
+    Field 'File'    $log.FullName
+    Field 'Size'    "$sizeKB KB"
+    Field 'Updated' $log.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+
+    while ($true) {
+      Blank
+      Write-Host '   [1] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Tail last 100 lines'
+      Write-Host '   [2] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Follow live         (press any key to stop)'
+      Write-Host '   [3] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Errors & warnings only (recent)'
+      Write-Host '   [4] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Open in Notepad'
+      Write-Host '   [5] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Back to main menu'
+      Blank
+      $c = Read-Host '   Choose (1-5)'
+      switch ($c.Trim()) {
+        '1' {
+          Blank; Hr '-' 'DarkCyan'
+          Write-LogLines (Get-Content -Path $log.FullName -Tail 100 -ErrorAction SilentlyContinue)
+          Hr '-' 'DarkCyan'
+        }
+        '2' {
+          Blank; Info 'Following live output - press any key to stop...'; Hr '-' 'DarkCyan'
+          try {
+            $lines = @(Get-Content -Path $log.FullName -ErrorAction SilentlyContinue)
+            $start = [Math]::Max(0, $lines.Count - 20)
+            for ($k = $start; $k -lt $lines.Count; $k++) { Write-LogLine $lines[$k] }
+            $shown = $lines.Count
+            while (-not [Console]::KeyAvailable) {
+              Start-Sleep -Milliseconds 600
+              $now = @(Get-Content -Path $log.FullName -ErrorAction SilentlyContinue)
+              if ($now.Count -gt $shown) {
+                for ($k = $shown; $k -lt $now.Count; $k++) { Write-LogLine $now[$k] }
+                $shown = $now.Count
+              } elseif ($now.Count -lt $shown) {
+                $shown = $now.Count   # log rotated / truncated - resync
+              }
+            }
+            $null = [Console]::ReadKey($true)   # consume the key that stopped the follow
+          } catch {
+            Warn "Live follow not available here ($($_.Exception.Message)) - use [1] or [4] instead."
+          }
+          Hr '-' 'DarkCyan'; Info 'Stopped following.'
+        }
+        '3' {
+          Blank; Hr '-' 'DarkCyan'
+          $lines = Get-Content -Path $log.FullName -Tail 400 -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '(?i)\b(error|critical|fatal|warn|warning|exception|traceback)\b' } |
+            Select-Object -Last 200
+          if (@($lines).Count -eq 0) { Ok 'No error or warning lines in the recent log.' }
+          else { Write-LogLines $lines }
+          Hr '-' 'DarkCyan'
+        }
+        '4' {
+          try { Start-Process notepad.exe -ArgumentList "`"$($log.FullName)`""; Ok 'Opened in Notepad.' }
+          catch { Err "Could not open Notepad: $($_.Exception.Message)" }
+        }
+        '5' { return }
+        default { Warn 'Enter a number from 1 to 5.' }
+      }
+    }
+  }
+
+  # ============================================================
   #  Main menu loop
   # ============================================================
   $first = $true
@@ -698,12 +819,13 @@ objShell.Run """$exePath""", 0, False
     Show-Status $s $remoteHash
 
     Blank
-    Write-Host '   [1] Install    ' -ForegroundColor Green -NoNewline; Write-Host '- set up the agent on this device'
-    Write-Host '   [2] Update     ' -ForegroundColor Cyan  -NoNewline; Write-Host '- replace the binary with the latest build'
-    Write-Host '   [3] Uninstall  ' -ForegroundColor Red   -NoNewline; Write-Host '- stop and completely remove the agent'
-    Write-Host '   [4] Exit       ' -ForegroundColor Gray  -NoNewline; Write-Host '- do nothing and quit'
+    Write-Host '   [1] Install    ' -ForegroundColor Green  -NoNewline; Write-Host '- set up the agent on this device'
+    Write-Host '   [2] Update     ' -ForegroundColor Cyan   -NoNewline; Write-Host '- replace the binary with the latest build'
+    Write-Host '   [3] Uninstall  ' -ForegroundColor Red    -NoNewline; Write-Host '- stop and completely remove the agent'
+    Write-Host '   [4] Logs       ' -ForegroundColor Yellow -NoNewline; Write-Host '- view / follow the agent log file'
+    Write-Host '   [5] Exit       ' -ForegroundColor Gray   -NoNewline; Write-Host '- do nothing and quit'
     Blank
-    $choice = Read-Host '   Choose an option (1-4)'
+    $choice = Read-Host '   Choose an option (1-5)'
 
     switch ($choice.Trim()) {
       '1' {
@@ -743,8 +865,11 @@ objShell.Run """$exePath""", 0, False
         }
         Blank; Read-Host '   Press Enter to return to the menu' | Out-Null
       }
-      '4' { Blank; Info 'Exiting - no changes made.'; return }
-      default { Blank; Warn 'Invalid choice - please enter 1, 2, 3, or 4.'; Start-Sleep -Milliseconds 900 }
+      '4' {
+        try { Show-Logs } catch { Err "Log view failed: $($_.Exception.Message)" }
+      }
+      '5' { Blank; Info 'Exiting - no changes made.'; return }
+      default { Blank; Warn 'Invalid choice - please enter 1, 2, 3, 4, or 5.'; Start-Sleep -Milliseconds 900 }
     }
   }
 }

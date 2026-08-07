@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 #
-# CyberSentinel DLP — Server one-liner installer.
+# CyberSentinel DLP — Server installer / manager (one-liner).
 #
-# This script downloads ONLY the production docker-compose file and
-# environment template — no source code is ever placed on the production
-# server. All services run from pre-built images on GHCR.
+# Downloads ONLY the production docker-compose file and environment template —
+# no source code is ever placed on the production server. All services run from
+# pre-built images on GHCR.
 #
 # Usage (one-liner):
 #   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo bash
 #
-# Or to a custom directory:
-#   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo INSTALL_DIR=/srv/cybersentineldlp bash
+# On start it detects any existing installation and shows a menu:
+#   [1] Install   [2] Update   [3] Delete   [4] Exit
+#
+# When run WITHOUT a terminal (e.g. a CI/cron pipe with no /dev/tty) it stays
+# non-interactive: an existing install is UPDATED, otherwise a fresh INSTALL is
+# performed — so the classic unattended one-liner keeps working.
+#
+# Custom directory:
+#   curl -fsSL .../install.sh | sudo INSTALL_DIR=/srv/cybersentineldlp bash
 #
 set -euo pipefail
 
@@ -23,13 +30,63 @@ COMPOSE_FILE="docker-compose.prod.yml"
 ENV_FILE=".env"
 ENV_EXAMPLE=".env.example"
 
+# ─── Colours ──────────────────────────────────────────────────────────
+# Enabled only when stdout is a real terminal (so piped/redirected output stays
+# clean) — override with NO_COLOR=1 to force-disable.
+if [ -t 1 ] && [ "${NO_COLOR:-0}" != "1" ]; then
+    C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+    C_RED=$'\033[1;31m';   C_GREEN=$'\033[1;32m'; C_YELLOW=$'\033[1;33m'
+    C_BLUE=$'\033[1;34m';  C_MAGENTA=$'\033[1;35m'; C_CYAN=$'\033[1;36m'
+    C_GREY=$'\033[0;90m'
+else
+    C_RESET=; C_BOLD=; C_DIM=; C_RED=; C_GREEN=; C_YELLOW=; C_BLUE=; C_MAGENTA=; C_CYAN=; C_GREY=
+fi
+
 # ─── Helpers ──────────────────────────────────────────────────────────
-c_blue()   { printf "\033[1;34m%s\033[0m\n" "$*"; }
-c_green()  { printf "\033[1;32m%s\033[0m\n" "$*"; }
-c_yellow() { printf "\033[1;33m%s\033[0m\n" "$*"; }
-c_red()    { printf "\033[1;31m%s\033[0m\n" "$*" >&2; }
-say()      { printf "[+] %s\n" "$*"; }
+c_blue()   { printf '%s%s%s\n' "${C_BLUE}"   "$*" "${C_RESET}"; }
+c_green()  { printf '%s%s%s\n' "${C_GREEN}"  "$*" "${C_RESET}"; }
+c_yellow() { printf '%s%s%s\n' "${C_YELLOW}" "$*" "${C_RESET}"; }
+c_red()    { printf '%s%s%s\n' "${C_RED}"    "$*" "${C_RESET}" >&2; }
+say()      { printf '%s❯%s %s\n' "${C_CYAN}" "${C_RESET}" "$*"; }
 die()      { c_red "[FATAL] $*"; exit 1; }
+
+# Panel / menu drawing primitives (left-bordered so colour codes never break
+# right-edge alignment).
+_bar()  { printf '  %s│%s  %s\n' "${C_GREY}" "${C_RESET}" "$*"; }
+_top()  { printf '  %s╭─%s %s%s%s\n' "${C_GREY}" "${C_RESET}" "${C_BOLD}" "$*" "${C_RESET}"; }
+_end()  { printf '  %s╰────────────────────────────────────────────────────────%s\n' "${C_GREY}" "${C_RESET}"; }
+
+# Product banner — slant "CyberSentinel" wordmark with a cyan→blue gradient and a
+# gentle line-by-line reveal on a real terminal. Pure-ASCII art so it renders on
+# every locale/code page; colour + animation degrade to plain text when piped.
+banner() {
+    local art=(
+'    ______      __              _____            __  _            __'
+'   / ____/_  __/ /_  ___  _____/ ___/___  ____  / /_(_)___  ___  / /'
+'  / /   / / / / __ \/ _ \/ ___/\__ \/ _ \/ __ \/ __/ / __ \/ _ \/ /'
+' / /___/ /_/ / /_/ /  __/ /   ___/ /  __/ / / / /_/ / / / /  __/ /'
+' \____/\__, /_.___/\___/_/   /____/\___/_/ /_/\__/_/_/ /_/\___/_/'
+'      /____/'
+    )
+    local grad=()
+    if [ -n "${C_RESET}" ]; then
+        if [ "$(tput colors 2>/dev/null || echo 0)" -ge 256 ]; then
+            # pale-cyan → blue vertical fade
+            grad=($'\033[38;5;123m' $'\033[38;5;87m' $'\033[38;5;51m' $'\033[38;5;45m' $'\033[38;5;39m' $'\033[38;5;33m')
+        else
+            grad=("${C_CYAN}" "${C_CYAN}" "${C_CYAN}" "${C_BLUE}" "${C_BLUE}" "${C_BLUE}")
+        fi
+    fi
+    printf '\n'
+    local i
+    for i in "${!art[@]}"; do
+        printf '%s%s%s\n' "${grad[i]:-}" "${art[i]}" "${C_RESET}"
+        if [ "${HAVE_TTY}" -eq 1 ] && [ "${NO_ANIM:-0}" != "1" ]; then sleep 0.03 2>/dev/null || true; fi
+    done
+    printf '%s\n' "         ${C_BOLD}D A T A   L O S S   P R E V E N T I O N${C_RESET}   ${C_DIM}·   S E R V E R${C_RESET}"
+    printf '%s\n' "               ${C_GREY}Server Installer  ·  Manager Console${C_RESET}"
+    printf '\n'
+}
 
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -37,20 +94,24 @@ require_root() {
     fi
 }
 
-# ─── Banner ───────────────────────────────────────────────────────────
-clear || true
-c_blue "================================================================"
-c_blue "  CyberSentinel DLP — Production Server Installer"
-c_blue "================================================================"
-echo
-say "Repository : ${GITHUB_REPO} (branch ${GITHUB_BRANCH})"
-say "Install dir: ${INSTALL_DIR}"
-say "No source code will be deployed — only the compose file and .env."
-echo
+# Is a controlling terminal available? `curl | sudo bash` feeds the SCRIPT to
+# bash on stdin, so we must read menu input from /dev/tty, not stdin. When even
+# /dev/tty can't be opened (CI/cron), we run non-interactively instead.
+HAVE_TTY=0
+if { : < /dev/tty; } 2>/dev/null; then HAVE_TTY=1; fi
 
-require_root
+# prompt VAR "message" "default" — reads one line from the controlling terminal.
+# Falls back to the default when there is no tty or the user just hits enter.
+prompt() {
+    local _var="$1" _msg="$2" _default="${3:-}" _reply=""
+    if [ "${HAVE_TTY}" -eq 1 ]; then
+        printf "%s" "${_msg}" > /dev/tty
+        IFS= read -r _reply < /dev/tty || _reply=""
+    fi
+    [ -z "${_reply}" ] && _reply="${_default}"
+    printf -v "${_var}" '%s' "${_reply}"
+}
 
-# ─── 1. Install Docker if missing ─────────────────────────────────────
 install_docker() {
     say "Docker not found — installing via official convenience script."
     curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
@@ -60,14 +121,84 @@ install_docker() {
     systemctl start docker
 }
 
-if ! command -v docker >/dev/null 2>&1; then
-    install_docker
-fi
+ensure_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        install_docker
+    fi
+    if ! docker compose version >/dev/null 2>&1; then
+        die "Docker is installed but 'docker compose' v2 is not available. Upgrade Docker."
+    fi
+    say "Docker $(docker --version | awk '{print $3}' | tr -d ',') OK"
+}
 
-if ! docker compose version >/dev/null 2>&1; then
-    die "Docker is installed but 'docker compose' v2 is not available. Upgrade Docker."
-fi
-say "Docker $(docker --version | awk '{print $3}' | tr -d ',') OK"
+# True when this host already carries a deployment: either the compose file is
+# on disk or containers named cybersentineldlp-* exist (running or stopped).
+is_installed() {
+    if [ -f "${INSTALL_DIR}/${COMPOSE_FILE}" ]; then
+        return 0
+    fi
+    if command -v docker >/dev/null 2>&1 \
+        && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^cybersentineldlp-'; then
+        return 0
+    fi
+    return 1
+}
+
+status_summary() {
+    _top "Current state"
+    _bar ""
+    if is_installed; then
+        _bar "${C_GREEN}●${C_RESET}  ${C_BOLD}Existing installation detected${C_RESET}"
+        _bar "   ${C_GREY}dir     ${C_RESET} ${INSTALL_DIR}"
+        if [ -f "${INSTALL_DIR}/${COMPOSE_FILE}" ] && command -v docker >/dev/null 2>&1; then
+            local running
+            running="$( (cd "${INSTALL_DIR}" 2>/dev/null && docker compose -f "${COMPOSE_FILE}" ps -q 2>/dev/null | wc -l | tr -d ' ') || echo 0)"
+            _bar "   ${C_GREY}running ${C_RESET} ${running} container(s)"
+        fi
+        local ver
+        ver="$(curl -fsS http://localhost:55000/health 2>/dev/null | grep -oE '"version":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
+        if [ -n "${ver}" ]; then
+            _bar "   ${C_GREY}api     ${C_RESET} ${C_GREEN}healthy${C_RESET} ${C_DIM}(v${ver})${C_RESET}"
+        else
+            _bar "   ${C_GREY}api     ${C_RESET} ${C_YELLOW}not responding on :55000${C_RESET}"
+        fi
+    else
+        _bar "${C_YELLOW}●${C_RESET}  No existing installation"
+        _bar "   ${C_GREY}dir     ${C_RESET} ${C_DIM}${INSTALL_DIR} (empty)${C_RESET}"
+    fi
+    _bar ""
+    _end
+    echo
+}
+
+# Wait (≈3 min) for the manager API to report healthy. Returns non-zero on timeout.
+wait_manager_health() {
+    say "Waiting for the manager API to come up (max ~3 minutes)"
+    local i
+    for i in $(seq 1 90); do
+        if curl -fsS http://localhost:55000/health >/dev/null 2>&1; then
+            echo; return 0
+        fi
+        sleep 2
+        printf "."
+    done
+    echo
+    return 1
+}
+
+# ══════════════════════════════════════════════════════════════════════
+#  ACTION: INSTALL  (fresh install or idempotent re-apply)
+# ══════════════════════════════════════════════════════════════════════
+# NOTE: the body below is intentionally left un-indented so the embedded
+# heredocs (WRAP / ROT) keep their closing markers at column 0.
+do_install() {
+c_blue "── Install ───────────────────────────────────────────────────"
+say "Repository : ${GITHUB_REPO} (branch ${GITHUB_BRANCH})"
+say "Install dir: ${INSTALL_DIR}"
+echo
+
+# ─── 1. Ensure Docker ─────────────────────────────────────────────────
+ensure_docker
 
 # ─── 2. Create install dir ────────────────────────────────────────────
 mkdir -p "${INSTALL_DIR}"
@@ -188,8 +319,15 @@ if [ ! -f "${INSTALL_DIR}/certs/fullchain.pem" ] || [ ! -f "${INSTALL_DIR}/certs
             -addext "keyUsage=digitalSignature,keyEncipherment" \
             -addext "extendedKeyUsage=serverAuth" \
             >/dev/null 2>&1
-        chown root:root "${INSTALL_DIR}/certs/privkey.pem" "${INSTALL_DIR}/certs/fullchain.pem"
-        chmod 600 "${INSTALL_DIR}/certs/privkey.pem"
+        # The dashboard nginx runs as the unprivileged `nginx` user (UID/GID 101
+        # in nginx:alpine) and mounts privkey.pem read-only. A root:root 600 key
+        # is unreadable to that user, so nginx aborts with "cannot load
+        # certificate key ... Permission denied" and crash-loops. Group-own the
+        # key to GID 101 and make it group-readable so the container can read it.
+        # The certs/ dir stays 700-root, so the key is still not exposed to
+        # non-root users on the host. (If you swap nginx base images, update 101.)
+        chown root:101 "${INSTALL_DIR}/certs/privkey.pem" "${INSTALL_DIR}/certs/fullchain.pem"
+        chmod 640 "${INSTALL_DIR}/certs/privkey.pem"
         chmod 644 "${INSTALL_DIR}/certs/fullchain.pem"
     else
         # No openssl — drop empty placeholders just so the bind-mount succeeds.
@@ -314,17 +452,7 @@ say "Starting all services in detached mode"
 docker compose -f "${COMPOSE_FILE}" up -d
 
 # ─── 8. Wait for health ───────────────────────────────────────────────
-say "Waiting for the manager API to come up (max ~3 minutes)"
-for i in $(seq 1 90); do
-    if curl -fsS http://localhost:55000/health >/dev/null 2>&1; then
-        break
-    fi
-    sleep 2
-    printf "."
-done
-echo
-
-if ! curl -fsS http://localhost:55000/health >/dev/null 2>&1; then
+if ! wait_manager_health; then
     c_red "[FATAL] Manager API did not become healthy within 3 minutes."
     c_red "Check the logs:"
     c_red "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs manager"
@@ -511,10 +639,9 @@ echo "  postgres / mongodb / redis / opensearch are reachable only on the"
 echo "  internal docker network. Use 'docker compose exec <svc>' for ops."
 echo
 c_blue "Useful commands:"
+echo "  csdlp status                                               # health + versions"
+echo "  csdlp logs manager -f                                      # follow manager logs"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} ps"
-echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs -f manager"
-echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} pull && \\"
-echo "    docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} up -d   # rolling update"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} down       # stop everything"
 if [ "${AUTO_UPDATE:-1}" != "0" ]; then
 echo "  tail -f /var/log/cybersentineldlp-autopull.log             # hourly auto-update log"
@@ -524,3 +651,251 @@ echo
 c_blue "Next: install agents on endpoints (run on Windows boxes):"
 echo "  powershell -ExecutionPolicy Bypass -Command \"irm ${RAW_BASE}/manage-windows-agent.ps1 | iex\""
 echo
+}
+# ── end do_install ────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════
+#  ACTION: UPDATE  (pull latest images, refresh compose/CLI, migrate)
+# ══════════════════════════════════════════════════════════════════════
+# Never touches .env, certs, or data volumes.
+do_update() {
+    c_blue "── Update ────────────────────────────────────────────────────"
+    if [ ! -f "${INSTALL_DIR}/${COMPOSE_FILE}" ]; then
+        die "No installation found at ${INSTALL_DIR} — choose Install first."
+    fi
+    ensure_docker
+    cd "${INSTALL_DIR}"
+    say "Updating deployment in ${INSTALL_DIR}"
+
+    # Refresh the compose file + helper tools from the repo — an update may ship
+    # compose changes (new service, new env var). .env and certs are left alone.
+    say "Refreshing ${COMPOSE_FILE}"
+    if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
+            "${RAW_BASE}/${COMPOSE_FILE}" -o "${COMPOSE_FILE}.new"; then
+        mv "${COMPOSE_FILE}.new" "${COMPOSE_FILE}"
+    else
+        rm -f "${COMPOSE_FILE}.new"
+        c_yellow "[!] Could not refresh ${COMPOSE_FILE} — keeping the existing one."
+    fi
+
+    for f in csdlp validate.sh; do
+        if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
+                "${RAW_BASE}/${f}" -o "${INSTALL_DIR}/${f}.new" 2>/dev/null; then
+            mv "${INSTALL_DIR}/${f}.new" "${INSTALL_DIR}/${f}"
+            chmod +x "${INSTALL_DIR}/${f}"
+        else
+            rm -f "${INSTALL_DIR}/${f}.new"
+        fi
+    done
+    ln -sf "${INSTALL_DIR}/csdlp" /usr/local/bin/csdlp 2>/dev/null || true
+
+    say "Pulling latest images from ghcr.io/${GITHUB_REPO} ..."
+    docker compose -f "${COMPOSE_FILE}" pull
+
+    say "Recreating services with the new images"
+    docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
+
+    if ! wait_manager_health; then
+        c_red "[!] Manager API did not become healthy within 3 minutes after the update."
+        c_red "    Check: docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs manager"
+        c_red "    Roll back if needed:  csdlp rollback"
+        return 1
+    fi
+
+    # This IS an upgrade path — apply any migrations the new image ships.
+    say "Applying database migrations (alembic upgrade head)"
+    if docker exec cybersentineldlp-manager alembic upgrade head >/dev/null 2>&1; then
+        say "Migrations applied (or already up to date)"
+    else
+        c_yellow "[!] 'alembic upgrade head' reported an issue — inspect with:"
+        c_yellow "      docker exec cybersentineldlp-manager alembic current"
+    fi
+
+    local ver
+    ver="$(curl -fsS http://localhost:55000/health 2>/dev/null | grep -oE '"version":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
+    echo
+    c_green "================================================================"
+    c_green "  Update Complete${ver:+  —  version ${ver}}"
+    c_green "================================================================"
+    local host_ip dash_port
+    host_ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
+    dash_port=$(grep -E '^DASHBOARD_HOST_PORT=' "${INSTALL_DIR}/${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" | head -1)
+    dash_port="${dash_port:-3023}"
+    echo "  Dashboard : https://${host_ip}:${dash_port}/"
+    echo "  Verify    : csdlp status"
+    echo
+}
+
+# ══════════════════════════════════════════════════════════════════════
+#  ACTION: DELETE  (stop + remove the deployment; optional data wipe)
+# ══════════════════════════════════════════════════════════════════════
+do_delete() {
+    c_blue "── Delete ────────────────────────────────────────────────────"
+    if ! is_installed; then
+        c_yellow "No installation found at ${INSTALL_DIR} — nothing to delete."
+        return 0
+    fi
+
+    c_red "This STOPS and REMOVES the CyberSentinel DLP deployment on this host."
+    local ans
+    prompt ans "Proceed? [y/N]: " "N"
+    case "${ans}" in
+        y|Y|yes|YES) ;;
+        *) say "Delete cancelled."; return 0 ;;
+    esac
+
+    # Data-volume wipe is a separate, explicit confirmation — this is the only
+    # irreversible part (destroys all events/incidents/policies/config).
+    local rmvol
+    prompt rmvol "Also DELETE all data volumes (postgres, mongodb, opensearch, redis, ml-models)? This DESTROYS ALL DLP DATA. [y/N]: " "N"
+
+    # Image removal — reclaims the several GB install.sh pulled. Off by default so
+    # a reinstall stays fast; note base images (postgres/mongo/redis/opensearch)
+    # may be shared with other stacks on this host.
+    local rmimg
+    prompt rmimg "Also remove the downloaded Docker images (manager/dashboard/relay + postgres/mongo/redis/opensearch)? [y/N]: " "N"
+
+    if [ -f "${INSTALL_DIR}/${COMPOSE_FILE}" ] && command -v docker >/dev/null 2>&1; then
+        cd "${INSTALL_DIR}"
+        # Build the down flags from the operator's choices: containers + network
+        # always; volumes and images on request. Doing it in one `down` keeps the
+        # compose project the single source of truth for what to remove.
+        local down_flags=(--remove-orphans)
+        case "${rmvol}" in y|Y|yes|YES) down_flags+=(-v);        say "Stopping the stack and removing data volumes" ;; *) say "Stopping the stack (keeping data volumes)" ;; esac
+        case "${rmimg}" in y|Y|yes|YES) down_flags+=(--rmi all); say "Images will also be removed" ;; esac
+        docker compose -f "${COMPOSE_FILE}" down "${down_flags[@]}" || true
+    elif command -v docker >/dev/null 2>&1; then
+        # No compose file but tagged containers exist — remove them by name.
+        say "Removing cybersentineldlp-* containers"
+        docker ps -a --format '{{.Names}}' 2>/dev/null | grep '^cybersentineldlp-' \
+            | xargs -r docker rm -f >/dev/null 2>&1 || true
+        # Fallback image removal (no compose): drop just the GHCR app images by
+        # repository match — base images are left alone to avoid nuking shared ones.
+        case "${rmimg}" in
+            y|Y|yes|YES)
+                say "Removing CyberSentinel DLP app images"
+                docker images --format '{{.ID}} {{.Repository}}' 2>/dev/null \
+                    | awk '/cybersentineldlp-prod/{print $1}' | sort -u \
+                    | xargs -r docker rmi -f >/dev/null 2>&1 || true
+                ;;
+        esac
+    fi
+
+    # System footprint the installer added: auto-update cron, logrotate rule,
+    # its log file, and the csdlp symlink.
+    say "Removing auto-update cron entry, logrotate rule, log, and csdlp symlink"
+    local _cron_tmp
+    _cron_tmp="$(mktemp)"
+    crontab -l 2>/dev/null | grep -vE "auto-pull\.sh|CyberSentinel DLP — auto-update" > "${_cron_tmp}" || true
+    crontab "${_cron_tmp}" 2>/dev/null || true
+    rm -f "${_cron_tmp}"
+    rm -f /etc/logrotate.d/cybersentineldlp-autopull
+    rm -f /var/log/cybersentineldlp-autopull.log
+    rm -f /usr/local/bin/csdlp
+
+    # Optionally remove the install directory (compose, .env, certs, backups).
+    local rmdir
+    prompt rmdir "Remove the install directory ${INSTALL_DIR} (compose, .env, certs, backups)? [y/N]: " "N"
+    case "${rmdir}" in
+        y|Y|yes|YES)
+            case "${INSTALL_DIR}" in
+                ""|/|/root|/home|/etc|/usr|/var|/bin|/sbin|/lib|/boot)
+                    c_red "Refusing to 'rm -rf ${INSTALL_DIR}' — remove it manually if you really mean to."
+                    ;;
+                *)
+                    # Warn about the stale-volume trap: removing .env while KEEPING
+                    # volumes means a future install mints new passwords the old
+                    # volumes will reject.
+                    case "${rmvol}" in
+                        y|Y|yes|YES) : ;;
+                        *) c_yellow "[!] You kept the data volumes but are deleting ${ENV_FILE}. A future"
+                           c_yellow "    reinstall will generate NEW passwords the old volumes will reject."
+                           c_yellow "    Back up ${INSTALL_DIR}/${ENV_FILE} now if you intend to reinstall." ;;
+                    esac
+                    rm -rf "${INSTALL_DIR}"
+                    say "Removed ${INSTALL_DIR}"
+                    ;;
+            esac
+            ;;
+        *)
+            say "Kept ${INSTALL_DIR} (its ${ENV_FILE} + certs remain)."
+            ;;
+    esac
+
+    echo
+    c_green "Delete complete."
+    _bar "${C_GREY}containers/network${C_RESET}  removed"
+    case "${rmvol}" in
+        y|Y|yes|YES) _bar "${C_GREY}data volumes      ${C_RESET}  ${C_RED}removed (data destroyed)${C_RESET}" ;;
+        *)           _bar "${C_GREY}data volumes      ${C_RESET}  kept — reinstall reuses them (keep ${ENV_FILE})" ;;
+    esac
+    case "${rmimg}" in
+        y|Y|yes|YES) _bar "${C_GREY}docker images     ${C_RESET}  removed" ;;
+        *)           _bar "${C_GREY}docker images     ${C_RESET}  kept (faster reinstall)" ;;
+    esac
+    _bar "${C_GREY}docker engine     ${C_RESET}  ${C_DIM}left installed — shared component, remove via your package manager if desired${C_RESET}"
+    echo
+}
+
+# ══════════════════════════════════════════════════════════════════════
+#  Menu / entrypoint
+# ══════════════════════════════════════════════════════════════════════
+# menu item:  _mi KEY COLOR NAME DESC
+_mi() {
+    printf '  %s│%s   %s%s[%s]%s  %s%-8s%s %s%s%s\n' \
+        "${C_GREY}" "${C_RESET}" "${C_BOLD}" "$2" "$1" "${C_RESET}" \
+        "$2" "$3" "${C_RESET}" "${C_GREY}" "$4" "${C_RESET}"
+}
+
+main_menu() {
+    status_summary
+    local default_hint choice
+    if is_installed; then
+        default_hint="2"   # existing install → Update is the natural default
+    else
+        default_hint="1"   # nothing here yet → Install
+    fi
+
+    while true; do
+        _top "Choose an action"
+        _bar ""
+        _mi 1 "${C_GREEN}"  "Install" "fresh install (or safely re-apply)"
+        _mi 2 "${C_CYAN}"   "Update"  "pull latest images + apply migrations"
+        _mi 3 "${C_YELLOW}" "Delete"  "stop & remove (optionally wipe data)"
+        _mi 4 "${C_GREY}"   "Exit"    "quit without making changes"
+        _bar ""
+        _end
+        echo
+        prompt choice "  ${C_BOLD}➜${C_RESET}  Enter choice ${C_DIM}[1-4, default ${default_hint}]${C_RESET}: " "${default_hint}"
+        echo
+        case "${choice}" in
+            1) do_install; return 0 ;;
+            2) do_update;  return 0 ;;
+            3) do_delete;  return 0 ;;
+            4|q|Q|exit) say "Nothing to do — bye."; return 0 ;;
+            *) c_yellow "Invalid choice: '${choice}'. Enter 1, 2, 3, or 4."; echo ;;
+        esac
+    done
+}
+
+# ─── Entry ────────────────────────────────────────────────────────────
+clear 2>/dev/null || true
+banner
+say "Repository  ${C_DIM}${GITHUB_REPO} (${GITHUB_BRANCH})${C_RESET}"
+say "Install dir ${C_DIM}${INSTALL_DIR}${C_RESET}"
+say "No source code is deployed — only the compose file and .env."
+
+require_root
+
+if [ "${HAVE_TTY}" -eq 1 ]; then
+    main_menu
+else
+    # No terminal (CI/cron pipe): keep the classic unattended behaviour.
+    if is_installed; then
+        say "No interactive terminal detected — UPDATING the existing install."
+        do_update
+    else
+        say "No interactive terminal detected — performing a fresh INSTALL."
+        do_install
+    fi
+fi

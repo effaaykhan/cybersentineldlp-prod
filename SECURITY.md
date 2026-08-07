@@ -41,21 +41,19 @@ Deferred items are tracked at the bottom of this file with a rationale.
 ## CRITICAL
 
 ### CR-1 — OpenSearch security plugin disabled + DB ports on 0.0.0.0
-**Files:** `docker-compose.prod.yml`, `docker-compose.deploy.yml`
-**Fix:** `docker-compose.deploy.yml` no longer sets
-`DISABLE_SECURITY_PLUGIN=true` — the security plugin is now enforced,
-admin password must be supplied via `OPENSEARCH_PASSWORD`. All database
-tier services (postgres, mongo, redis, opensearch) lost their
-`ports: - "…:…"` keys in both prod and deploy compose files. Databases
-are internal-only on the `cybersentineldlp` / `cybersentineldlp-net` docker
-networks. Only `manager` (55000) and `dashboard` (80→3000) remain host-
-exposed. `security_opt: - no-new-privileges:true` added to every
-container.
+**Files:** `docker-compose.prod.yml`
+**Fix:** `docker-compose.prod.yml` enforces the OpenSearch security
+plugin (no `DISABLE_SECURITY_PLUGIN=true`); the admin password must be
+supplied via `OPENSEARCH_PASSWORD`. All database tier services (postgres,
+mongo, redis, opensearch) have no `ports: - "…:…"` keys — databases are
+internal-only on the `cybersentineldlp` docker network. Only `manager`
+(55000) and `dashboard` (3023→3000) remain host-exposed.
+`security_opt: - no-new-privileges:true` is set on every container.
 
 ### CR-2 — Hardcoded fallback OpenSearch password `CyberSentinel2025!`
-**Files:** `docker-compose.deploy.yml:128,180,223`,
-`.env.example:53`, `server/.env.example:41`
-**Fix:** All three `${OPENSEARCH_PASSWORD:-CyberSentinel2025!}` fallbacks
+**Files:** `docker-compose.prod.yml`, `.env.example:53`,
+`server/.env.example:41`
+**Fix:** The `${OPENSEARCH_PASSWORD:-CyberSentinel2025!}` fallbacks were
 replaced with `${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD must be set}`.
 The two `.env.example` files now use the placeholder
 `change-this-strong-opensearch-password`, which is picked up by

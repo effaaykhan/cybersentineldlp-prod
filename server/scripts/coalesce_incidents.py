@@ -11,8 +11,8 @@ Safe by default: runs a DRY RUN and prints what it would do. Pass --apply to
 back up the ``incidents`` collection to ``incidents_backup_precoalesce`` and
 replace it with the coalesced set.
 
-  docker exec cybersentinel-manager python /app/scripts/coalesce_incidents.py
-  docker exec cybersentinel-manager python /app/scripts/coalesce_incidents.py --apply
+  docker exec cybersentineldlp-manager python /app/scripts/coalesce_incidents.py
+  docker exec cybersentineldlp-manager python /app/scripts/coalesce_incidents.py --apply
 """
 import asyncio
 import sys

@@ -5,14 +5,16 @@ It covers:
 
 1. [Server installation](#1-server-installation) — one-liner on a fresh
    Ubuntu/Debian box. Pulls pre-built images from GHCR. **No source code
-   ever lands on the production host.**
+   ever lands on the production host**, and the backend image itself ships
+   as **compiled binaries** (see [Source protection](#source-protection)).
 2. [Building the Windows agent](#2-building-the-windows-agent) — compile
    the C++ binary on a build box and publish it (with a SHA-256 sidecar)
    to the repo so endpoints can fetch a verified copy.
 3. [Installing the Windows agent on endpoints](#3-installing-the-windows-agent-on-endpoints)
    — one-liner on each endpoint. Verifies the SHA-256 of the downloaded
    binary against the sidecar before running it.
-4. [Day-2 ops](#4-day-2-ops) — updates, backups, troubleshooting.
+4. [Day-2 ops with `csdlp`](#4-day-2-ops-with-csdlp) — one CLI for status,
+   diagnostics, logs, safe updates, rollback, and backups.
 
 > **Repo:** `effaaykhan/cybersentineldlp-prod`
 > **GHCR images:**
@@ -90,8 +92,8 @@ Containers running after install:
 | `cybersentineldlp-mongodb` | `mongo:7.0` | _none_ | DLP events, alerts, incidents |
 | `cybersentineldlp-redis` | `redis:7-alpine` | _none_ | Token blacklist, rate limit, cache |
 | `cybersentineldlp-opensearch` | `opensearchproject/opensearch:2.11.0` | _none_ | Event search index |
-| `cybersentineldlp-manager` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest` | **55000** | FastAPI API |
-| `cybersentineldlp-dashboard` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest` | **80** → 3000 | React SPA + nginx |
+| `cybersentineldlp-manager` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest` (compiled) | **55000** | FastAPI API |
+| `cybersentineldlp-dashboard` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest` | **3023** → 3000 (HTTPS / TLS 1.3) | React SPA + nginx |
 | `cybersentineldlp-celery-worker` | (same manager image) | _none_ | Async event processing |
 | `cybersentineldlp-celery-beat` | (same manager image) | _none_ | Scheduled tasks |
 
@@ -109,7 +111,9 @@ password. If you missed it:
 docker logs cybersentineldlp-manager 2>&1 | grep generated_password
 ```
 
-Open the dashboard at `http://<server-ip>/`, log in as `admin` with
+Open the dashboard at **`https://<server-ip>:3023/`** (TLS 1.3 + HTTP/2;
+self-signed cert → browser warning until you install a real one — plain
+`http://` on that port auto-redirects to HTTPS). Log in as `admin` with
 that password, and **change it on the first login** (Settings → Profile
 → Change Password). The audit hardened `/api/v1/auth/change-password`
 to require a valid JWT, so the dashboard's change-password flow is the
@@ -118,6 +122,54 @@ only way to rotate it.
 > **Self-registration is disabled.** All new accounts must be created
 > by an admin via the Users page (Admin → Users → New User), since the
 > data layer doesn't have per-tenant scoping yet.
+
+### Source protection
+
+The manager/celery image ships as **compiled native binaries**, not Python:
+
+- On every push, CI (`.github/workflows/build-images.yml`) Cythonizes the
+  backend — `server/compile_app.py` compiles ~90 modules (the
+  classification engine, ML classifier, policy evaluation, detection, EDM,
+  actions, services, …) into `.so` C-extensions and **deletes the `.py`**.
+  The compile runs on GitHub's runners; **the client server never compiles
+  and never receives source** — it only `docker pull`s the finished image.
+- Because the Dockerfile is **multi-stage**, the source-bearing build stage
+  is discarded — `docker save` / `docker cp` on the pulled image find only
+  `.so`, no backend `.py`.
+- **Kept as source (unavoidable):** the FastAPI framework layer —
+  `app/api/**`, `app/main.py`, `app/core/security.py` (~30 files). Cython
+  can't compile FastAPI `Depends`-style handler parameters. These files are
+  thin HTTP wiring that *calls into* the compiled engine; they expose which
+  endpoints exist, not the algorithms. Package `__init__.py` (import wiring)
+  is also kept. This is deterrence, not DRM: a determined root user can
+  still reverse-engineer a `.so`, but casual copy-paste theft is stopped.
+
+> Dev is unaffected: `docker-compose.yml` bind-mounts `./server` over
+> `/app`, shadowing the compiled code with live source for hot-reload — so
+> the same Dockerfile yields compiled **prod** images while **dev** edits
+> raw `.py`.
+
+### The `csdlp` operations CLI
+
+`install.sh` also drops **`csdlp`** — a single command for all day-2
+operations — into the deployment dir and symlinks it onto `PATH`:
+
+```bash
+csdlp help        # full command guide
+csdlp status      # health of every service + versions
+csdlp doctor      # full diagnostics (secrets redacted)
+```
+
+If it isn't on `PATH` (e.g. the symlink step needed root):
+
+```bash
+sudo /opt/cybersentineldlp/csdlp self-install     # copies to /usr/local/bin/csdlp
+# or fetch standalone:
+curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/csdlp \
+  -o /usr/local/bin/csdlp && chmod +x /usr/local/bin/csdlp
+```
+
+See [Day-2 ops with `csdlp`](#4-day-2-ops-with-csdlp).
 
 ---
 
@@ -324,63 +376,83 @@ Remove-Item "C:\ProgramData\CyberSentinelDLP" -Recurse -Force
 
 ---
 
-## 4. Day-2 ops
+## 4. Day-2 ops with `csdlp`
 
-### Server — pull a new image and roll forward
+`csdlp` is the single tool for operating the server — run it anywhere on the
+host (it auto-detects the deployment under `/opt/cybersentineldlp`).
+`csdlp help` prints the full guide.
 
-The CI workflow at `.github/workflows/build-images.yml` rebuilds and
-re-publishes both GHCR images on every push to `main`. To pull the new
-versions onto the running server:
+| Task | Command |
+|---|---|
+| Health of the whole stack | `csdlp status` |
+| Full diagnostics (secrets redacted) → shareable file | `csdlp doctor --bundle` |
+| Tail / follow logs | `csdlp logs [service] [-f]` |
+| **Safe** update (backup → pull → migrate → health-gate → auto-rollback) | `csdlp update` |
+| Update to a specific published version | `csdlp update <tag>` |
+| Undo the last update | `csdlp rollback` |
+| Snapshot Postgres + Mongo | `csdlp backup` |
+| Restore from a backup dir | `csdlp restore <dir>` |
+| Run DB migrations | `csdlp migrate` |
+| Restart one service / all | `csdlp restart [service]` |
+| First-boot admin password | `csdlp secret admin-password` |
+| Deployed image + API version | `csdlp version` |
+
+### Safe update + rollback
+
+CI (`.github/workflows/build-images.yml`) rebuilds and re-publishes the GHCR
+images on every push to `main`. To roll a server forward:
 
 ```bash
-cd /opt/cybersentineldlp
-sudo docker compose -f docker-compose.prod.yml pull
+csdlp update            # latest images, safely
+csdlp update 2.3.0      # or a specific published tag
+csdlp rollback          # revert to the pre-update versions
+```
+
+`update` first snapshots the current image versions **and takes a DB
+backup**, then pulls, runs migrations, brings the stack up, and polls
+`/health`. **If the stack is unhealthy afterwards it automatically rolls
+back** to the versions it saved. Volumes (postgres/mongo/opensearch data)
+are always preserved. `.env` is the only per-server difference, so these
+commands behave identically on every server.
+
+### Diagnostics
+
+```bash
+csdlp status            # quick: is everything healthy right now?
+csdlp doctor            # deep: services, /health, per-dependency probes,
+                        # recent errors per service, disk/mem, .env (redacted)
+csdlp doctor --bundle   # same, written to a file to send to the vendor
+```
+
+Because `doctor` redacts every secret, its output is safe to share.
+
+### Under the hood (raw equivalents)
+
+`csdlp` just wraps `docker compose`. The raw commands (run from
+`/opt/cybersentineldlp`, compose file `docker-compose.prod.yml`):
+
+```bash
+# update
+sudo docker compose -f docker-compose.prod.yml pull && \
 sudo docker compose -f docker-compose.prod.yml up -d
-sudo docker compose -f docker-compose.prod.yml ps
-```
 
-`up -d` will recreate only the containers whose images changed. Volumes
-(postgres data, mongo data, opensearch index, etc.) are preserved.
-
-### Server — full restart
-
-```bash
-cd /opt/cybersentineldlp
-sudo docker compose -f docker-compose.prod.yml down
-sudo docker compose -f docker-compose.prod.yml up -d
-```
-
-### Server — backup the data tier
-
-```bash
-# Postgres (users, RBAC, audit log)
-sudo docker compose -f /opt/cybersentineldlp/docker-compose.prod.yml exec -T postgres \
-    pg_dump -U cybersentineldlp cybersentineldlp | gzip > postgres-$(date +%F).sql.gz
-
-# MongoDB (events, alerts, incidents)
-sudo docker compose -f /opt/cybersentineldlp/docker-compose.prod.yml exec -T mongodb \
-    mongodump --uri "mongodb://admin:$(grep ^MONGODB_PASSWORD /opt/cybersentineldlp/.env | cut -d= -f2)@localhost:27017/?authSource=admin" \
-    --archive --gzip > mongo-$(date +%F).archive.gz
-```
-
-Don't forget to back up `/opt/cybersentineldlp/.env` (offline, encrypted)
-— it's the one thing you can't recover.
-
-### Server — view logs
-
-```bash
-cd /opt/cybersentineldlp
-
-# All services
-sudo docker compose -f docker-compose.prod.yml logs --tail=100 -f
-
-# Just one service
+# logs
 sudo docker compose -f docker-compose.prod.yml logs --tail=100 -f manager
-sudo docker compose -f docker-compose.prod.yml logs --tail=100 -f dashboard
-sudo docker compose -f docker-compose.prod.yml logs --tail=100 -f celery-worker
+
+# backup (csdlp backup does this with the .env credentials automatically)
+sudo docker compose -f docker-compose.prod.yml exec -T postgres \
+    pg_dump -U "$(sed -n 's/^POSTGRES_USER=//p' .env)" \
+            "$(sed -n 's/^POSTGRES_DB=//p' .env)" | gzip > postgres-$(date +%F).sql.gz
 ```
+
+Always back up `/opt/cybersentineldlp/.env` offline — it's the one thing you
+can't regenerate.
 
 ### Endpoint — view agent logs
+
+Easiest: run the Windows agent manager (`manage-windows-agent.ps1`) and pick
+**[4] Logs** — it locates the active log (handling rotation), colour-codes by
+severity, and can follow live or filter to errors/warnings. Or directly:
 
 ```powershell
 Get-Content "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.log" -Tail 100 -Wait
@@ -449,8 +521,10 @@ nmap -p 5432,27017,6379,9200 $SERVER
 
 ### Where to find more
 
+- **Operations CLI**: `csdlp` (repo root) — `csdlp help`
+- **Backend compilation**: `server/compile_app.py` + `server/Dockerfile`
 - **Security audit findings + fix log**: `SECURITY.md`
 - **Server compose**: `docker-compose.prod.yml`
-- **Agent source**: `agents/endpoint/windows/`
+- **Agent source**: `agents/endpoint/windows/` (Windows), `agents/endpoint/linux/` (Linux)
 - **CI workflow**: `.github/workflows/build-images.yml`
 - **Persistent automation memory** for Claude Code: `~/.claude/projects/-home-soc-Data-Loss-Prevention/memory/`

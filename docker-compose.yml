@@ -2,7 +2,7 @@ services:
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
-    container_name: cybersentinel-postgres
+    container_name: cybersentineldlp-postgres
     networks:
       - cybersentinel-net
     ports:
@@ -25,7 +25,7 @@ services:
   # MongoDB Database
   mongodb:
     image: mongo:7
-    container_name: cybersentinel-mongodb
+    container_name: cybersentineldlp-mongodb
     networks:
       - cybersentinel-net
     ports:
@@ -47,7 +47,7 @@ services:
   # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: cybersentinel-redis
+    container_name: cybersentineldlp-redis
     networks:
       - cybersentinel-net
     ports:
@@ -69,7 +69,7 @@ services:
     # no initial-admin-password interaction — the bump is a plain image swap over
     # the existing volume.
     image: opensearchproject/opensearch:2.19.0
-    container_name: cybersentinel-opensearch
+    container_name: cybersentineldlp-opensearch
     networks:
       - cybersentinel-net
     ports:
@@ -99,7 +99,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    container_name: cybersentinel-manager
+    container_name: cybersentineldlp-manager
     networks:
       - cybersentinel-net
     ports:
@@ -172,7 +172,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    container_name: cybersentinel-celery-worker
+    container_name: cybersentineldlp-celery-worker
     networks:
       - cybersentinel-net
     environment:
@@ -230,7 +230,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    container_name: cybersentinel-celery-beat
+    container_name: cybersentineldlp-celery-beat
     networks:
       - cybersentinel-net
     environment:
@@ -295,7 +295,7 @@ services:
         - VITE_WS_URL=${VITE_WS_URL:-}
         - VITE_APP_NAME=CyberSentinel DLP
         - VITE_APP_VERSION=2.0.0
-    container_name: cybersentinel-dashboard
+    container_name: cybersentineldlp-dashboard
     networks:
       - cybersentinel-net
     ports:
@@ -320,7 +320,7 @@ services:
     build:
       context: ./smtp-relay
       dockerfile: Dockerfile
-    container_name: cybersentinel-smtp-relay
+    container_name: cybersentineldlp-smtp-relay
     networks:
       - cybersentinel-net
     environment:

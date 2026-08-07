@@ -22,11 +22,11 @@ Enforce → ML Classifier → Retrain, or POST to /api/v1/ml-classifier/retrain.
 
 RUN IT IN THE MANAGER CONTAINER so PDF/DOCX/OCR are available, e.g.:
 
-    docker cp ./my-docs cybersentinel-manager:/tmp/my-docs
-    docker cp samples/ml-training/folder_to_csv.py cybersentinel-manager:/tmp/f2c.py
-    docker exec -e PYTHONPATH=/app -w /app cybersentinel-manager \
+    docker cp ./my-docs cybersentineldlp-manager:/tmp/my-docs
+    docker cp samples/ml-training/folder_to_csv.py cybersentineldlp-manager:/tmp/f2c.py
+    docker exec -e PYTHONPATH=/app -w /app cybersentineldlp-manager \
         python3 /tmp/f2c.py /tmp/my-docs -o /tmp/training-mine.csv
-    docker cp cybersentinel-manager:/tmp/training-mine.csv ./training-mine.csv
+    docker cp cybersentineldlp-manager:/tmp/training-mine.csv ./training-mine.csv
 """
 import argparse
 import csv

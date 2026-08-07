@@ -18,7 +18,7 @@ per-level counts:
 ```
 
 Options: `--public-per-level N` (public rows/level, default 300), `--balance
-min|none`, `--per-level N`, `--container NAME` (default `cybersentinel-manager`),
+min|none`, `--per-level N`, `--container NAME` (default `cybersentineldlp-manager`),
 `--host URL`, `--replace`. It runs the public build on the host, extracts your
 documents **inside the manager container** (for PDF/DOCX/OCR), merges with your
 rows preferred, and optionally POSTs the result to `/ml-classifier/retrain`.
@@ -71,11 +71,11 @@ my-docs/
 Run it **inside the manager container** (so PDF/DOCX/OCR work):
 
 ```bash
-docker cp ./my-docs cybersentinel-manager:/tmp/my-docs
-docker cp samples/ml-training/folder_to_csv.py cybersentinel-manager:/tmp/f2c.py
-docker exec -e PYTHONPATH=/app -w /app cybersentinel-manager \
+docker cp ./my-docs cybersentineldlp-manager:/tmp/my-docs
+docker cp samples/ml-training/folder_to_csv.py cybersentineldlp-manager:/tmp/f2c.py
+docker exec -e PYTHONPATH=/app -w /app cybersentineldlp-manager \
     python3 /tmp/f2c.py /tmp/my-docs -o /tmp/training-mine.csv
-docker cp cybersentinel-manager:/tmp/training-mine.csv ./training-mine.csv
+docker cp cybersentineldlp-manager:/tmp/training-mine.csv ./training-mine.csv
 ```
 
 It handles `.pdf` (text **and** OCR for scans), `.docx`, `.xlsx`, `.pptx`,

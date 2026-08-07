@@ -9,7 +9,7 @@ image pull the target server (.76) applies the new policies via _seed_default_
 policies() (INSERT ... ON CONFLICT (name) DO NOTHING — adds the newly-created
 policies, never overwrites operator edits or the ones already present).
 
-    docker exec -e PYTHONPATH=/app -w /app cybersentinel-manager \
+    docker exec -e PYTHONPATH=/app -w /app cybersentineldlp-manager \
         python3 /app/../scripts/export_policies.py            # writes /app/data/default_policies.json
 
 (The dev manager mounts ./server:/app, so /app/data/... IS server/data/... in the

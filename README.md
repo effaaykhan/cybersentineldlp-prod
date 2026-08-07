@@ -34,6 +34,12 @@ This clones the repo, generates secure passwords, starts all services, and print
 
 #### Install updates
 
+> **Easiest:** `csdlp update` does everything below **safely** — it snapshots
+> the current versions, takes a DB backup, pulls, runs migrations, health-checks,
+> and **auto-rolls-back** if the stack comes up unhealthy. `csdlp rollback` undoes
+> the last update. See [Day-2 ops with `csdlp`](DEPLOYMENT.md#4-day-2-ops-with-csdlp).
+> The manual steps below are the raw equivalent.
+
 Pull the latest images, **apply any new database migrations**, then restart. The
 migration step is required for upgrades — the app auto-creates the schema on a
 fresh install, but new columns/roles on existing tables only land via Alembic
@@ -90,6 +96,9 @@ image carries all code and dependencies, so nothing else changes on the host.
 > The published images are self-contained: **no source code or build files are
 > ever copied to the deployment host** — only the two container images are pulled.
 > Everything the platform needs at runtime (including the OCR engine) is baked in.
+> The backend image goes further: its Python is **compiled to native `.so`
+> binaries** at build time (Cython, in CI), so the host holds no readable backend
+> source — see [Source protection](DEPLOYMENT.md#source-protection).
 
 **Manual install (production, step-by-step):**
 

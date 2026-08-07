@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+#
+# csdlp — CyberSentinel DLP single operations CLI.
+#
+# One tool to operate, debug, update and roll back a deployed stack. Wraps
+# `docker compose` with safe update/rollback, backups, diagnostics and log
+# access. Install to /usr/local/bin/csdlp (see `csdlp self-install`).
+#
+#   csdlp status                 health of every service + versions
+#   csdlp doctor [--bundle]      full diagnostics (secrets redacted); --bundle -> tarball
+#   csdlp logs [service] [-f]    tail/follow logs (all services, or one)
+#   csdlp update [IMAGE_TAG]     backup -> pull -> migrate -> up -> health-gate -> auto-rollback
+#   csdlp rollback               revert to the image versions from before the last update
+#   csdlp backup                 snapshot postgres + mongo to ./backups/<ts>/
+#   csdlp restore <dir>          restore postgres + mongo from a backup dir
+#   csdlp migrate                run DB migrations (alembic upgrade head)
+#   csdlp restart [service]      restart one service or the whole stack
+#   csdlp ps                     docker compose ps
+#   csdlp secret admin-password  print the first-boot admin password (from manager logs)
+#   csdlp version                image tags/digests + API version
+#   csdlp self-install           copy this script to /usr/local/bin/csdlp
+#
+set -uo pipefail
+
+# ─── locate the deployment (dir with the prod compose file + .env) ────────
+CSDLP_DIR="${CSDLP_DIR:-}"
+_find_dir() {
+    for d in "$CSDLP_DIR" "$PWD" /opt/cybersentineldlp /srv/cybersentineldlp; do
+        [ -n "$d" ] || continue
+        for f in docker-compose.prod.yml docker-compose.yml docker-compose.deploy.yml; do
+            [ -f "$d/$f" ] && { echo "$d|$f"; return 0; }
+        done
+    done
+    return 1
+}
+_loc="$(_find_dir)" || { echo "csdlp: no docker-compose file found (set CSDLP_DIR)" >&2; exit 1; }
+DIR="${_loc%%|*}"; COMPOSE="${_loc##*|}"
+# CSDLP_COMPOSE forces a specific compose file (e.g. the base file on a dev box).
+[ -n "${CSDLP_COMPOSE:-}" ] && [ -f "$DIR/${CSDLP_COMPOSE}" ] && COMPOSE="${CSDLP_COMPOSE}"
+cd "$DIR" || exit 1
+ENVF="$DIR/.env"
+
+# ─── ui ───────────────────────────────────────────────────────────────────
+if [ -t 1 ]; then C0=$'\033[0m'; CB=$'\033[1;34m'; CG=$'\033[1;32m'; CY=$'\033[1;33m'; CR=$'\033[1;31m'; CD=$'\033[2m'
+else C0=; CB=; CG=; CY=; CR=; CD=; fi
+hd()  { printf '%s== %s ==%s\n' "$CB" "$*" "$C0"; }
+ok()  { printf '  %s[ok]%s %s\n' "$CG" "$C0" "$*"; }
+warn(){ printf '  %s[!!]%s %s\n' "$CY" "$C0" "$*"; }
+err() { printf '  %s[xx]%s %s\n' "$CR" "$C0" "$*" >&2; }
+kv()  { printf '  %-14s %s\n' "$1" "$2"; }
+
+dc()  { docker compose -f "$COMPOSE" "$@"; }
+# load a single key from .env without exposing the whole file
+envget() { [ -f "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -1 | tr -d '"'"'"' '; }
+# run curl inside the manager container (works regardless of host port mapping)
+mgr_curl() { dc exec -T manager curl -sk --max-time 8 "$@" 2>/dev/null; }
+
+MANAGER_IMG="$(grep -oE 'ghcr\.io/[^ ]*dlp-manager[^ ]*' "$COMPOSE" | head -1)"
+DASH_IMG="$(grep -oE 'ghcr\.io/[^ ]*dlp-dashboard[^ ]*' "$COMPOSE" | head -1)"
+# Fallback for locally-built (dev) compose that uses build: instead of a ghcr
+# image — read the actual image off the running container.
+_running_img() { docker inspect "$(docker compose -f "$COMPOSE" ps -q "$1" 2>/dev/null | head -1)" --format '{{.Config.Image}}' 2>/dev/null; }
+[ -z "$MANAGER_IMG" ] && MANAGER_IMG="$(_running_img manager)"
+[ -z "$DASH_IMG" ] && DASH_IMG="$(_running_img dashboard)"
+
+# ─── subcommands ──────────────────────────────────────────────────────────
+cmd_status() {
+    hd "CyberSentinel DLP — status"
+    kv "dir" "$DIR"
+    kv "compose" "$COMPOSE"
+    local h; h="$(mgr_curl http://localhost:55000/health)"
+    if [ -n "$h" ]; then
+        kv "api" "$(printf '%s' "$h" | grep -oE '"status":"[^"]*"' | cut -d: -f2 | tr -d '"')"
+        kv "version" "$(printf '%s' "$h" | grep -oE '"version":"[^"]*"' | cut -d: -f2 | tr -d '"')"
+        printf '  %-14s %s\n' "checks" "$(printf '%s' "$h" | grep -oE '"checks":\{[^}]*\}')"
+    else
+        err "manager /health unreachable"
+    fi
+    echo
+    dc ps
+}
+
+cmd_ps() { dc ps; }
+
+cmd_logs() {
+    local svc="" follow=""
+    for a in "$@"; do case "$a" in -f|--follow) follow="-f";; *) svc="$a";; esac; done
+    # shellcheck disable=SC2086
+    dc logs --tail=200 $follow $svc
+}
+
+cmd_migrate() {
+    hd "DB migrations (alembic upgrade head)"
+    if dc exec -T manager sh -c 'command -v alembic >/dev/null 2>&1'; then
+        dc exec -T manager alembic upgrade head && ok "migrations applied" || { err "migration failed"; return 1; }
+    else
+        warn "alembic not found in manager image — skipping (schema may rely on boot-time DDL)"
+    fi
+}
+
+cmd_backup() {
+    local ts dst; ts="$(date +%Y%m%d-%H%M%S)"; dst="$DIR/backups/$ts"
+    mkdir -p "$dst"
+    hd "Backup -> $dst"
+    local pgu pgd; pgu="$(envget POSTGRES_USER)"; pgd="$(envget POSTGRES_DB)"
+    pgu="${pgu:-dlp_user}"; pgd="${pgd:-cybersentineldlp}"
+    if dc exec -T postgres pg_dump -U "$pgu" "$pgd" > "$dst/postgres.sql" 2>/dev/null && [ -s "$dst/postgres.sql" ]; then
+        ok "postgres -> postgres.sql ($(wc -c < "$dst/postgres.sql") bytes)"
+    else warn "postgres dump failed/empty"; fi
+    local mu mp; mu="$(envget MONGODB_USER)"; mp="$(envget MONGODB_PASSWORD)"
+    if dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" > "$dst/mongo.archive" 2>/dev/null && [ -s "$dst/mongo.archive" ]; then
+        ok "mongodb -> mongo.archive ($(wc -c < "$dst/mongo.archive") bytes)"
+    else warn "mongo dump failed/empty"; fi
+    echo "$dst"
+}
+
+cmd_restore() {
+    local src="${1:-}"; [ -d "$src" ] || { err "usage: csdlp restore <backup-dir>"; return 1; }
+    hd "Restore from $src"
+    warn "This overwrites current data. Ctrl-C within 5s to abort."; sleep 5
+    local pgu pgd; pgu="$(envget POSTGRES_USER)"; pgd="$(envget POSTGRES_DB)"
+    pgu="${pgu:-dlp_user}"; pgd="${pgd:-cybersentineldlp}"
+    [ -f "$src/postgres.sql" ] && { dc exec -T postgres psql -U "$pgu" -d "$pgd" < "$src/postgres.sql" >/dev/null 2>&1 && ok "postgres restored" || warn "postgres restore had errors"; }
+    local mu mp; mu="$(envget MONGODB_USER)"; mp="$(envget MONGODB_PASSWORD)"
+    [ -f "$src/mongo.archive" ] && { dc exec -T mongodb sh -c "mongorestore --quiet --drop --username '$mu' --password '$mp' --authenticationDatabase admin --archive" < "$src/mongo.archive" >/dev/null 2>&1 && ok "mongo restored" || warn "mongo restore had errors"; }
+}
+
+_health_ok() {
+    for _ in $(seq 1 30); do
+        printf '%s' "$(mgr_curl http://localhost:55000/health)" | grep -q '"status":"healthy"' && return 0
+        sleep 2
+    done
+    return 1
+}
+
+_save_versions() {
+    # record current image IDs so rollback can re-pin them
+    mkdir -p "$DIR/.csdlp"
+    { docker image inspect "$MANAGER_IMG" --format 'manager {{.Id}}' 2>/dev/null
+      [ -n "$DASH_IMG" ] && docker image inspect "$DASH_IMG" --format 'dashboard {{.Id}}' 2>/dev/null
+    } > "$DIR/.csdlp/prev-versions"
+}
+
+cmd_update() {
+    local tag="${1:-}"
+    hd "Update${tag:+ -> $tag}"
+    ok "1/5 snapshotting current versions + DB backup"
+    _save_versions
+    cmd_backup >/dev/null
+    if [ -n "$tag" ]; then
+        # retag the pinned images to the requested tag by pulling that tag
+        docker pull "${MANAGER_IMG%:*}:$tag" && docker tag "${MANAGER_IMG%:*}:$tag" "$MANAGER_IMG"
+        [ -n "$DASH_IMG" ] && { docker pull "${DASH_IMG%:*}:$tag" && docker tag "${DASH_IMG%:*}:$tag" "$DASH_IMG"; }
+    else
+        ok "2/5 pulling latest images"; dc pull
+    fi
+    ok "3/5 starting services"; dc up -d
+    ok "4/5 running migrations"; cmd_migrate || warn "migrate step reported issues"
+    ok "5/5 health gate"
+    if _health_ok; then
+        ok "update healthy — done"
+    else
+        err "health check FAILED after update — rolling back"
+        cmd_rollback
+    fi
+}
+
+cmd_rollback() {
+    hd "Rollback"
+    local pv="$DIR/.csdlp/prev-versions"
+    [ -f "$pv" ] || { err "no saved versions to roll back to (.csdlp/prev-versions missing)"; return 1; }
+    while read -r role id; do
+        case "$role" in
+            manager) [ -n "$id" ] && docker tag "$id" "$MANAGER_IMG" && ok "manager re-pinned to $id";;
+            dashboard) [ -n "$id" ] && [ -n "$DASH_IMG" ] && docker tag "$id" "$DASH_IMG" && ok "dashboard re-pinned to $id";;
+        esac
+    done < "$pv"
+    dc up -d
+    _health_ok && ok "rolled back + healthy" || err "still unhealthy after rollback — investigate with: csdlp doctor"
+}
+
+cmd_secret() {
+    case "${1:-}" in
+        admin-password)
+            dc logs manager 2>&1 | grep -oE '"generated_password": "[^"]+"' | head -1 \
+                | sed -e 's/^"generated_password": "//' -e 's/"$//' \
+                || warn "no generated_password in manager logs (admin may have pre-existed / was set via DLP_ADMIN_PASSWORD)";;
+        *) err "usage: csdlp secret admin-password";;
+    esac
+}
+
+cmd_version() {
+    hd "Versions"
+    kv "manager image" "$MANAGER_IMG"
+    docker image inspect "$MANAGER_IMG" --format '  {{"image id     "}} {{.Id}}' 2>/dev/null
+    local h; h="$(mgr_curl http://localhost:55000/health)"
+    [ -n "$h" ] && kv "api version" "$(printf '%s' "$h" | grep -oE '"version":"[^"]*"' | cut -d: -f2 | tr -d '"')"
+}
+
+cmd_restart() {
+    local svc="${1:-}"
+    hd "Restart ${svc:-all}"
+    # shellcheck disable=SC2086
+    dc restart $svc && ok "restarted"
+}
+
+cmd_doctor() {
+    local bundle=""; [ "${1:-}" = "--bundle" ] && bundle=1
+    local out; out="$(mktemp)"
+    {
+        hd "csdlp doctor — $(date -u +%FT%TZ 2>/dev/null || echo now)"
+        kv "dir" "$DIR"; kv "compose" "$COMPOSE"; kv "manager image" "$MANAGER_IMG"
+        echo; hd "services"; dc ps
+        echo; hd "manager /health"; mgr_curl http://localhost:55000/health || echo "  (unreachable)"
+        echo; echo
+        hd "dependency probes"
+        local pgu; pgu="$(envget POSTGRES_USER)"; pgu="${pgu:-dlp_user}"
+        dc exec -T postgres pg_isready -U "$pgu" >/dev/null 2>&1 && ok "postgres ready" || err "postgres not ready"
+        local rp; rp="$(envget REDIS_PASSWORD)"
+        dc exec -T redis sh -c "redis-cli ${rp:+-a '$rp'} ping" 2>/dev/null | grep -q PONG && ok "redis PONG" || err "redis not responding"
+        dc exec -T mongodb mongosh --quiet --eval 'db.runCommand({ping:1}).ok' 2>/dev/null | grep -q 1 && ok "mongodb ping" || warn "mongodb ping unclear"
+        local op; op="$(envget OPENSEARCH_PASSWORD)"
+        dc exec -T opensearch sh -c "curl -sk -u admin:'$op' https://localhost:9200/_cluster/health" 2>/dev/null | grep -oE '"status":"[^"]*"' | head -1 | sed 's/^/  opensearch /' || warn "opensearch unclear"
+        echo; hd "recent errors per service (last 40 lines each)"
+        for s in manager celery-worker dashboard; do
+            echo "--- $s ---"
+            dc logs --tail=40 "$s" 2>&1 | grep -iE 'error|critical|traceback|exception|failed' | tail -8
+        done
+        echo; hd "host resources"
+        df -h "$DIR" 2>/dev/null | tail -1
+        free -h 2>/dev/null | sed -n '2p'
+        echo; hd ".env sanity (secrets redacted)"
+        [ -f "$ENVF" ] && grep -vE '^\s*#|^\s*$' "$ENVF" | sed -E 's/^([A-Za-z0-9_]*(PASSWORD|SECRET|KEY)[A-Za-z0-9_]*)=.*/\1=<redacted>/'
+    } | tee "$out"
+    if [ -n "$bundle" ]; then
+        local tb="$DIR/csdlp-doctor-$(date +%Y%m%d-%H%M%S).txt"
+        cp "$out" "$tb"; echo; ok "bundle written: $tb (share this)"
+    fi
+    rm -f "$out"
+}
+
+cmd_self_install() {
+    local dest="/usr/local/bin/csdlp"
+    cp "$0" "$dest" && chmod +x "$dest" && ok "installed to $dest" || err "install failed (need root?)"
+}
+
+usage() {
+    printf '%scsdlp%s — CyberSentinel DLP operations CLI  %s(one tool for the whole stack)%s\n' "$CB" "$C0" "$CD" "$C0"
+    printf '%susage:%s csdlp <command> [args]\n\n' "$CD" "$C0"
+
+    printf '%sOPERATE & INSPECT%s\n' "$CG" "$C0"
+    printf '  %-26s %s\n' "status"        "Health of every service + API version + DB checks, then \`ps\`."
+    printf '  %-26s %s\n' "ps"            "List the stack's containers and their state (docker compose ps)."
+    printf '  %-26s %s\n' "logs [svc] [-f]" "Tail the last 200 log lines; a service name narrows it, -f follows live."
+    printf '  %-26s %s\n' "version"       "Show the deployed manager image + the running API version."
+    printf '  %-26s %s\n' "doctor [--bundle]" "Full diagnostics: services, /health, per-dependency probes,"
+    printf '  %-26s %s\n' ""              "recent errors per service, host disk/mem, and .env with secrets"
+    printf '  %-26s %s\n' ""              "REDACTED. --bundle also writes a shareable text file to send you."
+
+    printf '\n%sUPDATE & RECOVER%s\n' "$CG" "$C0"
+    printf '  %-26s %s\n' "update [TAG]"  "Safe update: snapshot versions + DB backup -> pull (or a specific"
+    printf '  %-26s %s\n' ""              "image TAG) -> migrate -> up -> health-gate; AUTO-ROLLS-BACK if the"
+    printf '  %-26s %s\n' ""              "stack is unhealthy afterwards."
+    printf '  %-26s %s\n' "rollback"      "Revert the images to the versions saved before the last update, up,"
+    printf '  %-26s %s\n' ""              "and re-check health."
+    printf '  %-26s %s\n' "migrate"       "Run database schema migrations (alembic upgrade head). Idempotent."
+
+    printf '\n%sDATA%s\n' "$CG" "$C0"
+    printf '  %-26s %s\n' "backup"        "Snapshot Postgres + MongoDB into ./backups/<timestamp>/. Read-only."
+    printf '  %-26s %s\n' "restore <dir>" "Restore Postgres + MongoDB from a backup dir (prompts, 5s abort)."
+
+    printf '\n%sMAINTENANCE & SETUP%s\n' "$CG" "$C0"
+    printf '  %-26s %s\n' "restart [svc]" "Restart one service, or the whole stack if none given."
+    printf '  %-26s %s\n' "secret admin-password" "Print the first-boot admin password (from the manager log)."
+    printf '  %-26s %s\n' "self-install"  "Copy this script to /usr/local/bin/csdlp so \`csdlp\` runs anywhere."
+    printf '  %-26s %s\n' "help"          "Show this guide."
+
+    printf '\n%sENVIRONMENT%s\n' "$CG" "$C0"
+    printf '  %-26s %s\n' "CSDLP_DIR"     "Deployment directory to operate on (else auto-detected:"
+    printf '  %-26s %s\n' ""              "cwd, /opt/cybersentineldlp, /srv/cybersentineldlp)."
+    printf '  %-26s %s\n' "CSDLP_COMPOSE" "Force a specific compose file (default: docker-compose.prod.yml)."
+
+    printf '\n%sEXAMPLES%s\n' "$CG" "$C0"
+    printf '  %s\n' "csdlp status                 # is everything healthy right now?"
+    printf '  %s\n' "csdlp doctor --bundle        # collect a diagnostics file to send to the vendor"
+    printf '  %s\n' "csdlp logs manager -f        # watch the backend live"
+    printf '  %s\n' "csdlp update                 # roll forward to the latest images, safely"
+    printf '  %s\n' "csdlp update 2.2.0           # roll forward to a specific version"
+    printf '  %s\n' "csdlp rollback               # undo the last update"
+    printf '\n%sSafety:%s update always backs up first and self-heals on failure; doctor redacts\n' "$CD" "$C0"
+    printf 'secrets; no command prints a password except `secret admin-password`.\n'
+}
+
+case "${1:-}" in
+    status)   shift; cmd_status "$@";;
+    ps)       shift; cmd_ps "$@";;
+    logs)     shift; cmd_logs "$@";;
+    update)   shift; cmd_update "$@";;
+    rollback) shift; cmd_rollback "$@";;
+    backup)   shift; cmd_backup "$@";;
+    restore)  shift; cmd_restore "$@";;
+    migrate)  shift; cmd_migrate "$@";;
+    restart)  shift; cmd_restart "$@";;
+    secret)   shift; cmd_secret "$@";;
+    version)  shift; cmd_version "$@";;
+    doctor)   shift; cmd_doctor "$@";;
+    self-install) shift; cmd_self_install "$@";;
+    ""|-h|--help|help) usage;;
+    *) err "unknown command: $1"; echo; usage; exit 1;;
+esac

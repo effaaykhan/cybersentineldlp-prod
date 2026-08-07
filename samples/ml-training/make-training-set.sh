@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # defaults
 DOCS=""
-CONTAINER="cybersentinel-manager"
+CONTAINER="cybersentineldlp-manager"
 INCLUDE_PUBLIC=1
 PUBLIC_PER_LEVEL=300
 BALANCE="min"

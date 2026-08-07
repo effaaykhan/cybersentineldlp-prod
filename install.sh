@@ -96,6 +96,19 @@ else
     rm -f "${INSTALL_DIR}/validate.sh"
 fi
 
+# csdlp — the single operations CLI (status/doctor/logs/update/rollback/backup).
+# Installed to the deployment dir and symlinked onto PATH so `csdlp` works anywhere.
+say "Downloading csdlp (operations CLI)"
+if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
+        "${RAW_BASE}/csdlp" -o "${INSTALL_DIR}/csdlp"; then
+    chmod +x "${INSTALL_DIR}/csdlp"
+    ln -sf "${INSTALL_DIR}/csdlp" /usr/local/bin/csdlp 2>/dev/null \
+        && say "csdlp installed — run 'csdlp help'" \
+        || c_yellow "[!] csdlp saved to ${INSTALL_DIR}/csdlp (could not symlink to /usr/local/bin)"
+else
+    c_yellow "[!] Could not download csdlp now — fetch later: curl -fsSL ${RAW_BASE}/csdlp -o ${INSTALL_DIR}/csdlp"
+fi
+
 # ─── 4. Generate .env with secure random secrets ──────────────────────
 gen_secret() {
     # 48 chars of url-safe random

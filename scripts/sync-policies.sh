@@ -21,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONTAINER="cybersentinel-manager"
+CONTAINER="cybersentineldlp-manager"
 PUSH=1
 
 while [[ $# -gt 0 ]]; do

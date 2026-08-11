@@ -127,22 +127,37 @@ only way to rotate it.
 
 The manager/celery image ships as **compiled native binaries**, not Python:
 
-- On every push, CI (`.github/workflows/build-images.yml`) Cythonizes the
-  backend — `server/compile_app.py` compiles ~90 modules (the
-  classification engine, ML classifier, policy evaluation, detection, EDM,
-  actions, services, …) into `.so` C-extensions and **deletes the `.py`**.
-  The compile runs on GitHub's runners; **the client server never compiles
+On every push, CI (`.github/workflows/build-images.yml`) compiles the backend
+in **two passes**, both producing ordinary CPython `.so` extension modules:
+
+| Pass | Tool | Covers | Count |
+|---|---|---|---|
+| 1 | Cython — `server/compile_app.py` | engine/service modules: classification, ML classifier, policy evaluation, detection, EDM, actions, tasks, … | 92 |
+| 2 | Nuitka — `server/compile_framework.py` | the FastAPI framework layer: `app/main.py`, `app/core/security.py`, `app/api/**` | 29 |
+
+Two compilers are needed because Cython 3 cannot compile handler parameters
+that default to FastAPI markers (`= Depends(...)` / `= Query(...)`) — it fails
+with `TypeError: Expected unicode, got Depends`. Nuitka compiles
+Python-as-Python and has no such limit, so it takes the routers. The runtime
+interpreter simply imports the resulting `.so`, exactly as it imports numpy's.
+
+- The compile runs on GitHub's runners; **the client server never compiles
   and never receives source** — it only `docker pull`s the finished image.
 - Because the Dockerfile is **multi-stage**, the source-bearing build stage
   is discarded — `docker save` / `docker cp` on the pulled image find only
-  `.so`, no backend `.py`.
-- **Kept as source (unavoidable):** the FastAPI framework layer —
-  `app/api/**`, `app/main.py`, `app/core/security.py` (~30 files). Cython
-  can't compile FastAPI `Depends`-style handler parameters. These files are
-  thin HTTP wiring that *calls into* the compiled engine; they expose which
-  endpoints exist, not the algorithms. Package `__init__.py` (import wiring)
-  is also kept. This is deterrence, not DRM: a determined root user can
-  still reverse-engineer a `.so`, but casual copy-paste theft is stopped.
+  `.so`. `cat /app/app/main.py` returns *No such file or directory*.
+- **What is still `.py`, deliberately:** package `__init__.py` (import wiring
+  only — the `app/api/v1/__init__.py` router table and a few re-export stubs);
+  `alembic/versions/*` (Alembic imports migration files by path at runtime, so
+  compiling them would break `alembic upgrade head`); and `scripts/*` (one-off
+  ops utilities invoked as `python scripts/foo.py`). These are schema DDL and
+  admin glue, not engine logic.
+- Build guards fail the image if any of that regresses: the classification
+  engine must have produced a `.so`, `app/main.*.so` must exist (proving the
+  Nuitka pass ran), there must be ≥110 `.so`, and **zero** non-`__init__`
+  `.py` may survive under `app/`.
+- This is deterrence, not DRM: a determined root user can still
+  reverse-engineer a `.so`, but casual copy-paste theft is stopped.
 
 > Dev is unaffected: `docker-compose.yml` bind-mounts `./server` over
 > `/app`, shadowing the compiled code with live source for hot-reload — so

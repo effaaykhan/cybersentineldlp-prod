@@ -7,14 +7,17 @@ then deletes the .py that got a .so so the published image ships those modules a
 compiled binaries only — no readable source for the crown-jewel logic
 (classification/ML/policy-evaluation/detection/EDM/actions/…).
 
-WHAT STAYS AS SOURCE (excluded on purpose):
-  * package __init__.py — import wiring only; safest kept as .py.
+This is PASS 1 of two. What it excludes is NOT left readable — it is handed to
+``compile_framework.py`` (Nuitka) as pass 2:
   * the FastAPI framework layer — app/api/**, app/main.py, app/core/security.py.
     These declare route/handler functions whose parameters default to FastAPI
     markers (``= Depends(...)`` / ``= Query(...)`` / …). Cython 3 mis-handles
-    those defaults ("TypeError: Expected unicode, got Depends"), so the thin
-    request/response wiring is left as .py. It contains no proprietary
-    algorithms — only routing that calls into the compiled services.
+    those defaults ("TypeError: Expected unicode, got Depends"), so Nuitka —
+    which compiles Python-as-Python and has no such limit — takes them instead.
+    Both compilers emit the same artifact: a CPython .so extension module.
+
+WHAT GENUINELY STAYS AS SOURCE:
+  * package __init__.py — import wiring only; safest kept as .py.
 
 IMPORTANT: several package dirs (app, app/api, app/core, app/utils,
 app/middleware, app/policies) have NO __init__.py (PEP 420 namespace packages),
@@ -27,9 +30,11 @@ import os
 from setuptools import setup, Extension
 from Cython.Build import cythonize
 
-# Globs (relative to the build root) whose .py must NOT be compiled.
+# Globs (relative to the build root) whose .py must NOT be compiled *by Cython*.
+# Everything below except __init__.py is picked up by compile_framework.py
+# (Nuitka) in pass 2 — keep the two lists in sync.
 EXCLUDE_GLOBS = [
-    "app/**/__init__.py",     # package init wiring
+    "app/**/__init__.py",     # package init wiring — stays .py
     "app/api/**/*.py",        # FastAPI routers — Depends/Query defaults break Cython
     "app/main.py",            # FastAPI app factory + inline endpoints (Depends)
     "app/core/security.py",   # shared FastAPI auth dependencies (Depends)
@@ -65,7 +70,8 @@ if __name__ == "__main__":
     ]
     jobs = str(os.cpu_count() or 4)
     print(f"[compile_app] compiling {len(extensions)} modules -> .so "
-          f"(-O1, parallel={jobs}); framework layer kept as source", flush=True)
+          f"(-O1, parallel={jobs}); framework layer handled by compile_framework.py",
+          flush=True)
     setup(
         name="csdlp-backend",
         ext_modules=cythonize(

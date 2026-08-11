@@ -97,8 +97,9 @@ image carries all code and dependencies, so nothing else changes on the host.
 > ever copied to the deployment host** — only the two container images are pulled.
 > Everything the platform needs at runtime (including the OCR engine) is baked in.
 > The backend image goes further: its Python is **compiled to native `.so`
-> binaries** at build time (Cython, in CI), so the host holds no readable backend
-> source — see [Source protection](DEPLOYMENT.md#source-protection).
+> binaries** at build time in CI (Cython for the engine modules, Nuitka for the
+> FastAPI layer), so the host holds **no readable backend source at all** — see
+> [Source protection](DEPLOYMENT.md#source-protection).
 
 **Manual install (production, step-by-step):**
 

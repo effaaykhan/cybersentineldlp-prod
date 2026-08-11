@@ -40,8 +40,17 @@ RUN python -c "import numpy; print(f'NumPy {numpy.__version__}')" && \
 
 # ─── Stage 2: compile the backend to native .so (source never ships) ──
 # Same python:3.11-slim base as the runtime stage so the compiled ABI matches.
-# Only gcc/g++ + Cython are needed — cythonize compiles the .py statically (it
-# does not import them), so the app's runtime deps are not required here.
+#
+# TWO compilers, one artifact type. Both emit ordinary CPython extension modules
+# (name.cpython-311-x86_64-linux-gnu.so); CPython in stage 3 merely imports them.
+#   * Cython  (compile_app.py)       — the ~92 engine/service modules.
+#   * Nuitka  (compile_framework.py) — app/main.py, app/core/security.py and
+#     app/api/**, whose handler params default to FastAPI markers
+#     (= Depends()/Query()) that Cython 3 cannot compile. Nuitka can, so with
+#     this pass NO readable backend .py reaches the image — only package
+#     __init__.py import wiring.
+# Neither compiler imports the app, so the runtime deps are not needed here.
+# clang is required: the image's gcc trips Nuitka's Scons backend.
 FROM python:3.11-slim AS compiler
 
 WORKDIR /build
@@ -49,34 +58,55 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
+    clang \
+    ccache \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "cython>=3.0,<3.1"
+# Nuitka is pinned: it drives a C backend, so an unattended minor bump is a
+# build-breaking change, not a patch.
+RUN pip install --no-cache-dir "cython>=3.0,<3.1" "nuitka==4.1.3"
 
 # Bring in the source (build context = ./server; .dockerignore trims junk).
 COPY . /build
 
-# Compile app/**/*.py -> .so, then STRIP all backend source from the tree:
+# Pass 1 — Cython: engine/service/algorithm modules.
+RUN python compile_app.py
+
+# Pass 2 — Nuitka: the FastAPI framework layer Cython cannot take.
+# NUITKA_JOBS caps concurrent clang processes; 4 suits the CI runner (4 vCPU /
+# 16 GB). Lower it on a memory-tight host: --build-arg NUITKA_JOBS=2.
+ARG NUITKA_JOBS=4
+ENV NUITKA_JOBS=${NUITKA_JOBS}
+RUN python compile_framework.py
+
+# STRIP all backend source from the tree:
 #   - delete the now-compiled .py (keep package __init__.py — import wiring only)
-#   - delete the generated .c, build tree, bytecode caches, tests and the
-#     compile helper itself, so none of it reaches the runtime stage.
-# The final guard fails the build if any non-__init__ .py survives under
-# app/services (the crown-jewel package) — a tripwire against a silent miscompile.
-# Delete ONLY the .py that produced a .so (i.e. actually got compiled). The
-# excluded framework layer (app/api/**, app/main.py, app/core/security.py) has no
-# .so and MUST be kept as source. The guards assert a crown-jewel engine compiled,
-# a sane .so count, and that NO source survives under app/services (the IP).
-RUN python compile_app.py \
-    && ls app/services/classification_engine.*.so >/dev/null 2>&1 || { echo "ERROR: crown-jewel engine did not compile/place correctly" >&2; exit 1; } \
-    && test "$(find app -name '*.so' | wc -l)" -ge 70 || { echo "ERROR: too few .so under app/ — likely a module-name/placement problem" >&2; exit 1; } \
-    && find app -name '*.cpython-*.so' | while read -r so; do rm -f "${so%%.cpython-*}.py"; done \
+#   - delete the generated .c, build trees, bytecode caches, tests and the
+#     compile helpers themselves, so none of it reaches the runtime stage.
+# Guards (tripwires against a silent miscompile — each is a hard build failure):
+#   1. the crown-jewel engine really produced a .so
+#   2. the framework layer really produced a .so (proves the Nuitka pass ran)
+#   3. a sane total .so count (~92 Cython + 29 Nuitka)
+#   4. ZERO non-__init__ .py anywhere under app/ — the whole point of this stage
+RUN find app -name '*.cpython-*.so' | while read -r so; do rm -f "${so%%.cpython-*}.py"; done \
     && find app -name '*.c' -delete \
+    && find app -type d -name '*.build' -prune -exec rm -rf {} + \
     && find app -type d -name '__pycache__' -prune -exec rm -rf {} + \
-    && rm -rf build tests compile_app.py \
-    && echo "[Dockerfile] compiled .so=$(find app -name '*.so' | wc -l), source .py kept=$(find app -name '*.py' | wc -l) (init + framework layer)" \
-    && if find app/services -name '*.py' ! -name '__init__.py' 2>/dev/null | grep -q .; then \
-         echo "ERROR: uncompiled source remains under app/services (crown jewels)" >&2; exit 1; \
+    && rm -rf build tests compile_app.py compile_framework.py \
+    && echo "[Dockerfile] compiled .so=$(find app -name '*.so' | wc -l), source .py kept=$(find app -name '*.py' | wc -l) (package __init__ only)" \
+    && if ! ls app/services/classification_engine.*.so >/dev/null 2>&1; then \
+         echo "ERROR: crown-jewel engine did not compile/place correctly" >&2; exit 1; \
+       fi \
+    && if ! ls app/main.*.so >/dev/null 2>&1; then \
+         echo "ERROR: framework layer did not compile — Nuitka pass missing/failed" >&2; exit 1; \
+       fi \
+    && if [ "$(find app -name '*.so' | wc -l)" -lt 110 ]; then \
+         echo "ERROR: too few .so under app/ — likely a module-name/placement problem" >&2; exit 1; \
+       fi \
+    && if find app -name '*.py' ! -name '__init__.py' | grep -q .; then \
+         echo "ERROR: readable backend source survived the compile:" >&2; \
+         find app -name '*.py' ! -name '__init__.py' >&2; exit 1; \
        fi
 
 # ─── Stage 3: minimal runtime image (compiled binaries only) ──────────
@@ -103,8 +133,13 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Compiled application from the compiler stage. This is the ONLY place app code
-# enters the final image — and it is .so binaries (+ package __init__.py and
-# non-code assets like alembic/, data/, ml/), never the backend .py source.
+# enters the final image, and under app/ it is .so binaries plus the package
+# __init__.py import wiring — never the backend .py source.
+#
+# Still .py by necessity, and deliberately so: alembic/versions/* (alembic
+# imports migration files by path at runtime — compiling them breaks
+# `alembic upgrade head`) and scripts/* (one-off ops utilities run as
+# `python scripts/foo.py`). Both are schema DDL / admin glue, not engine logic.
 COPY --from=compiler /build /app
 
 # Runtime working dirs

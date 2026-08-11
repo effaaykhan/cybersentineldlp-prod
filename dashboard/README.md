@@ -29,7 +29,7 @@ Modern React dashboard for the CyberSentinel Data Loss Prevention system. Built 
 ### Prerequisites
 
 - Node.js 18+ and npm/yarn
-- CyberSentinel Manager API running at `http://localhost:55000`
+- CyberSentinel Manager API running at `http://localhost:55100`
 
 ### Installation
 
@@ -96,7 +96,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:55000',
+        target: 'http://localhost:55100',
         changeOrigin: true,
       },
     },
@@ -107,7 +107,7 @@ export default defineConfig({
 Or set the environment variable:
 
 ```bash
-VITE_API_URL=http://your-api-url:55000
+VITE_API_URL=http://your-api-url:55100
 ```
 
 ### Tailwind Colors
@@ -279,7 +279,7 @@ server {
     try_files $uri $uri/ /index.html;
   }
   location /api {
-    proxy_pass http://manager:55000;
+    proxy_pass http://manager:55100;
     proxy_set_header Host $host;
   }
 }
@@ -325,7 +325,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip } from 'recharts'
 ## Troubleshooting
 
 ### API Connection Issues
-- Check that the backend is running at `http://localhost:55000`
+- Check that the backend is running at `http://localhost:55100`
 - Verify proxy configuration in `vite.config.ts`
 - Check browser console for CORS errors
 

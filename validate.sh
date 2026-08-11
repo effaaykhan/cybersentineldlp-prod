@@ -7,12 +7,12 @@
 #
 # Usage:
 #   sudo bash validate.sh                       # auto-detects the manager container
-#   sudo bash validate.sh --container NAME --url http://localhost:55000
+#   sudo bash validate.sh --container NAME --url http://localhost:55100
 #
 set -uo pipefail
 
 CONTAINER=""
-URL="http://localhost:55000"
+URL="http://localhost:55100"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --container) CONTAINER="$2"; shift 2;;

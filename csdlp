@@ -68,7 +68,7 @@ cmd_status() {
     hd "CyberSentinel DLP — status"
     kv "dir" "$DIR"
     kv "compose" "$COMPOSE"
-    local h; h="$(mgr_curl http://localhost:55000/health)"
+    local h; h="$(mgr_curl http://localhost:55100/health)"
     if [ -n "$h" ]; then
         kv "api" "$(printf '%s' "$h" | grep -oE '"status":"[^"]*"' | cut -d: -f2 | tr -d '"')"
         kv "version" "$(printf '%s' "$h" | grep -oE '"version":"[^"]*"' | cut -d: -f2 | tr -d '"')"
@@ -127,7 +127,7 @@ cmd_restore() {
 
 _health_ok() {
     for _ in $(seq 1 30); do
-        printf '%s' "$(mgr_curl http://localhost:55000/health)" | grep -q '"status":"healthy"' && return 0
+        printf '%s' "$(mgr_curl http://localhost:55100/health)" | grep -q '"status":"healthy"' && return 0
         sleep 2
     done
     return 1
@@ -193,7 +193,7 @@ cmd_version() {
     hd "Versions"
     kv "manager image" "$MANAGER_IMG"
     docker image inspect "$MANAGER_IMG" --format '  {{"image id     "}} {{.Id}}' 2>/dev/null
-    local h; h="$(mgr_curl http://localhost:55000/health)"
+    local h; h="$(mgr_curl http://localhost:55100/health)"
     [ -n "$h" ] && kv "api version" "$(printf '%s' "$h" | grep -oE '"version":"[^"]*"' | cut -d: -f2 | tr -d '"')"
 }
 
@@ -211,7 +211,7 @@ cmd_doctor() {
         hd "csdlp doctor — $(date -u +%FT%TZ 2>/dev/null || echo now)"
         kv "dir" "$DIR"; kv "compose" "$COMPOSE"; kv "manager image" "$MANAGER_IMG"
         echo; hd "services"; dc ps
-        echo; hd "manager /health"; mgr_curl http://localhost:55000/health || echo "  (unreachable)"
+        echo; hd "manager /health"; mgr_curl http://localhost:55100/health || echo "  (unreachable)"
         echo; echo
         hd "dependency probes"
         local pgu; pgu="$(envget POSTGRES_USER)"; pgu="${pgu:-dlp_user}"

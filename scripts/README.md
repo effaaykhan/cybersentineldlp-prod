@@ -24,7 +24,7 @@ and registering a systemd service with boot autostart.
 
 ### Arguments
 
-- `--manager-url` (default `http://localhost:55000/api/v1`)
+- `--manager-url` (default `http://localhost:55100/api/v1`)
 - `--install-dir` (default `/opt/cybersentineldlp/agent`)
 - `--config-dir` (default `/etc/cybersentineldlp`)
 - `--venv-dir` (default `<install-dir>/.venv`)
@@ -43,19 +43,19 @@ and registering a systemd service with boot autostart.
 ```bash
 # Fresh install
 sudo bash scripts/install_linux_agent.sh \
-    --manager-url http://localhost:55000/api/v1
+    --manager-url http://localhost:55100/api/v1
 
 # Pin to a specific commit and skip starting the service
 sudo bash scripts/install_linux_agent.sh \
-    --manager-url http://localhost:55000/api/v1 \
+    --manager-url http://localhost:55100/api/v1 \
     --ref abc123 --no-start
 
 # Re-provision with overwrite
 sudo bash scripts/install_linux_agent.sh \
-    --manager-url http://localhost:55000/api/v1 --force
+    --manager-url http://localhost:55100/api/v1 --force
 
 # Remote host via env var
-sudo CYBERSENTINELDLP_SERVER_URL=http://<HOST>:55000/api/v1 \
+sudo CYBERSENTINELDLP_SERVER_URL=http://<HOST>:55100/api/v1 \
     bash scripts/install_linux_agent.sh --force
 ```
 

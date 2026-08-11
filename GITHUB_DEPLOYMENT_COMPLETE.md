@@ -162,7 +162,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/cybersentineldlp-06/Data-Los
 docker compose ps
 
 # Test API
-curl http://localhost:55000/api/v1/health
+curl http://localhost:55100/api/v1/health
 
 # Open dashboard
 # http://localhost:4000

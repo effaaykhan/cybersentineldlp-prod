@@ -67,7 +67,7 @@ What this does, in order:
    cert later if you front the deployment with a TLS-terminating proxy.
 6. `docker compose pull` — fetches all images from GHCR and Docker Hub.
 7. `docker compose up -d` — starts all services.
-8. Polls `http://localhost:55000/health` for up to 3 minutes.
+8. Polls `http://localhost:55100/health` for up to 3 minutes.
 9. Prints connection details and the bootstrap admin password from
    the manager log.
 
@@ -92,7 +92,7 @@ Containers running after install:
 | `cybersentineldlp-mongodb` | `mongo:7.0` | _none_ | DLP events, alerts, incidents |
 | `cybersentineldlp-redis` | `redis:7-alpine` | _none_ | Token blacklist, rate limit, cache |
 | `cybersentineldlp-opensearch` | `opensearchproject/opensearch:2.11.0` | _none_ | Event search index |
-| `cybersentineldlp-manager` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest` (compiled) | **55000** | FastAPI API |
+| `cybersentineldlp-manager` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-manager:latest` (compiled) | **55100** | FastAPI API |
 | `cybersentineldlp-dashboard` | `ghcr.io/effaaykhan/cybersentineldlp-prod/dlp-dashboard:latest` | **3023** → 3000 (HTTPS / TLS 1.3) | React SPA + nginx |
 | `cybersentineldlp-celery-worker` | (same manager image) | _none_ | Async event processing |
 | `cybersentineldlp-celery-beat` | (same manager image) | _none_ | Scheduled tasks |
@@ -296,7 +296,7 @@ The same script also handles **Update** and **Uninstall** from its menu. What th
 1. **Step 1 — Configuration.** Prompts for the server hostname/IP
    (`localhost`, an IPv4 literal, or an RFC1123 FQDN like
    `dlp.corp.local`), agent name, heartbeat interval, and policy sync
-   interval. Tests `http://<server>:55000/health` before continuing.
+   interval. Tests `http://<server>:55100/health` before continuing.
 2. **Step 2 — Cleanup.** Stops the existing scheduled task / process /
    service if present. Safe to re-run on an already-installed endpoint.
 3. **Step 3 — Directories.** Creates `C:\Program Files\CyberSentinel`
@@ -499,7 +499,7 @@ Enable-ScheduledTask -TaskName "CyberSentinel DLP Agent"
 | Manager unhealthy on first boot | OpenSearch still initialising | Wait 90s, check `docker logs cybersentineldlp-opensearch`. |
 | Manager 500s on `/auth/login` | `SECRET_KEY` not set / changed | Check `.env`. Restart manager. |
 | Endpoint installer: `CRITICAL: SHA-256 mismatch` | Repo binary doesn't match its sidecar | Rebuild + regenerate sidecar (Section 2). |
-| Endpoint can't reach manager | Firewall on port 55000 | `Test-NetConnection -ComputerName <server> -Port 55000` |
+| Endpoint can't reach manager | Firewall on port 55100 | `Test-NetConnection -ComputerName <server> -Port 55100` |
 | Dashboard shows 0 agents | Agent not sending heartbeat | Tail `cybersentineldlp_agent.log` for HTTP errors. |
 
 ### Verification commands (all the security fixes from the audit)

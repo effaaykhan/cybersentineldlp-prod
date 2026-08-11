@@ -30,7 +30,7 @@ BALANCE="min"
 PER_LEVEL=0
 OUTPUT="training-set.csv"
 DO_UPLOAD=0
-HOST="http://localhost:55000"
+HOST="http://localhost:55100"
 TOKEN=""
 REPLACE=0
 

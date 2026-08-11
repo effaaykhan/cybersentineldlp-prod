@@ -51,9 +51,9 @@ This is the quick-reference checklist for LLMs working in this repo. The source 
 - Ensure `agent_config.json` uses the correct API base URL before distributing binaries.
 
 ## Handy Commands
-- Health/status: `curl http://localhost:55000/health`, `docker compose ps`, `docker compose logs manager --tail 50`.
+- Health/status: `curl http://localhost:55100/health`, `docker compose ps`, `docker compose logs manager --tail 50`.
 - Databases: `docker compose exec postgres psql -U dlp_user -d cybersentineldlp`, `docker compose exec mongodb mongosh ...`.
-- Google Drive manual poll: `curl -X POST http://localhost:55000/api/v1/google-drive/poll -H "Authorization: Bearer $TOKEN"`.
+- Google Drive manual poll: `curl -X POST http://localhost:55100/api/v1/google-drive/poll -H "Authorization: Bearer $TOKEN"`.
 - Reset folder baseline: `POST /api/v1/google-drive/connections/{id}/baseline` with optional `folderIds`.
 
 ## When Unsure

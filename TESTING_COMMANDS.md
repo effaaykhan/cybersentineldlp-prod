@@ -24,8 +24,8 @@ python3 --version
 ### 3. Check Required Ports
 ```bash
 # Check if ports are available
-netstat -tuln | grep -E "3000|55000|5432|27017|6379|9200"
-# Or use: ss -tuln | grep -E "3000|55000|5432|27017|6379|9200"
+netstat -tuln | grep -E "3000|55100|5432|27017|6379|9200"
+# Or use: ss -tuln | grep -E "3000|55100|5432|27017|6379|9200"
 ```
 
 ---
@@ -96,7 +96,7 @@ docker-compose logs manager | tail -20
 
 ### 2.3 Test API Health Endpoint
 ```bash
-curl http://localhost:55000/health
+curl http://localhost:55100/health
 ```
 
 **Expected response:**
@@ -143,42 +143,42 @@ Run these from another terminal (still inside the repo root) after services are 
 
 ```bash
 # 1) Obtain token (capture JSON)
-curl -i -X POST http://localhost:55000/api/v1/auth/login \
+curl -i -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin"
 
 # Convenience: store token in ENV for the shell session
-export TOKEN=$(curl -s -X POST http://localhost:55000/api/v1/auth/login \
+export TOKEN=$(curl -s -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # 2) Policy listing + stats
-curl -i http://localhost:55000/api/v1/policies/ -H "Authorization: Bearer $TOKEN"
-curl -i http://localhost:55000/api/v1/policies/stats/summary -H "Authorization: Bearer $TOKEN"
+curl -i http://localhost:55100/api/v1/policies/ -H "Authorization: Bearer $TOKEN"
+curl -i http://localhost:55100/api/v1/policies/stats/summary -H "Authorization: Bearer $TOKEN"
 
 # 3) CRUD smoke (creates temporary policy, updates it, toggles, then deletes)
-curl -i -X POST http://localhost:55000/api/v1/policies/ \
+curl -i -X POST http://localhost:55100/api/v1/policies/ \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"CLI QA Policy","description":"temporary","priority":80,"type":"clipboard_monitoring","severity":"medium","enabled":true,"config":{"patterns":{"predefined":["email"],"custom":[]},"action":"alert"}}'
 
 # Replace POLICY_ID with the ID returned above
-curl -i -X PUT http://localhost:55000/api/v1/policies/POLICY_ID \
+curl -i -X PUT http://localhost:55100/api/v1/policies/POLICY_ID \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"CLI QA Policy","description":"updated","priority":70,"type":"clipboard_monitoring","severity":"high","enabled":false,"config":{"patterns":{"predefined":["email","api_key"],"custom":[]},"action":"alert"}}'
 
-curl -i -X POST http://localhost:55000/api/v1/policies/POLICY_ID/enable \
+curl -i -X POST http://localhost:55100/api/v1/policies/POLICY_ID/enable \
   -H "Authorization: Bearer $TOKEN"
-curl -i -X POST http://localhost:55000/api/v1/policies/POLICY_ID/disable \
+curl -i -X POST http://localhost:55100/api/v1/policies/POLICY_ID/disable \
   -H "Authorization: Bearer $TOKEN"
-curl -i -X DELETE http://localhost:55000/api/v1/policies/POLICY_ID \
+curl -i -X DELETE http://localhost:55100/api/v1/policies/POLICY_ID \
   -H "Authorization: Bearer $TOKEN"
 
 # 4) Event ingestion smoke
-curl -i -X POST http://localhost:55000/api/v1/events/ \
+curl -i -X POST http://localhost:55100/api/v1/events/ \
   -H "Content-Type: application/json" \
   -d '{"event_id":"qa-cli-001","agent_id":"cli-agent","agent_name":"CLI Agent","agent_type":"linux","agent_version":"1.0.0","event_type":"file","event_subtype":"file_created","severity":"medium","file_path":"/home/vansh/Code/Data-Loss-Prevention/tmp_linux_policy/final_ssn.txt","file_extension":".txt","content":"SSN: 123-45-6789","timestamp":"'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"}'
 
-curl -i "http://localhost:55000/api/v1/events/?limit=5" -H "Authorization: Bearer $TOKEN"
+curl -i "http://localhost:55100/api/v1/events/?limit=5" -H "Authorization: Bearer $TOKEN"
 ```
 
 These steps confirm the policy transformer, stats endpoint, EventProcessor, and Mongo persistence are healthy before moving on to agent tests.
@@ -198,7 +198,7 @@ cat agent_config.json
 ```
 
 **Verify:**
-- `server_url` is set to `http://localhost:55000/api/v1`
+- `server_url` is set to `http://localhost:55100/api/v1`
 - `agent_id` is set (or empty for auto-generation)
 
 ### 4.3 Install Dependencies (if needed)
@@ -215,7 +215,7 @@ python3 agent.py
 ```
 [INFO] Starting CyberSentinel DLP Agent
 [INFO] Agent ID: <generated-uuid>
-[INFO] Server URL: http://localhost:55000/api/v1
+[INFO] Server URL: http://localhost:55100/api/v1
 [INFO] Registering agent...
 [INFO] Agent registered successfully
 [INFO] Starting file monitoring...
@@ -285,7 +285,7 @@ Get-Content agent_config.json
 ```
 
 **Verify:**
-- `server_url` is set to `http://localhost:55000/api/v1`
+- `server_url` is set to `http://localhost:55100/api/v1`
 - `agent_id` is set (e.g., `windows-agent-001`)
 
 ### 5.4 Install Dependencies (if needed)
@@ -436,16 +436,16 @@ Get-Content D:\CyberSentinelAgent\cybersentineldlp_agent.log -Tail 20
 ### 9.2 API Verification (Optional)
 ```bash
 # Get auth token
-TOKEN=$(curl -s -X POST http://localhost:55000/api/v1/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
 # Test agents endpoint
-curl -s http://localhost:55000/api/v1/agents \
+curl -s http://localhost:55100/api/v1/agents \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head -30
 
 # Test events endpoint
-curl -s "http://localhost:55000/api/v1/events?limit=5" \
+curl -s "http://localhost:55100/api/v1/events?limit=5" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
@@ -460,7 +460,7 @@ curl -s "http://localhost:55000/api/v1/events?limit=5" \
   ```bash
   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
   GOOGLE_CLIENT_SECRET=your-client-secret
-  GOOGLE_REDIRECT_URI=http://YOUR_SERVER_IP:55000/api/v1/google-drive/callback
+  GOOGLE_REDIRECT_URI=http://YOUR_SERVER_IP:55100/api/v1/google-drive/callback
   ```
 
 ### 10.2 Create Google Drive Policy
@@ -550,25 +550,25 @@ curl -s "http://localhost:55000/api/v1/events?limit=5" \
 ### 10.10 API Verification (Optional)
 ```bash
 # Get auth token
-TOKEN=$(curl -s -X POST http://localhost:55000/api/v1/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
 # List Google Drive connections
-curl -s http://localhost:55000/api/v1/google-drive/connections \
+curl -s http://localhost:55100/api/v1/google-drive/connections \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Get protected folders for a connection
 CONNECTION_ID="your-connection-id"
-curl -s "http://localhost:55000/api/v1/google-drive/connections/$CONNECTION_ID/protected-folders" \
+curl -s "http://localhost:55100/api/v1/google-drive/connections/$CONNECTION_ID/protected-folders" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Trigger manual poll
-curl -s -X POST http://localhost:55000/api/v1/google-drive/poll \
+curl -s -X POST http://localhost:55100/api/v1/google-drive/poll \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Get Google Drive events
-curl -s "http://localhost:55000/api/v1/events?limit=10&source=google_drive_cloud" \
+curl -s "http://localhost:55100/api/v1/events?limit=10&source=google_drive_cloud" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
@@ -606,7 +606,7 @@ docker-compose logs celery-worker | grep -i error
   ```bash
   ONEDRIVE_CLIENT_ID=your-client-id
   ONEDRIVE_CLIENT_SECRET=your-client-secret
-  ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55000/api/v1/onedrive/callback
+  ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55100/api/v1/onedrive/callback
   ONEDRIVE_TENANT_ID=common
   ```
 - Redis must be running (for hybrid modification detection)
@@ -695,25 +695,25 @@ docker-compose logs celery-worker | grep -i error
 ### 11.10 API Verification (Optional)
 ```bash
 # Get auth token
-TOKEN=$(curl -s -X POST http://localhost:55000/api/v1/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
 # List OneDrive connections
-curl -s http://localhost:55000/api/v1/onedrive/connections \
+curl -s http://localhost:55100/api/v1/onedrive/connections \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Get protected folders for a connection
 CONNECTION_ID="your-connection-id"
-curl -s "http://localhost:55000/api/v1/onedrive/connections/$CONNECTION_ID/protected-folders" \
+curl -s "http://localhost:55100/api/v1/onedrive/connections/$CONNECTION_ID/protected-folders" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Trigger manual poll
-curl -s -X POST http://localhost:55000/api/v1/onedrive/poll \
+curl -s -X POST http://localhost:55100/api/v1/onedrive/poll \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Get OneDrive events
-curl -s "http://localhost:55000/api/v1/events?limit=10&source=onedrive_cloud" \
+curl -s "http://localhost:55100/api/v1/events?limit=10&source=onedrive_cloud" \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 
@@ -778,7 +778,7 @@ ps aux | grep agent.py | grep -v grep
 ### Agent Not Connecting
 - Check: `docker-compose logs manager | grep -i error`
 - Verify server URL in agent config
-- Test: `curl http://localhost:55000/health`
+- Test: `curl http://localhost:55100/health`
 
 ### Events Not Showing
 - Check agent logs for errors

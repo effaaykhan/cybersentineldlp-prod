@@ -328,13 +328,13 @@
       if ([string]::IsNullOrWhiteSpace($serverIP)) { $serverIP = 'localhost' }
       if (-not (Test-ServerHost $serverIP)) { Err "Invalid host. Use an IPv4 literal, 'localhost', or a hostname/FQDN." }
     } while (-not (Test-ServerHost $serverIP))
-    $serverURL = "http://${serverIP}:55000/api/v1"
+    $serverURL = "http://${serverIP}:55100/api/v1"
 
-    $reachable = Invoke-Spinner -Text "Testing server at ${serverIP}:55000" -ArgumentList @($serverIP) -Work {
+    $reachable = Invoke-Spinner -Text "Testing server at ${serverIP}:55100" -ArgumentList @($serverIP) -Work {
       param($ip)
       try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        $r = Invoke-RestMethod -Uri "http://${ip}:55000/health" -TimeoutSec 8
+        $r = Invoke-RestMethod -Uri "http://${ip}:55100/health" -TimeoutSec 8
         if ($r.status -eq 'healthy') { 'healthy' } else { 'reachable' }
       } catch { $null }
     }

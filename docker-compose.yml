@@ -94,7 +94,7 @@ services:
       start_period: 90s
     restart: unless-stopped
 
-  # DLP Manager (FastAPI Backend) - Port 55000 (Wazuh-style)
+  # DLP Manager (FastAPI Backend) - Port 55100 (Wazuh-style)
   manager:
     build:
       context: ./server
@@ -103,7 +103,7 @@ services:
     networks:
       - cybersentinel-net
     ports:
-      - "55000:55000"
+      - "55100:55100"
     environment:
       - ENVIRONMENT=production
       - DEBUG=False
@@ -112,7 +112,7 @@ services:
       # app's 2.0.0 default and looks stale next to prod.
       - VERSION=2.1.6
       - SECRET_KEY=${SECRET_KEY}
-      - PORT=55000
+      - PORT=55100
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=dlp_user
@@ -161,7 +161,7 @@ services:
       opensearch:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:55000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:55100/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -324,7 +324,7 @@ services:
     networks:
       - cybersentinel-net
     environment:
-      - DLP_SERVER_URL=http://manager:55000/api/v1
+      - DLP_SERVER_URL=http://manager:55100/api/v1
       - DLP_AGENT_ID=${RELAY_AGENT_ID:-smtp-relay}
       - DLP_AGENT_KEY=${RELAY_AGENT_KEY:-}
       - RELAY_LISTEN_HOST=0.0.0.0

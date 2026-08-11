@@ -20,7 +20,7 @@ class Config:
     NEXT_HOP_STARTTLS = _bool("RELAY_NEXT_HOP_STARTTLS", True)
 
     # --- DLP server (reuses the existing classifier/policy/event pipeline)
-    DLP_SERVER_URL = os.environ.get("DLP_SERVER_URL", "http://manager:55000/api/v1")
+    DLP_SERVER_URL = os.environ.get("DLP_SERVER_URL", "http://manager:55100/api/v1")
     DLP_AGENT_ID = os.environ.get("DLP_AGENT_ID", "smtp-relay")
     DLP_AGENT_KEY = os.environ.get("DLP_AGENT_KEY", "")
     DLP_TIMEOUT = float(os.environ.get("DLP_TIMEOUT", "20"))

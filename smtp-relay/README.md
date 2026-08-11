@@ -33,7 +33,7 @@ place. It's a small standalone image (no ML stack).
 ## Configuration (env)
 | Var | Purpose |
 |---|---|
-| `DLP_SERVER_URL` | Manager API, e.g. `http://manager:55000/api/v1` |
+| `DLP_SERVER_URL` | Manager API, e.g. `http://manager:55100/api/v1` |
 | `RELAY_AGENT_ID` / `RELAY_AGENT_KEY` | A registered agent's id + `X-Agent-Key` (the relay authenticates as an agent) |
 | `RELAY_NEXT_HOP_HOST/_PORT/_USER/_PASS/_STARTTLS` | Where clean mail goes next (e.g. `smtp-relay.gmail.com:587`). **Unset = accept but don't deliver (test mode only).** |
 | `RELAY_HOST_PORT` | Host port to publish (default `10025`) |

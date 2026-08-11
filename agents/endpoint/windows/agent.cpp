@@ -580,7 +580,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          std::smatch match;
          if (std::regex_search(url, match, urlRegex)) {
              host = match[1].str();
-             port = match[2].length() > 0 ? std::stoi(match[2].str()) : 55000;
+             port = match[2].length() > 0 ? std::stoi(match[2].str()) : 55100;
              basePath = match[3].length() > 0 ? match[3].str() : "";
          } else {
              host = "";
@@ -846,7 +846,7 @@ void Log(const std::string& level, const std::string& message) {
         void LoadDefaults() {
             // Default server URL: check environment variable, then use localhost
             const char* envUrl = std::getenv("CYBERSENTINELDLP_SERVER_URL");
-            serverUrl = envUrl ? envUrl : "http://localhost:55000/api/v1";
+            serverUrl = envUrl ? envUrl : "http://localhost:55100/api/v1";
             
             // Generate unique agent ID
             agentId = GenerateUUID();
@@ -914,7 +914,7 @@ void Log(const std::string& level, const std::string& message) {
                 } else {
                     // Fallback to environment or default
                     const char* envUrl = std::getenv("CYBERSENTINELDLP_SERVER_URL");
-                    serverUrl = envUrl ? envUrl : "http://localhost:55000/api/v1";
+                    serverUrl = envUrl ? envUrl : "http://localhost:55100/api/v1";
                 }
                 
                 // Extract agent_name
@@ -10005,7 +10005,7 @@ int main(int argc, char* argv[]) {
         if (envUrl) {
             std::cout << "Using server URL from environment: " << envUrl << "\n";
         } else {
-            std::cout << "Using default server URL: http://localhost:55000/api/v1\n";
+            std::cout << "Using default server URL: http://localhost:55100/api/v1\n";
             std::cout << "To change server URL, set environment variable:\n";
             std::cout << "  set CYBERSENTINELDLP_SERVER_URL=http://your-server:port/api/v1\n\n";
         }

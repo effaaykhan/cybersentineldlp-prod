@@ -156,11 +156,11 @@ status_summary() {
             _bar "   ${C_GREY}running ${C_RESET} ${running} container(s)"
         fi
         local ver
-        ver="$(curl -fsS http://localhost:55000/health 2>/dev/null | grep -oE '"version":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
+        ver="$(curl -fsS http://localhost:55100/health 2>/dev/null | grep -oE '"version":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
         if [ -n "${ver}" ]; then
             _bar "   ${C_GREY}api     ${C_RESET} ${C_GREEN}healthy${C_RESET} ${C_DIM}(v${ver})${C_RESET}"
         else
-            _bar "   ${C_GREY}api     ${C_RESET} ${C_YELLOW}not responding on :55000${C_RESET}"
+            _bar "   ${C_GREY}api     ${C_RESET} ${C_YELLOW}not responding on :55100${C_RESET}"
         fi
     else
         _bar "${C_YELLOW}●${C_RESET}  No existing installation"
@@ -176,7 +176,7 @@ wait_manager_health() {
     say "Waiting for the manager API to come up (max ~3 minutes)"
     local i
     for i in $(seq 1 90); do
-        if curl -fsS http://localhost:55000/health >/dev/null 2>&1; then
+        if curl -fsS http://localhost:55100/health >/dev/null 2>&1; then
             echo; return 0
         fi
         sleep 2
@@ -499,7 +499,7 @@ fi
 if [ -x "${INSTALL_DIR}/validate.sh" ]; then
     echo
     say "Running post-install validation"
-    if bash "${INSTALL_DIR}/validate.sh" --container cybersentineldlp-manager --url http://localhost:55000; then
+    if bash "${INSTALL_DIR}/validate.sh" --container cybersentineldlp-manager --url http://localhost:55100; then
         say "Validation passed"
     else
         c_yellow "[!] One or more validation checks did not pass. The stack is up, but"
@@ -604,9 +604,9 @@ DASH_PORT="${DASH_PORT:-3023}"
 
 c_blue "Endpoints:"
 echo "  Dashboard   : https://${HOST_IP}:${DASH_PORT}/  (TLS 1.3 + HTTP/2)"
-echo "  Manager API : http://${HOST_IP}:55000"
-echo "  API Docs    : http://${HOST_IP}:55000/api/v1/docs"
-echo "  Health probe: http://${HOST_IP}:55000/health"
+echo "  Manager API : http://${HOST_IP}:55100"
+echo "  API Docs    : http://${HOST_IP}:55100/api/v1/docs"
+echo "  Health probe: http://${HOST_IP}:55100/health"
 echo
 c_yellow "  NOTE: The dashboard serves HTTPS (TLS 1.3 + HTTP/2) directly on"
 c_yellow "        port ${DASH_PORT} — the same port as before, now TLS. It uses the"
@@ -616,7 +616,7 @@ c_yellow "        fullchain.pem / privkey.pem there and recreate the dashboard),
 c_yellow "        or front the deployment with Caddy / Traefik + Let's Encrypt."
 c_yellow "        Old http://${HOST_IP}:${DASH_PORT} links auto-redirect to HTTPS."
 c_yellow "        Endpoint agents are unaffected — they talk directly to the"
-c_yellow "        manager on :55000."
+c_yellow "        manager on :55100."
 echo
 c_blue "First-login credentials:"
 echo "  Username : admin"
@@ -712,7 +712,7 @@ do_update() {
     fi
 
     local ver
-    ver="$(curl -fsS http://localhost:55000/health 2>/dev/null | grep -oE '"version":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
+    ver="$(curl -fsS http://localhost:55100/health 2>/dev/null | grep -oE '"version":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
     echo
     c_green "================================================================"
     c_green "  Update Complete${ver:+  —  version ${ver}}"

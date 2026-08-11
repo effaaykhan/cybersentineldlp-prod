@@ -107,7 +107,7 @@ Use this on any fresh Ubuntu/Debian server. Every step below is required; skippi
 one is the usual cause of a failed first boot (see [Troubleshooting](#troubleshooting-first-install)).
 
 **Prerequisites:** Docker Engine 24+, Docker Compose v2+, ≥ 8 GB RAM, ≥ 20 GB free
-disk. Ports `55000` (API) and `3023` (dashboard) free on the host. The pre-built
+disk. Ports `55100` (API) and `3023` (dashboard) free on the host. The pre-built
 images ship every runtime dependency — including the OCR stack (Tesseract +
 poppler) — so **nothing else needs installing on the host.**
 
@@ -179,13 +179,13 @@ after logging in (Settings → Profile → Change Password).
 > existing admin's password.
 
 - Dashboard: `http://<server-ip>:3023`  (override with `DASHBOARD_HOST_PORT` in `.env`)
-- API docs: `http://<server-ip>:55000/api/v1/docs`
+- API docs: `http://<server-ip>:55100/api/v1/docs`
 
 #### Verify the install
 
 ```bash
 docker compose -f docker-compose.prod.yml ps      # all services "Up (healthy)"
-curl -f http://localhost:55000/health             # -> {"status":"healthy"}
+curl -f http://localhost:55100/health             # -> {"status":"healthy"}
 ```
 
 Confirm OCR is active in the pulled image (used for scanned PDFs / images):
@@ -205,7 +205,7 @@ DLP still runs without it; scanned/image files are treated as *uninspectable*
 | `dashboard` container restarts / nginx cert errors | `./certs/fullchain.pem` or `privkey.pem` missing → Docker made them directories. `rm -rf certs && ` re-run step 3. |
 | Login fails right after install | Migrations not applied — run step 5 (`alembic upgrade head`). |
 | `manager` unhealthy for > 2 min | It waits for OpenSearch/Postgres/Mongo/Redis to be healthy first; check `docker compose -f docker-compose.prod.yml ps` and give OpenSearch ~60s on first boot. |
-| Port already in use | Change `DASHBOARD_HOST_PORT` in `.env`, or free port `55000`. |
+| Port already in use | Change `DASHBOARD_HOST_PORT` in `.env`, or free port `55100`. |
 
 #### First login & roles
 
@@ -289,7 +289,7 @@ if ($installed -eq $published) { 'MATCH - latest build' } else { 'MISMATCH - not
 ```bash
 cd agents/endpoint/linux
 pip install -r requirements.txt
-export CYBERSENTINELDLP_SERVER_URL=http://<SERVER_IP>:55000/api/v1
+export CYBERSENTINELDLP_SERVER_URL=http://<SERVER_IP>:55100/api/v1
 python agent.py
 ```
 

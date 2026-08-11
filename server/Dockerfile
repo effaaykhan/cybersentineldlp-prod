@@ -150,13 +150,13 @@ RUN useradd -m -u 1000 dlpuser && \
     chown -R dlpuser:dlpuser /app
 USER dlpuser
 
-EXPOSE 55000
+EXPOSE 55100
 
 ENV UVICORN_WORKERS=${UVICORN_WORKERS:-4}
-ENV PORT=55000
+ENV PORT=55100
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Run application (exec form so signals propagate correctly)
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-55000} --workers ${UVICORN_WORKERS}"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-55100} --workers ${UVICORN_WORKERS}"]

@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Server Configuration
     HOST: str = Field(default="0.0.0.0")
-    PORT: int = Field(default=55000)
+    PORT: int = Field(default=55100)
     WORKERS: int = Field(default=4)
     API_V1_PREFIX: str = "/api/v1"
 

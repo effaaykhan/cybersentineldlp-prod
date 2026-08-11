@@ -66,7 +66,7 @@ Fill in the registration form:
 
 3. **Redirect URI**:
    - Platform: Select **Web**
-   - URI: `http://YOUR_SERVER_IP:55000/api/v1/onedrive/callback`
+   - URI: `http://YOUR_SERVER_IP:55100/api/v1/onedrive/callback`
    - **Replace `YOUR_SERVER_IP`** with:
      - Your server's IP address (e.g., `192.168.1.100`)
      - Or `localhost` if testing locally
@@ -74,9 +74,9 @@ Fill in the registration form:
    
    **Example URIs:**
    ```
-   http://192.168.1.100:55000/api/v1/onedrive/callback
-   http://localhost:55000/api/v1/onedrive/callback
-   http://dlp.example.com:55000/api/v1/onedrive/callback
+   http://192.168.1.100:55100/api/v1/onedrive/callback
+   http://localhost:55100/api/v1/onedrive/callback
+   http://dlp.example.com:55100/api/v1/onedrive/callback
    ```
 
 4. Click **Register**
@@ -206,7 +206,7 @@ Open `.env` file and add the following variables:
 ONEDRIVE_CLIENT_ID=your-application-client-id-here
 ONEDRIVE_CLIENT_SECRET=your-client-secret-value-here
 ONEDRIVE_TENANT_ID=consumers  # Use "consumers" for personal accounts, "common" for both, or tenant ID for org accounts
-ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55000/api/v1/onedrive/callback
+ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55100/api/v1/onedrive/callback
 ```
 
 ### Step 3: Replace Placeholder Values
@@ -245,7 +245,7 @@ Here's a complete example `.env` configuration:
 ONEDRIVE_CLIENT_ID=12345678-abcd-1234-abcd-123456789abc
 ONEDRIVE_CLIENT_SECRET=abc~DEF123ghi456JKL789mno012PQR345stu678
 ONEDRIVE_TENANT_ID=consumers  # Required for personal accounts to avoid SPO license errors
-ONEDRIVE_REDIRECT_URI=http://192.168.1.100:55000/api/v1/onedrive/callback
+ONEDRIVE_REDIRECT_URI=http://192.168.1.100:55100/api/v1/onedrive/callback
 ```
 
 ### Step 5: Verify Configuration
@@ -292,12 +292,12 @@ Test that the OAuth endpoint is accessible:
 
 ```bash
 # Get auth token first (if needed)
-TOKEN=$(curl -s -X POST http://localhost:55000/api/v1/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
 # Test OneDrive connect endpoint
-curl -X POST http://localhost:55000/api/v1/onedrive/connect \
+curl -X POST http://localhost:55100/api/v1/onedrive/connect \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -465,7 +465,7 @@ If you see an error, check:
 
 4. Trigger manual poll:
    ```bash
-   curl -X POST http://localhost:55000/api/v1/onedrive/poll \
+   curl -X POST http://localhost:55100/api/v1/onedrive/poll \
      -H "Authorization: Bearer $TOKEN"
    ```
 
@@ -603,7 +603,7 @@ If you see an error, check:
 ONEDRIVE_CLIENT_ID=<Azure Application (client) ID>
 ONEDRIVE_CLIENT_SECRET=<Azure Client Secret Value>
 ONEDRIVE_TENANT_ID=common
-ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55000/api/v1/onedrive/callback
+ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55100/api/v1/onedrive/callback
 ```
 
 ### API Endpoints

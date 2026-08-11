@@ -49,7 +49,7 @@ A lightweight Data Loss Prevention (DLP) agent for Windows that monitors and pro
    ```
 
 3. **Follow the prompts** to configure:
-   - Server URL (e.g., `http://192.168.1.100:55000/api/v1`)
+   - Server URL (e.g., `http://192.168.1.100:55100/api/v1`)
    - Agent Name (defaults to computer name)
    - Agent ID (auto-generated UUID)
    - Heartbeat Interval (default: 30 seconds)
@@ -68,7 +68,7 @@ The script will:
 2. **Create `agent_config.json`** in the same directory:
    ```json
    {
-     "server_url": "http://your-server:55000/api/v1",
+     "server_url": "http://your-server:55100/api/v1",
      "agent_id": "unique-agent-id",
      "agent_name": "HOSTNAME",
      "heartbeat_interval": 30,
@@ -151,7 +151,7 @@ Edit `agent_config.json` to configure the agent:
 
 ```json
 {
-  "server_url": "http://server:55000/api/v1",
+  "server_url": "http://server:55100/api/v1",
   "agent_id": "unique-identifier",
   "agent_name": "AGENT-NAME",
   "heartbeat_interval": 30,
@@ -194,7 +194,7 @@ Edit `agent_config.json` to configure the agent:
 ### Cannot Connect to Server
 
 - Verify server URL in `agent_config.json`
-- Check network connectivity: `Test-NetConnection server-address -Port 55000`
+- Check network connectivity: `Test-NetConnection server-address -Port 55100`
 - Ensure firewall allows outbound connections
 - Verify server is running and accessible
 

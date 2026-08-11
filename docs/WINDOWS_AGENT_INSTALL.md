@@ -4,7 +4,7 @@
 
 - Windows 10/11 (64-bit)
 - Administrator privileges
-- Network access to the CyberSentinel server (port 55000)
+- Network access to the CyberSentinel server (port 55100)
 - .NET Framework 4.5+ (pre-installed on Windows 10/11)
 
 ## Step 1: Get the server URL
@@ -12,7 +12,7 @@
 Your CyberSentinel server should be running and accessible. Verify:
 
 ```powershell
-curl http://<SERVER_IP>:55000/health
+curl http://<SERVER_IP>:55100/health
 ```
 
 You should see `{"status":"healthy",...}`.
@@ -28,7 +28,7 @@ agents/endpoint/windows/cybersentineldlp_agent.exe
 Option B -- Download from the server (if hosted):
 
 ```powershell
-Invoke-WebRequest -Uri "http://<SERVER_IP>:55000/downloads/agent" -OutFile "cybersentineldlp_agent.exe"
+Invoke-WebRequest -Uri "http://<SERVER_IP>:55100/downloads/agent" -OutFile "cybersentineldlp_agent.exe"
 ```
 
 ## Step 3: Create installation directory
@@ -45,7 +45,7 @@ Copy-Item cybersentineldlp_agent.exe "C:\Program Files\CyberSentinelDLP\"
 ```powershell
 @"
 {
-  "server_url": "http://<SERVER_IP>:55000/api/v1",
+  "server_url": "http://<SERVER_IP>:55100/api/v1",
   "agent_name": "$env:COMPUTERNAME",
   "heartbeat_interval": 30,
   "policy_sync_interval": 60,
@@ -137,7 +137,7 @@ You should see **exactly one** `cybersentineldlp_agent` process.
 The agent automatically registers with the server on first start. Check the server dashboard or API:
 
 ```powershell
-curl http://<SERVER_IP>:55000/api/v1/agents/
+curl http://<SERVER_IP>:55100/api/v1/agents/
 ```
 
 Your agent should appear with status `active`.
@@ -220,7 +220,7 @@ Remove-Item "C:\ProgramData\CyberSentinelDLP" -Recurse -Force
 
 | Issue | Solution |
 |-------|----------|
-| Agent not registering | Check firewall allows outbound to port 55000 |
+| Agent not registering | Check firewall allows outbound to port 55100 |
 | Agent crashes on start | Check `agent_config.json` is valid JSON, verify server URL |
 | Two `cybersentineldlp_agent` processes running | Zombie from previous run — `Stop-ScheduledTask` first, then `Stop-Process -Force`, verify empty, then `Start-ScheduledTask` |
 | USB events not detected | Ensure `usb_devices: true` in config, agent must run as SYSTEM |

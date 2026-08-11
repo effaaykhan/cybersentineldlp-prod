@@ -74,7 +74,7 @@ def load_config():
             except Exception as e:
                 log("config read failed %s: %s" % (p, e))
     return {
-        "server_url": os.environ.get("CSDLP_SERVER_URL") or cfg.get("server_url") or "http://localhost:55000/api/v1",
+        "server_url": os.environ.get("CSDLP_SERVER_URL") or cfg.get("server_url") or "http://localhost:55100/api/v1",
         "agent_id": os.environ.get("CSDLP_AGENT_ID") or cfg.get("agent_id") or "browser-guard",
         "agent_key": os.environ.get("CSDLP_AGENT_KEY") or cfg.get("agent_key") or "",
     }

@@ -98,12 +98,12 @@ tail -f ~/cybersentineldlp_agent.log
 
 ### Test API Health
 ```bash
-curl http://localhost:55000/health
+curl http://localhost:55100/health
 ```
 
 ### Test Event Creation (Manual)
 ```bash
-curl -X POST http://localhost:55000/api/v1/events \
+curl -X POST http://localhost:55100/api/v1/events \
   -H "Content-Type: application/json" \
   -d '{
     "event_id": "test-manual-123",
@@ -117,7 +117,7 @@ curl -X POST http://localhost:55000/api/v1/events \
 
 ### Get Auth Token
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:55000/api/v1/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 echo $TOKEN
@@ -125,11 +125,11 @@ echo $TOKEN
 
 ### Get Events (with auth)
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:55000/api/v1/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:55100/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=admin&password=admin" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 
-curl -s http://localhost:55000/api/v1/events?limit=5 \
+curl -s http://localhost:55100/api/v1/events?limit=5 \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 ```
 

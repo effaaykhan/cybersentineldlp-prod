@@ -47,7 +47,7 @@ plugin (no `DISABLE_SECURITY_PLUGIN=true`); the admin password must be
 supplied via `OPENSEARCH_PASSWORD`. All database tier services (postgres,
 mongo, redis, opensearch) have no `ports: - "…:…"` keys — databases are
 internal-only on the `cybersentineldlp` docker network. Only `manager`
-(55000) and `dashboard` (3023→3000) remain host-exposed.
+(55100) and `dashboard` (3023→3000) remain host-exposed.
 `security_opt: - no-new-privileges:true` is set on every container.
 
 ### CR-2 — Hardcoded fallback OpenSearch password `CyberSentinel2025!`

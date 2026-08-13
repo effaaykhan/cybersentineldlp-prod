@@ -418,9 +418,11 @@ CI (`.github/workflows/build-images.yml`) rebuilds and re-publishes the GHCR
 images on every push to `main`. To roll a server forward:
 
 ```bash
-csdlp update            # latest images, safely
-csdlp update 2.3.0      # or a specific published tag
-csdlp rollback          # revert to the pre-update versions
+csdlp update              # latest images, safely
+csdlp update 2.3.0        # or a specific published tag
+csdlp update sha-a1b2c3d  # or one exact CI build (see below)
+csdlp rollback            # revert to the pre-update versions
+csdlp update latest       # release a pin left by a rollback
 ```
 
 `update` first snapshots the current image versions **and takes a DB
@@ -429,6 +431,19 @@ backup**, then pulls, runs migrations, brings the stack up, and polls
 back** to the versions it saved. Volumes (postgres/mongo/opensearch data)
 are always preserved. `.env` is the only per-server difference, so these
 commands behave identically on every server.
+
+**How a version is pinned for recovery.** Every CI build carries an
+immutable `sha-<commit>` tag, so the snapshot records a tag that can be
+**re-pulled** — recovery works even if the old image was pruned locally, or
+if you are rebuilding on a host that never ran that version. Images with no
+CI provenance (locally-built dev images) fall back to the local image ID,
+which is lost to `docker image prune`; `csdlp version` shows which of the
+two you have.
+
+After a rollback the good version is **pinned**, because a bare
+`csdlp update` would otherwise pull `:latest` again — the very build you
+just rolled away from — and silently undo the recovery. Moving off a pin is
+deliberate: name a tag, or run `csdlp update latest`.
 
 ### Diagnostics
 

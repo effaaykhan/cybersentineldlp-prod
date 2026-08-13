@@ -32,6 +32,10 @@ jobs:
       - name: Run Python syntax check
         working-directory: ./server
         run: |
+          # compileall reports a MISSING directory as a warning and still exits 0,
+          # so guard the path explicitly — otherwise a layout change turns this
+          # gate into a green no-op instead of failing.
+          test -d app || { echo "❌ server/app not found — layout changed?"; exit 1; }
           python -m compileall -q app/ || exit 1
           echo "✅ All Python files compiled successfully"
 
@@ -58,8 +62,21 @@ jobs:
 
       - name: Check agent files
         run: |
-          python -m compileall -q agents/common/ agents/windows/ agents/linux/ || exit 1
-          echo "✅ All agent files compiled successfully"
+          # This step used to name agents/common, agents/windows and agents/linux —
+          # none of which exist (the real layout is agents/endpoint/{windows,linux}
+          # and agents/browser-extension). compileall prints "Can't list ..." for a
+          # missing directory and still exits 0, so the step passed while compiling
+          # nothing at all. Enumerate the real sources and fail on an empty set, so
+          # a future move breaks the build loudly instead of silently skipping.
+          mapfile -t AGENT_PY < <(find agents -name '*.py' \
+            -not -path '*/node_modules/*' -not -path '*/__pycache__/*' | sort)
+          if [ "${#AGENT_PY[@]}" -eq 0 ]; then
+            echo "❌ No agent Python sources found under agents/ — layout changed?"
+            exit 1
+          fi
+          printf '  %s\n' "${AGENT_PY[@]}"
+          python -m py_compile "${AGENT_PY[@]}"
+          echo "✅ ${#AGENT_PY[@]} agent Python files compiled successfully"
 
       - name: Summary
         run: |

@@ -133,16 +133,74 @@ _health_ok() {
     return 1
 }
 
+# Best DURABLE reference for an image, printed as "tag:<t>" or "id:<sha256:…>".
+#
+# A registry tag is strongly preferred: CI stamps every build with an immutable
+# sha-<commit> tag, which can be re-pulled even if the local image was pruned or
+# you are recovering on a host that never ran that version. The local image ID is
+# only a fallback for dev/locally-built images that carry no CI provenance — it
+# dies with a `docker image prune`, which is exactly how a rollback becomes
+# unrecoverable.
+_img_ref() {
+    local img="$1" repo tag rev
+    repo="${img%:*}"
+    # 1. an immutable sha-* tag already present on the image
+    tag="$(docker image inspect "$img" --format '{{range .RepoTags}}{{println .}}{{end}}' 2>/dev/null \
+           | sed -n "s#^${repo}:\(sha-[0-9a-f]\{7,\}\)\$#\1#p" | head -1)"
+    # 2. else derive it from the OCI revision label CI stamps on every build
+    if [ -z "$tag" ]; then
+        rev="$(docker image inspect "$img" \
+               --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null)"
+        case "$rev" in
+            [0-9a-f][0-9a-f]*) tag="sha-$(printf '%s' "$rev" | cut -c1-7)";;
+        esac
+    fi
+    [ -n "$tag" ] && { printf 'tag:%s' "$tag"; return 0; }
+    # 3. no CI provenance — fall back to the local content ID
+    docker image inspect "$img" --format 'id:{{.Id}}' 2>/dev/null
+}
+
+# Restore one image to a saved reference. Returns the reference actually used.
+_restore_img() {
+    local img="$1" ref="$2" repo t i
+    repo="${img%:*}"
+    case "$ref" in
+        tag:*)
+            t="${ref#tag:}"
+            docker image inspect "$repo:$t" >/dev/null 2>&1 || docker pull "$repo:$t" >/dev/null 2>&1 || return 1
+            docker tag "$repo:$t" "$img" || return 1
+            printf '%s' "$repo:$t";;
+        id:*)
+            i="${ref#id:}"
+            docker image inspect "$i" >/dev/null 2>&1 || return 1
+            docker tag "$i" "$img" || return 1
+            printf '%s' "$i";;
+        *) return 1;;
+    esac
+}
+
 _save_versions() {
-    # record current image IDs so rollback can re-pin them
+    # record how to get back to the CURRENT images (registry tag if available,
+    # local image ID otherwise) so rollback can restore them
     mkdir -p "$DIR/.csdlp"
-    { docker image inspect "$MANAGER_IMG" --format 'manager {{.Id}}' 2>/dev/null
-      [ -n "$DASH_IMG" ] && docker image inspect "$DASH_IMG" --format 'dashboard {{.Id}}' 2>/dev/null
+    { printf 'manager %s\n' "$(_img_ref "$MANAGER_IMG")"
+      [ -n "$DASH_IMG" ] && printf 'dashboard %s\n' "$(_img_ref "$DASH_IMG")"
     } > "$DIR/.csdlp/prev-versions"
 }
 
 cmd_update() {
-    local tag="${1:-}"
+    local tag="${1:-}" pinf="$DIR/.csdlp/pinned"
+    # A rollback pins the known-good tag. Without this guard the next bare
+    # `csdlp update` runs `docker compose pull`, which fetches :latest from the
+    # registry — i.e. the exact build just rolled away from — silently undoing
+    # the recovery. Moving off a pin has to be deliberate.
+    if [ -z "$tag" ] && [ -f "$pinf" ]; then
+        err "pinned to $(cat "$pinf") by a previous rollback."
+        err "use 'csdlp update <TAG>' for a specific build, or 'csdlp update latest' to release the pin."
+        return 1
+    fi
+    # `update latest` is the explicit way back onto the moving tag.
+    [ "$tag" = "latest" ] && { rm -f "$pinf"; tag=""; }
     hd "Update${tag:+ -> $tag}"
     ok "1/5 snapshotting current versions + DB backup"
     _save_versions
@@ -158,6 +216,7 @@ cmd_update() {
     ok "4/5 running migrations"; cmd_migrate || warn "migrate step reported issues"
     ok "5/5 health gate"
     if _health_ok; then
+        rm -f "$pinf"          # deliberate move succeeded — release any pin
         ok "update healthy — done"
     else
         err "health check FAILED after update — rolling back"
@@ -167,14 +226,34 @@ cmd_update() {
 
 cmd_rollback() {
     hd "Rollback"
-    local pv="$DIR/.csdlp/prev-versions"
+    local pv="$DIR/.csdlp/prev-versions" restored=0 pin="" role ref used
     [ -f "$pv" ] || { err "no saved versions to roll back to (.csdlp/prev-versions missing)"; return 1; }
-    while read -r role id; do
+    while read -r role ref; do
+        [ -n "$ref" ] || continue
         case "$role" in
-            manager) [ -n "$id" ] && docker tag "$id" "$MANAGER_IMG" && ok "manager re-pinned to $id";;
-            dashboard) [ -n "$id" ] && [ -n "$DASH_IMG" ] && docker tag "$id" "$DASH_IMG" && ok "dashboard re-pinned to $id";;
+            manager)
+                if used="$(_restore_img "$MANAGER_IMG" "$ref")"; then
+                    ok "manager re-pinned to $used"; restored=$((restored + 1))
+                    case "$ref" in tag:*) pin="${ref#tag:}";; esac
+                else
+                    err "manager: saved version '$ref' could not be restored (pruned locally and not pullable)"
+                fi;;
+            dashboard)
+                [ -n "$DASH_IMG" ] || continue
+                if used="$(_restore_img "$DASH_IMG" "$ref")"; then
+                    ok "dashboard re-pinned to $used"; restored=$((restored + 1))
+                else
+                    err "dashboard: saved version '$ref' could not be restored (pruned locally and not pullable)"
+                fi;;
         esac
     done < "$pv"
+    [ "$restored" -gt 0 ] || { err "nothing could be restored — investigate with: csdlp doctor"; return 1; }
+    # Pin the known-good tag so the next bare `csdlp update` cannot silently
+    # re-pull the :latest we just rolled away from.
+    if [ -n "$pin" ]; then
+        mkdir -p "$DIR/.csdlp"; printf '%s\n' "$pin" > "$DIR/.csdlp/pinned"
+        ok "pinned to $pin — run 'csdlp update latest' to release"
+    fi
     dc up -d
     _health_ok && ok "rolled back + healthy" || err "still unhealthy after rollback — investigate with: csdlp doctor"
 }
@@ -193,6 +272,14 @@ cmd_version() {
     hd "Versions"
     kv "manager image" "$MANAGER_IMG"
     docker image inspect "$MANAGER_IMG" --format '  {{"image id     "}} {{.Id}}' 2>/dev/null
+    # The commit this image was built from — only present on CI builds, which
+    # carry the sha-<commit> tag and the OCI revision label.
+    local mref="$(_img_ref "$MANAGER_IMG")"
+    case "$mref" in
+        tag:*) kv "build ref" "${mref#tag:} (immutable, re-pullable)";;
+        id:*)  kv "build ref" "local image only — no CI provenance, not re-pullable";;
+    esac
+    [ -f "$DIR/.csdlp/pinned" ] && kv "pinned" "$(cat "$DIR/.csdlp/pinned") (after a rollback)"
     local h; h="$(mgr_curl http://localhost:55100/health)"
     [ -n "$h" ] && kv "api version" "$(printf '%s' "$h" | grep -oE '"version":"[^"]*"' | cut -d: -f2 | tr -d '"')"
 }
@@ -262,7 +349,10 @@ usage() {
     printf '  %-26s %s\n' ""              "image TAG) -> migrate -> up -> health-gate; AUTO-ROLLS-BACK if the"
     printf '  %-26s %s\n' ""              "stack is unhealthy afterwards."
     printf '  %-26s %s\n' "rollback"      "Revert the images to the versions saved before the last update, up,"
-    printf '  %-26s %s\n' ""              "and re-check health."
+    printf '  %-26s %s\n' ""              "and re-check health. Re-pulls the immutable sha-<commit> tag when the"
+    printf '  %-26s %s\n' ""              "image came from CI, so it works even if the old image was pruned;"
+    printf '  %-26s %s\n' ""              "then PINS that version so the next bare update cannot undo it."
+    printf '  %-26s %s\n' ""              "Release the pin with: csdlp update latest"
     printf '  %-26s %s\n' "migrate"       "Run database schema migrations (alembic upgrade head). Idempotent."
 
     printf '\n%sDATA%s\n' "$CG" "$C0"
@@ -286,7 +376,9 @@ usage() {
     printf '  %s\n' "csdlp logs manager -f        # watch the backend live"
     printf '  %s\n' "csdlp update                 # roll forward to the latest images, safely"
     printf '  %s\n' "csdlp update 2.2.0           # roll forward to a specific version"
-    printf '  %s\n' "csdlp rollback               # undo the last update"
+    printf '  %s\n' "csdlp update sha-a1b2c3d     # roll forward/back to one exact CI build"
+    printf '  %s\n' "csdlp rollback               # undo the last update (and pin the good build)"
+    printf '  %s\n' "csdlp update latest          # release a pin and return to the latest images"
     printf '\n%sSafety:%s update always backs up first and self-heals on failure; doctor redacts\n' "$CD" "$C0"
     printf 'secrets; no command prints a password except `secret admin-password`.\n'
 }

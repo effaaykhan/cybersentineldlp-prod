@@ -58,9 +58,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_PREFIX }}/dlp-${{ matrix.service }}
+          # type=sha gives EVERY build an immutable, commit-addressed tag
+          # (sha-a1b2c3d) that lives in the registry. Without it the only tag a
+          # normal push produces is the moving `:latest`, which leaves `csdlp
+          # rollback` with nothing to re-pull — it can only re-tag a local image
+          # ID, so recovery dies the moment that image is pruned or you are on a
+          # different host. The semver tags below only fire on a `v*` git tag.
           tags: |
             type=ref,event=branch
             type=ref,event=pr
+            type=sha
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}

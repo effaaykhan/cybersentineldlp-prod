@@ -110,36 +110,105 @@ def _host_from_email(user_email: Optional[str]) -> Optional[str]:
     return None
 
 
-async def _usb_activity(serials: List[str]) -> Dict[str, dict]:
-    """Per-serial {connected, last_connect, last_disconnect, last_seen}."""
+async def _usb_activity(serials: List[str], db: AsyncSession) -> Dict[str, dict]:
+    """Per-serial connection state, from the connect/disconnect history AND the
+    liveness of the agent that reported it.
+
+    A connect with no matching disconnect does NOT mean the device is still
+    plugged in. Disconnects are only emitted by a running agent, so a machine
+    that was shut down, hibernated, slept, lost power, or simply had its agent
+    stopped leaves its last connect standing forever. Believing that event on
+    its own is what makes a stick pulled out months ago — on a host that has
+    been offline ever since — still render as "Connected".
+
+    So a connect is only trusted while the agent that reported it is still
+    beating (the same freshness window the Agents page uses). When that agent is
+    dead we genuinely do not know whether the device is attached, and the honest
+    answer is "unknown" — not a green dot.
+
+    Returns per serial:
+        connection_state         "connected" | "disconnected" | "unknown"
+        connected                bool — True only for "connected"
+        reporting_agent_id       agent that reported the last connect
+        reporting_agent_online   whether that agent is currently beating
+        reporting_host           where it was last inserted
+        last_connect / last_disconnect / last_seen
+    """
     serials = [s for s in {s for s in serials if s}]
     if not serials:
         return {}
     mongo = get_mongodb()["dlp_events"]
-    pipeline = [
-        {"$match": {
-            "event_type": "usb",
-            "serial_number": {"$in": serials},
-            "event_subtype": {"$in": _USB_CONNECT_SUBTYPES + _USB_DISCONNECT_SUBTYPES},
-        }},
-        {"$group": {
-            "_id": "$serial_number",
-            "last_connect": {"$max": {"$cond": [
-                {"$in": ["$event_subtype", _USB_CONNECT_SUBTYPES]}, "$timestamp", None]}},
-            "last_disconnect": {"$max": {"$cond": [
-                {"$in": ["$event_subtype", _USB_DISCONNECT_SUBTYPES]}, "$timestamp", None]}},
-        }},
-    ]
+
+    # Most recent CONNECT per serial, carrying the agent that reported it.
+    # Sort-then-$last is the portable way to pick the newest document per group.
+    connects: Dict[str, dict] = {}
+    async for r in mongo.aggregate([
+        {"$match": {"event_type": "usb", "serial_number": {"$in": serials},
+                    "event_subtype": {"$in": _USB_CONNECT_SUBTYPES}}},
+        {"$sort": {"timestamp": 1}},
+        {"$group": {"_id": "$serial_number",
+                    "ts": {"$last": "$timestamp"},
+                    "agent_id": {"$last": "$agent_id"},
+                    "hostname": {"$last": "$hostname"},
+                    "user_email": {"$last": "$user_email"}}},
+    ]):
+        connects[r["_id"]] = r
+
+    # Most recent DISCONNECT per serial.
+    disconnects: Dict[str, object] = {}
+    async for r in mongo.aggregate([
+        {"$match": {"event_type": "usb", "serial_number": {"$in": serials},
+                    "event_subtype": {"$in": _USB_DISCONNECT_SUBTYPES}}},
+        {"$group": {"_id": "$serial_number", "ts": {"$max": "$timestamp"}}},
+    ]):
+        disconnects[r["_id"]] = r.get("ts")
+
+    # Liveness of every agent that reported a connect, by the same rule the
+    # Agents page applies (heartbeat within AGENT_TIMEOUT_SECONDS).
+    from app.api.v1.agents import _compute_lifecycle_status
+    from app.models.agent import Agent
+
+    agent_ids = {c.get("agent_id") for c in connects.values() if c.get("agent_id")}
+    live: Dict[str, bool] = {}
+    if agent_ids:
+        rows = (await db.execute(
+            select(Agent.agent_id, Agent.last_heartbeat, Agent.last_seen)
+            .where(Agent.agent_id.in_(agent_ids))
+        )).all()
+        for aid, heartbeat, seen in rows:
+            live[aid] = _compute_lifecycle_status(heartbeat or seen) == "active"
+
     out: Dict[str, dict] = {}
-    async for r in mongo.aggregate(pipeline):
-        lc, ld = r.get("last_connect"), r.get("last_disconnect")
-        connected = bool(lc and (not ld or lc > ld))
-        last_seen = lc if (lc and (not ld or lc > ld)) else (ld or lc)
-        out[r["_id"]] = {
-            "connected": connected,
+    for serial in serials:
+        c = connects.get(serial)
+        lc = c.get("ts") if c else None
+        ld = disconnects.get(serial)
+        if lc is None and ld is None:
+            continue  # never observed — leave it absent so callers render "—"
+
+        agent_id = (c or {}).get("agent_id")
+        # None (not False) when the connect predates agent tracking: unknown,
+        # not "offline".
+        agent_online = live.get(agent_id) if agent_id else None
+
+        if lc and (not ld or lc > ld):
+            # Last thing we heard was "plugged in" — believe it only if the
+            # reporter is still alive to have told us otherwise.
+            state = "connected" if agent_online else "unknown"
+        else:
+            # An explicit disconnect is trustworthy whatever the agent does next.
+            state = "disconnected"
+
+        out[serial] = {
+            "connection_state": state,
+            "connected": state == "connected",
+            "reporting_agent_id": agent_id,
+            "reporting_agent_online": agent_online,
+            "reporting_host": ((c or {}).get("hostname")
+                               or _host_from_email((c or {}).get("user_email"))),
             "last_connect": _iso(lc),
             "last_disconnect": _iso(ld),
-            "last_seen": _iso(last_seen),
+            "last_seen": _iso(lc if (lc and (not ld or lc > ld)) else (ld or lc)),
         }
     return out
 
@@ -171,10 +240,13 @@ async def list_devices(
 
     # Annotate each device with live connected state from usb connect/disconnect
     # events (keyed by serial; rule-type rows without a serial get connected=None).
-    activity = await _usb_activity([d.get("serial_number") for d in devices])
+    activity = await _usb_activity([d.get("serial_number") for d in devices], db)
     for d in devices:
         act = activity.get(d.get("serial_number") or "")
         d["connected"] = act["connected"] if act else None
+        d["connection_state"] = act["connection_state"] if act else None
+        d["reporting_host"] = act["reporting_host"] if act else None
+        d["reporting_agent_online"] = act["reporting_agent_online"] if act else None
         d["last_seen"] = act["last_seen"] if act else None
 
     return {
@@ -232,6 +304,7 @@ async def approve_device(
         await db.refresh(existing)
         logger.info("usb_device_registered", decision=decision, match_type=match_type,
                     match_value=match_value, user=current_user.username)
+        await _clear_dismissal(db, body.serial_number)
         if decision == "deny":
             await _log_disallow_event(existing, current_user)
         return _device_out(existing)
@@ -255,9 +328,27 @@ async def approve_device(
     await db.refresh(dev)
     logger.info("usb_device_registered", decision=decision, match_type=match_type,
                 match_value=match_value, user=current_user.username)
+    await _clear_dismissal(db, body.serial_number)
     if decision == "deny":
         await _log_disallow_event(dev, current_user)
     return _device_out(dev)
+
+
+async def _clear_dismissal(db: AsyncSession, serial: Optional[str]) -> None:
+    """Drop any dismissal for this serial — a real decision supersedes it.
+
+    Without this, removing the rule later would drop the device back into
+    hiding rather than back into the triage queue.
+    """
+    serial = (serial or "").strip()
+    if not serial:
+        return
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
+    await db.execute(delete(DismissedUsbDevice).where(
+        DismissedUsbDevice.serial_number == serial
+    ))
+    await db.commit()
 
 
 async def _log_disallow_event(dev: SanctionedUsbDevice, user: User) -> None:
@@ -342,13 +433,25 @@ async def revoke_device(
 @router.get("/seen")
 async def seen_devices(
     limit: int = 200,
+    include_dismissed: bool = False,
     current_user: User = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """USB devices observed on endpoints (from events) that are NOT yet
-    sanctioned — the enrolment candidates. Deduped by serial, most-recent first."""
+    """USB devices observed on endpoints (from events) with no registry rule —
+    the enrolment candidates. Deduped by serial, most-recent first.
+
+    Devices that were dismissed are hidden by default (they are triage noise,
+    not decisions); pass ``include_dismissed=true`` to see them, each flagged
+    with ``dismissed: true`` so they can be restored. ``dismissed_count`` is
+    always returned so the UI can offer that without a second call.
+    """
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
     approved = {
         s for (s,) in (await db.execute(select(SanctionedUsbDevice.serial_number))).all()
+    }
+    dismissed = {
+        s for (s,) in (await db.execute(select(DismissedUsbDevice.serial_number))).all()
     }
     mongo = get_mongodb()["dlp_events"]
     pipeline = [
@@ -371,11 +474,15 @@ async def seen_devices(
     ]
     out: List[dict] = []
     async for r in mongo.aggregate(pipeline):
-        if r.get("serial_number") in approved:
+        serial = r.get("serial_number")
+        if serial in approved:
+            continue
+        if serial in dismissed and not include_dismissed:
             continue
         ls = r.get("last_seen")
         out.append({
-            "serial_number": r.get("serial_number"),
+            "dismissed": serial in dismissed,
+            "serial_number": serial,
             "vendor_id": r.get("vendor_id"),
             "product_id": r.get("product_id"),
             "product_name": r.get("product_name"),
@@ -389,11 +496,82 @@ async def seen_devices(
         })
 
     # Live connected state from connect/disconnect events, keyed by serial.
-    activity = await _usb_activity([d["serial_number"] for d in out])
+    activity = await _usb_activity([d["serial_number"] for d in out], db)
     for d in out:
         act = activity.get(d["serial_number"] or "")
         d["connected"] = act["connected"] if act else None
-    return {"devices": out, "count": len(out)}
+        d["connection_state"] = act["connection_state"] if act else None
+        d["reporting_agent_online"] = act["reporting_agent_online"] if act else None
+    return {
+        "devices": out,
+        "count": len(out),
+        "dismissed_count": len(dismissed),
+        "include_dismissed": include_dismissed,
+    }
+
+
+class DeviceDismiss(BaseModel):
+    serial_number: str = Field(..., min_length=1, max_length=255)
+    product_name: Optional[str] = Field(None, max_length=255)
+    manufacturer: Optional[str] = Field(None, max_length=255)
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+@router.post("/seen/dismiss", status_code=status.HTTP_201_CREATED)
+async def dismiss_seen_device(
+    body: DeviceDismiss,
+    current_user: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear a device off the seen list without allowing or denying it.
+
+    Bookkeeping only. The device is NOT authorized — under a usb_device_control
+    policy the posture is strict allowlist, so a dismissed device with no allow
+    row stays blocked — and it keeps generating events, violations and alerts.
+    Reversible via DELETE; the event history is never touched.
+    """
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
+    serial = body.serial_number.strip()
+    if not serial:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "serial_number is required")
+
+    existing = (await db.execute(
+        select(DismissedUsbDevice).where(DismissedUsbDevice.serial_number == serial)
+    )).scalar_one_or_none()
+    if existing:
+        return {"serial_number": serial, "dismissed": True, "already": True}
+
+    db.add(DismissedUsbDevice(
+        serial_number=serial,
+        product_name=body.product_name,
+        manufacturer=body.manufacturer,
+        note=body.note,
+        dismissed_by=current_user.id,
+    ))
+    await db.commit()
+    logger.info("usb_device_dismissed", serial=serial, user=current_user.username)
+    return {"serial_number": serial, "dismissed": True, "already": False}
+
+
+@router.delete("/seen/dismiss/{serial_number}", status_code=status.HTTP_204_NO_CONTENT)
+async def restore_seen_device(
+    serial_number: str,
+    current_user: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Undo a dismissal — the device returns to the seen list for triage."""
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
+    res = await db.execute(
+        delete(DismissedUsbDevice).where(
+            DismissedUsbDevice.serial_number == serial_number.strip()
+        )
+    )
+    await db.commit()
+    if res.rowcount == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "device was not dismissed")
+    logger.info("usb_device_restored", serial=serial_number, user=current_user.username)
 
 
 @router.get("/activity")

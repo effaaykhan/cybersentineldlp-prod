@@ -18,12 +18,22 @@ export interface SanctionedDevice {
   is_enabled: boolean
   notes?: string | null
   approved_at?: string | null
-  connected?: boolean | null   // live: is a matching device plugged in now
+  // Live state. `connected` is true ONLY when the agent that reported the plug-in
+  // is still beating; when that endpoint is offline the honest answer is
+  // "unknown", not "connected" — no disconnect is ever emitted by a machine
+  // that was shut down. Prefer connection_state for display.
+  connected?: boolean | null
+  connection_state?: 'connected' | 'disconnected' | 'unknown' | null
+  reporting_host?: string | null
+  reporting_agent_online?: boolean | null
   last_seen?: string | null
 }
 
 export interface SeenDevice {
   serial_number: string
+  // True when this device was cleared off the triage queue. It is NOT allowed
+  // by that — strict allowlist still blocks it — only hidden from the list.
+  dismissed?: boolean
   vendor_id?: string | null
   product_id?: string | null
   product_name?: string | null
@@ -34,6 +44,8 @@ export interface SeenDevice {
   host?: string | null
   last_seen?: string | null
   connected?: boolean | null
+  connection_state?: 'connected' | 'disconnected' | 'unknown' | null
+  reporting_agent_online?: boolean | null
   sanctioned: boolean
 }
 
@@ -81,8 +93,17 @@ export const listDevices = async (): Promise<DeviceListResponse> => {
   return data
 }
 
-export const seenDevices = async (): Promise<{ devices: SeenDevice[]; count: number }> => {
-  const { data } = await apiClient.get('/usb-devices/seen')
+export const seenDevices = async (
+  includeDismissed = false,
+): Promise<{
+  devices: SeenDevice[]
+  count: number
+  dismissed_count: number
+  include_dismissed: boolean
+}> => {
+  const { data } = await apiClient.get('/usb-devices/seen', {
+    params: includeDismissed ? { include_dismissed: true } : undefined,
+  })
   return data
 }
 
@@ -106,4 +127,18 @@ export const revokeDevice = async (id: string): Promise<void> => {
 export const getDeviceActivity = async (serial: string): Promise<DeviceActivity> => {
   const { data } = await apiClient.get('/usb-devices/activity', { params: { serial } })
   return data
+}
+
+export const dismissSeenDevice = async (body: {
+  serial_number: string
+  product_name?: string
+  manufacturer?: string
+  note?: string
+}): Promise<{ serial_number: string; dismissed: boolean; already: boolean }> => {
+  const { data } = await apiClient.post('/usb-devices/seen/dismiss', body)
+  return data
+}
+
+export const restoreSeenDevice = async (serial: string): Promise<void> => {
+  await apiClient.delete(`/usb-devices/seen/dismiss/${encodeURIComponent(serial)}`)
 }

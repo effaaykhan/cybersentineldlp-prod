@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, X, MapPin, Pencil } from 'lucide-react'
+import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, X, MapPin, Pencil, EyeOff, Undo2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import {
   listDevices, seenDevices, approveDevice, updateDevice, revokeDevice, getDeviceActivity,
+  dismissSeenDevice, restoreSeenDevice,
   type SanctionedDevice, type SeenDevice, type UsbMatchType,
 } from '@/lib/usb-devices-api'
 
@@ -27,13 +28,43 @@ const MATCH_FIELD: Record<UsbMatchType, { label: string; placeholder: string; sc
   model:        { label: 'Model (product name)', placeholder: 'e.g. Cruzer Blade',     scope: 'every device with this product name' },
 }
 
-// green = connected, red = disconnected, grey dash = unknown / rule-type (no serial).
-function ConnDot({ connected }: { connected?: boolean | null }) {
-  if (connected == null) return <span className="text-cs-muted-2" title="Not applicable / never seen">—</span>
+// Three states, not two. A plug-in event with no matching unplug does NOT prove
+// the device is still attached: only a running agent emits the unplug, so a
+// machine that was shut down leaves its last connect standing forever. When the
+// reporting agent is no longer beating we say "unknown" rather than showing a
+// live green dot for a stick that was pulled out months ago.
+//   green  = connected  — agent is online and reports it attached
+//   grey   = unknown    — agent offline; last we heard it was attached
+//   red    = disconnected — an actual unplug was reported
+//   dash   = never seen / rule-type row with no serial
+function ConnDot({
+  state, host,
+}: { state?: 'connected' | 'disconnected' | 'unknown' | null; host?: string | null }) {
+  if (state == null) {
+    return <span className="text-cs-muted-2" title="Not applicable / never seen">—</span>
+  }
+  const where = host ? ` on ${host}` : ''
+  if (state === 'unknown') {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5"
+        title={`Last seen attached${where}, but that endpoint's agent is offline — the unplug would never have been reported, so the current state is unknown.`}
+      >
+        <span className="h-2.5 w-2.5 rounded-full bg-cs-muted-2" />
+        <span className="text-xs text-cs-muted">Unknown</span>
+      </span>
+    )
+  }
+  const on = state === 'connected'
   return (
-    <span className="inline-flex items-center gap-1.5" title={connected ? 'Connected now' : 'Not connected'}>
-      <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-cs-ok animate-pulse' : 'bg-cs-crit'}`} />
-      <span className={`text-xs ${connected ? 'text-cs-ok' : 'text-cs-muted'}`}>{connected ? 'Connected' : 'Offline'}</span>
+    <span
+      className="inline-flex items-center gap-1.5"
+      title={on ? `Attached now${where}` : 'Unplug reported'}
+    >
+      <span className={`h-2.5 w-2.5 rounded-full ${on ? 'bg-cs-ok animate-pulse' : 'bg-cs-crit'}`} />
+      <span className={`text-xs ${on ? 'text-cs-ok' : 'text-cs-muted'}`}>
+        {on ? 'Connected' : 'Disconnected'}
+      </span>
     </span>
   )
 }
@@ -42,7 +73,14 @@ export default function UsbDevices() {
   const qc = useQueryClient()
   // Poll so the connected marker stays live as devices are plugged/unplugged.
   const devicesQ = useQuery({ queryKey: ['usb-devices'], queryFn: listDevices, refetchInterval: 15000 })
-  const seenQ = useQuery({ queryKey: ['usb-devices-seen'], queryFn: seenDevices, refetchInterval: 15000 })
+  // Dismissed devices are hidden by default; the toggle brings them back so a
+  // dismissal is always visible and undoable rather than a black hole.
+  const [showDismissed, setShowDismissed] = useState(false)
+  const seenQ = useQuery({
+    queryKey: ['usb-devices-seen', showDismissed],
+    queryFn: () => seenDevices(showDismissed),
+    refetchInterval: 15000,
+  })
   const [activitySerial, setActivitySerial] = useState<{ serial: string; name: string } | null>(null)
 
   const invalidate = () => {
@@ -105,8 +143,21 @@ export default function UsbDevices() {
       <Section
         title="Seen on endpoints — not sanctioned"
         count={seenQ.data?.count || 0}
-        subtitle="Devices observed in events that are not on the list. Approve to permit, or Disallow to block."
+        subtitle="Devices observed in events that are not on the list. Approve to permit, Disallow to block, or Dismiss to clear it off this list without ruling on it."
       >
+        {(seenQ.data?.dismissed_count || 0) > 0 && (
+          <div className="mb-2 flex items-center gap-2 text-xs text-cs-muted">
+            <EyeOff className="h-3.5 w-3.5" />
+            <span>{seenQ.data!.dismissed_count} dismissed</span>
+            <button className="text-cs-indigo hover:underline"
+              onClick={() => setShowDismissed(!showDismissed)}>
+              {showDismissed ? 'Hide them' : 'Show them'}
+            </button>
+            <span className="text-cs-muted-2">
+              — dismissed devices are still monitored and still blocked unless approved.
+            </span>
+          </div>
+        )}
         {seenQ.isLoading ? (
           <LoadingSpinner />
         ) : (seenQ.data?.devices.length || 0) === 0 ? (
@@ -227,7 +278,7 @@ function RegistryRow({ d, onChange, onOpenActivity, deny }: {
           ? <span className={`badge ${deny ? 'badge-danger' : 'badge-success'}`}>{deny ? 'Blocking' : 'Enabled'}</span>
           : <span className="badge badge-warning">Suspended</span>}
       </td>
-      <td className="px-3 py-2"><ConnDot connected={d.connected} /></td>
+      <td className="px-3 py-2"><ConnDot state={d.connection_state} host={d.reporting_host} /></td>
       <td className="px-3 py-2 text-cs-muted text-xs">{fmt(d.approved_at)}</td>
       <td className="px-3 py-2 text-right whitespace-nowrap">
         {clickable && (
@@ -269,13 +320,30 @@ function SeenRow({ s, onChanged, onOpenActivity }: {
     onSuccess: () => { onChanged(); toast.success(`Disallowed ${s.serial_number}`) },
     onError: (e: any) => toast.error(extractErrorDetail(e, 'Disallow failed')),
   })
+  // Third option: neither allow nor deny — just get it off the queue. There is
+  // no row to delete here (the list is derived from events), so this records a
+  // dismissal instead of destroying the device's event history.
+  const dismiss = useMutation({
+    mutationFn: () => dismissSeenDevice({
+      serial_number: s.serial_number,
+      product_name: s.product_name || undefined,
+      manufacturer: s.manufacturer || undefined,
+    }),
+    onSuccess: () => { onChanged(); toast.success(`Dismissed ${s.serial_number}`) },
+    onError: (e: any) => toast.error(extractErrorDetail(e, 'Dismiss failed')),
+  })
+  const restore = useMutation({
+    mutationFn: () => restoreSeenDevice(s.serial_number),
+    onSuccess: () => { onChanged(); toast.success(`Restored ${s.serial_number}`) },
+    onError: (e: any) => toast.error(extractErrorDetail(e, 'Restore failed')),
+  })
   const label = s.product_name || s.serial_number
   return (
     <tr className="border-b border-cs-hair last:border-0">
       <td className="px-3 py-2 num text-cs-ink">{s.serial_number}</td>
       <td className="px-3 py-2 text-cs-ink-2">{s.product_name || '—'}{s.manufacturer ? ` (${s.manufacturer})` : ''}</td>
       <td className="px-3 py-2 num text-cs-muted">{vidpid(s.vendor_id, s.product_id)}</td>
-      <td className="px-3 py-2"><ConnDot connected={s.connected} /></td>
+      <td className="px-3 py-2"><ConnDot state={s.connection_state} host={s.host} /></td>
       <td className="px-3 py-2 text-cs-muted text-xs">{fmt(s.last_seen)}</td>
       <td className="px-3 py-2 text-cs-muted text-xs">
         <button className="inline-flex items-center gap-1 hover:text-cs-ink"
@@ -288,10 +356,28 @@ function SeenRow({ s, onChanged, onOpenActivity }: {
           disabled={approve.isPending} onClick={() => approve.mutate()}>
           <Check className="h-3.5 w-3.5" />{approve.isPending ? '…' : 'Approve'}
         </button>
-        <button className="btn btn-sm inline-flex items-center gap-1 border border-cs-rose/40 text-cs-rose hover:bg-cs-rose/10"
+        <button className="btn btn-sm inline-flex items-center gap-1 border border-cs-rose/40 text-cs-rose hover:bg-cs-rose/10 mr-2"
           disabled={disallow.isPending} onClick={() => disallow.mutate()}>
           <Ban className="h-3.5 w-3.5" />{disallow.isPending ? '…' : 'Disallow'}
         </button>
+        {s.dismissed ? (
+          <button className="btn btn-secondary btn-sm inline-flex items-center gap-1"
+            disabled={restore.isPending} onClick={() => restore.mutate()}
+            title="Put this device back in the triage list">
+            <Undo2 className="h-3.5 w-3.5" />{restore.isPending ? '…' : 'Restore'}
+          </button>
+        ) : (
+          <button className="btn btn-secondary btn-sm inline-flex items-center gap-1"
+            disabled={dismiss.isPending}
+            title="Clear it off this list without allowing or denying it. The device stays monitored, stays blocked unless approved, and its event history is kept."
+            onClick={() => {
+              if (confirm(`Dismiss "${label}" from the seen list?\n\nThis does NOT allow the device — it stays blocked unless you approve it, and it keeps generating events. You can restore it at any time.`)) {
+                dismiss.mutate()
+              }
+            }}>
+            <EyeOff className="h-3.5 w-3.5" />{dismiss.isPending ? '…' : 'Dismiss'}
+          </button>
+        )}
       </td>
     </tr>
   )

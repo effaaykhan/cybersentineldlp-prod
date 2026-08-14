@@ -192,6 +192,22 @@ async def _auto_init_schema_and_admin():
                 """
             ))
 
+        # dismissed_usb_devices (seen-list triage: cleared, not allowed/denied).
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS dismissed_usb_devices (
+                    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    serial_number VARCHAR(255) NOT NULL UNIQUE,
+                    product_name  VARCHAR(255),
+                    manufacturer  VARCHAR(255),
+                    note          VARCHAR(1000),
+                    dismissed_by  UUID,
+                    dismissed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            ))
+
         # sanctioned_usb_devices (USB device-control allowlist, matched on serial).
         # Same idempotent-create rationale as taxii_share_config above: existing
         # installs skip create_all, so create it on every boot.

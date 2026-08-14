@@ -344,7 +344,7 @@
         "disconnect": true,
         "fileTransfer": true
       },
-      "action": "alert"
+      "action": "block"
     },
     "conditions": {
       "match": "any",
@@ -361,7 +361,7 @@
       ]
     },
     "actions": {
-      "alert": {}
+      "block": {}
     }
   },
   {

@@ -12,7 +12,7 @@ import structlog
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user, require_permission, require_role
 from app.core.database import get_mongodb, get_db
 from app.services.policy_service import PolicyService
 from app.services.classification_engine import ClassificationEngine
@@ -215,7 +215,7 @@ class Agent(AgentBase):
 @router.get("/", response_model=List[Agent])
 async def list_agents(
     os: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("view_events")),
 ) -> List[Agent]:
     """
     List all active DLP agents (only agents that have sent heartbeat within timeout period)
@@ -287,7 +287,7 @@ async def list_agents(
 @router.get("/all")
 async def list_all_agents(
     include_deleted: bool = False,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("view_events")),
 ) -> List[Dict[str, Any]]:
     """
     List ALL agents (including disconnected ones) with lifecycle status.
@@ -547,7 +547,7 @@ async def register_agent(
 @router.get("/{agent_id}", response_model=Agent)
 async def get_agent(
     agent_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("view_events")),
 ) -> Agent:
     """
     Get details of a specific agent
@@ -898,7 +898,7 @@ async def cleanup_stale_agents(
 
 @router.get("/stats/summary")
 async def get_agents_summary(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("view_events")),
 ) -> Dict[str, Any]:
     """
     Get summary statistics of active agents

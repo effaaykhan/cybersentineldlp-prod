@@ -49,7 +49,10 @@ const groups: NavGroup[] = [
       { name: 'Alerts',       to: '/alerts',       icon: AlertCircle,   requires: ['view_alerts'] },
       { name: 'Incidents',    to: '/incidents',    icon: AlertTriangle, requires: ['view_alerts'] },
       { name: 'Log Explorer', to: '/log-explorer', icon: Search,        requires: ['view_events'] },
-      { name: 'Threat Intel',  to: '/threat-intel', icon: Radar,         requires: ['manage_users', 'manage_roles'] },
+      // Threat intel is analyst work, not user administration. It was gated on
+      // manage_users/manage_roles, so only ADMIN ever saw the link even though
+      // an analyst is exactly who reads IOC matches.
+      { name: 'Threat Intel',  to: '/threat-intel', icon: Radar,         requires: ['view_alerts'] },
     ],
   },
   {

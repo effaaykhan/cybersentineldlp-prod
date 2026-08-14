@@ -310,6 +310,13 @@ def require_permission(permission: str):
         from app.services.audit_service import audit_log
 
         perms = await get_user_permissions(db, current_user)
+        # Stash the resolved set so a handler that also needs to make a
+        # content-redaction decision does not re-query for it. Read it via
+        # get_permission_set(), never directly.
+        try:
+            current_user._resolved_permissions = perms
+        except Exception:
+            pass
         if permission not in perms:
             # Fire-and-forget audit of the denial. Do not let an audit write
             # failure leak into the authorization path.
@@ -343,6 +350,27 @@ def require_permission(permission: str):
         return current_user
 
     return _checker
+
+
+async def get_permission_set(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> set:
+    """
+    The caller's fully resolved permission set.
+
+    For handlers that must vary their RESPONSE by permission rather than just
+    allow/deny it — chiefly deciding whether captured event content is returned
+    or redacted (app/core/redaction.py). Reuses the set already resolved by
+    require_permission on the same request when present, so pairing the two
+    dependencies costs no extra queries.
+    """
+    cached = getattr(current_user, "_resolved_permissions", None)
+    if cached is not None:
+        return cached
+    from app.services.permission_service import get_user_permissions
+
+    return await get_user_permissions(db, current_user)
 
 
 def validate_password_strength(password: str) -> bool:

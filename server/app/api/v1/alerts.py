@@ -12,7 +12,7 @@ import structlog
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user, require_permission, require_role
 from app.core.database import get_mongodb, get_db
 from app.services.domain_service import build_domain_mongo_filter
 
@@ -46,7 +46,7 @@ class AlertsResponse(BaseModel):
 
 @router.get("/", response_model=AlertsResponse)
 async def get_alerts(
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission("view_alerts")),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     status: Optional[str] = Query(None, description="Filter by status"),
     skip: int = Query(0, ge=0, description="Records to skip (pagination offset)"),

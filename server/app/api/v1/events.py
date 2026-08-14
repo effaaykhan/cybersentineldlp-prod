@@ -12,7 +12,13 @@ import structlog
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import (
+    get_current_user,
+    get_permission_set,
+    require_permission,
+    require_role,
+)
+from app.core.redaction import may_view_sensitive, redact_event, redact_events
 from app.core.database import get_mongodb, get_db
 from app.core.domains import domain_for_event_type
 from app.services.domain_service import build_domain_mongo_filter
@@ -1178,15 +1184,23 @@ async def get_events(
     action: Optional[str] = Query(None, description="Matches action_taken case-insensitively"),
     classification: Optional[str] = Query(None, description="classification_level tier"),
     channel: Optional[str] = Query(None),
-    current_user=Depends(require_role("analyst")),
+    current_user=Depends(require_permission("view_events")),
+    permissions: set = Depends(get_permission_set),
     pg_db: AsyncSession = Depends(get_db),
 ):
     """
     Get DLP events with pagination and filtering.
 
-    SECURITY: Requires analyst role — these records contain clipboard
-    content, file paths, and user emails, and must not be enumerable
-    by self-registered VIEWER accounts.
+    SECURITY: gated on the ``view_events`` PERMISSION, not the analyst role
+    tier. The old role gate contradicted the sidebar (which shows this page to
+    anything holding ``view_events``), so a VIEWER saw the link and got a 403 —
+    the page simply never loaded.
+
+    The concern behind that gate was real, though: these records carry
+    clipboard captures and file excerpts. That is now handled where it belongs
+    — callers without ``view_sensitive_content`` get the events with their
+    captured payload redacted (app/core/redaction.py), so a VIEWER can triage
+    and report without ever reading the data the event was protecting.
 
     Supports:
     - severity filter
@@ -1386,6 +1400,12 @@ async def get_events(
         extra={"has_abac_filter": abac_filter is not None},
     )
 
+    # Redact captured payload for callers without view_sensitive_content.
+    # Applied last, on the way out, so it covers every branch above regardless
+    # of which store served the rows.
+    if not may_view_sensitive(permissions):
+        events = redact_events(events)
+
     return {
         "events": events,
         "total": total,
@@ -1397,13 +1417,15 @@ async def get_events(
 @router.get("/{event_id}", response_model=DLPEvent)
 async def get_event(
     event_id: str,
-    current_user=Depends(require_role("analyst")),
+    current_user=Depends(require_permission("view_events")),
+    permissions: set = Depends(get_permission_set),
     pg_db: AsyncSession = Depends(get_db),
 ):
     """
-    Get specific DLP event by ID. Requires analyst role — individual
-    event records include file paths, clipboard captures, and email
-    addresses that must not be enumerable by VIEWERs.
+    Get specific DLP event by ID. Gated on the ``view_events`` permission;
+    callers without ``view_sensitive_content`` receive the record with its
+    clipboard captures and file excerpts redacted rather than being denied
+    the record outright (see GET / above for the rationale).
 
     ABAC: if the viewer lacks ``view_all_departments``, a matching event
     is only returned when its department + clearance satisfy the viewer's
@@ -1448,6 +1470,8 @@ async def get_event(
     # "CRYPTON (002)" rather than the raw agent_id UUID.
     event_dict = {k: v for k, v in event.items() if k != "_id"}
     await _attach_agent_info([event_dict])
+    if not may_view_sensitive(permissions):
+        event_dict = redact_event(event_dict)
     return event_dict
 
 

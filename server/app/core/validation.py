@@ -497,7 +497,13 @@ class ValidatedUserRegistration(BaseModel):
 
     @validator('role')
     def validate_role(cls, v):
-        valid_roles = ['ADMIN', 'ANALYST', 'VIEWER']
+        # Must match UserRole in app/models/user.py. MANAGER and the three
+        # domain-admin roles were missing here, so this validator rejected
+        # roles the rest of the system considers valid.
+        valid_roles = [
+            'ADMIN', 'ANALYST', 'MANAGER', 'VIEWER',
+            'THREAT_ADMIN', 'DATA_PROTECTION_ADMIN', 'ACCESS_CONTROL_ADMIN',
+        ]
         if v not in valid_roles:
             raise ValueError(f"Invalid role (must be: {', '.join(valid_roles)})")
         return v

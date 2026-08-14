@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import io
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_permission
 from app.services.analytics_service import AnalyticsService
 from app.services.abac_service import build_abac_sql_filter
 from app.services.export_service import ExportService
@@ -27,7 +27,7 @@ async def export_trends_csv(
     end_date: Optional[datetime] = Query(None),
     interval: str = Query("day", regex="^(hour|day|week|month)$"),
     group_by: Optional[str] = Query(None, regex="^(severity|type|policy_id)$"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -80,7 +80,7 @@ async def export_trends_pdf(
     end_date: Optional[datetime] = Query(None),
     interval: str = Query("day", regex="^(hour|day|week|month)$"),
     group_by: Optional[str] = Query(None, regex="^(severity|type|policy_id)$"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -134,7 +134,7 @@ async def export_violators_csv(
     end_date: Optional[datetime] = Query(None),
     limit: int = Query(10, ge=1, le=100),
     by: str = Query("user", regex="^(user|agent|ip_address)$"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """Export top violators to CSV"""
@@ -180,7 +180,7 @@ async def export_violators_pdf(
     end_date: Optional[datetime] = Query(None),
     limit: int = Query(10, ge=1, le=100),
     by: str = Query("user", regex="^(user|agent|ip_address)$"),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """Export top violators to PDF"""
@@ -225,7 +225,7 @@ async def export_violators_pdf(
 async def export_data_types_csv(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """Export data type statistics to CSV"""
@@ -266,7 +266,7 @@ async def export_data_types_csv(
 async def export_data_types_pdf(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """Export data type statistics to PDF"""
@@ -308,7 +308,7 @@ async def export_data_types_pdf(
 async def export_policy_violations_csv(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """Export policy violations to CSV"""
@@ -349,7 +349,7 @@ async def export_policy_violations_csv(
 async def export_policy_violations_pdf(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """Export policy violations to PDF"""
@@ -391,7 +391,7 @@ async def export_policy_violations_pdf(
 async def export_summary_pdf(
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_permission("export_events")),
     db: AsyncSession = Depends(get_db)
 ):
     """

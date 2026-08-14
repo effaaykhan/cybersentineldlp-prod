@@ -15,7 +15,7 @@ from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from app.core.security import require_role
+from app.core.security import require_permission, require_role
 from app.core.config import settings
 from app.core.database import get_db, get_mongodb
 from app.core.crypto import encrypt_str
@@ -88,7 +88,7 @@ async def list_iocs(
     shared: Optional[bool] = None,
     q: Optional[str] = None,
     limit: int = 200,
-    current_user=Depends(require_role("admin")),
+    current_user=Depends(require_permission("view_alerts")),
     db: AsyncSession = Depends(get_db),
 ):
     stmt = select(IOC).order_by(IOC.created_at.desc())
@@ -188,7 +188,7 @@ def _sharing_out(row: Optional[TAXIIShareConfig]) -> Dict[str, Any]:
 
 @router.get("/sharing")
 async def get_sharing_config(
-    current_user=Depends(require_role("admin")),
+    current_user=Depends(require_permission("view_alerts")),
     db: AsyncSession = Depends(get_db),
 ):
     row = (await db.execute(select(TAXIIShareConfig).where(TAXIIShareConfig.id == 1))).scalar_one_or_none()
@@ -305,7 +305,7 @@ def _infer_type(value: str) -> str:
 
 @router.get("/stats")
 async def ioc_stats(
-    current_user=Depends(require_role("admin")),
+    current_user=Depends(require_permission("view_alerts")),
     db: AsyncSession = Depends(get_db),
 ):
     total = (await db.execute(select(func.count(IOC.id)))).scalar() or 0
@@ -322,7 +322,7 @@ async def ioc_stats(
 @router.get("/matches")
 async def recent_matches(
     limit: int = 50,
-    current_user=Depends(require_role("admin")),
+    current_user=Depends(require_permission("view_alerts")),
 ):
     db = get_mongodb()
     coll = db.get_collection("ioc_matches")
@@ -349,7 +349,7 @@ def _feed_out(f: TAXIIFeed) -> Dict[str, Any]:
 
 @router.get("/feeds")
 async def list_feeds(
-    current_user=Depends(require_role("admin")),
+    current_user=Depends(require_permission("view_alerts")),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (await db.execute(select(TAXIIFeed).order_by(TAXIIFeed.created_at))).scalars().all()

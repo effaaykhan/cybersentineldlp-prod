@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user, require_permission, require_role
 from app.core.database import get_db
 from app.services.domain_service import build_domain_mongo_filter
 from app.services.incident_service import IncidentService
@@ -126,7 +126,7 @@ async def list_incidents(
     severity: Optional[int] = Query(None, ge=0, le=4),
     status: Optional[str] = Query(None),
     assigned_to: Optional[UUID] = Query(None),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission("view_alerts")),
     db: AsyncSession = Depends(get_db),
 ):
     """List incidents with optional filtering (ABAC-scoped via underlying event)."""
@@ -157,7 +157,7 @@ async def list_incidents(
 
 @router.get("/statistics", response_model=IncidentStatisticsResponse)
 async def get_statistics(
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission("view_alerts")),
     db: AsyncSession = Depends(get_db),
 ):
     """Get incident statistics (counts by status and severity), ABAC-scoped."""
@@ -172,7 +172,7 @@ async def get_statistics(
 @router.get("/{incident_id}", response_model=IncidentDetailOut)
 async def get_incident(
     incident_id: UUID,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission("view_alerts")),
     db: AsyncSession = Depends(get_db),
 ):
     """Get a single incident with its comments (ABAC-scoped)."""

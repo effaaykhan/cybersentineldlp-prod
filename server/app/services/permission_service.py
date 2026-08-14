@@ -40,6 +40,11 @@ _ALL_PERMISSIONS: frozenset[str] = frozenset({
     "manage_users", "view_users", "manage_roles",
     "view_dashboard", "create_dashboard", "edit_dashboard", "delete_dashboard",
     "view_all_departments",
+    # Seeing that an event happened is separate from seeing the payload it
+    # captured (clipboard text, file excerpts, line diffs). Without this split
+    # any read-only account doubles as an exfiltration path — see
+    # app/core/redaction.py. Added in migration 024.
+    "view_sensitive_content",
 })
 
 # Operational perms shared by every domain admin (scoped to their domain by
@@ -49,14 +54,28 @@ _DOMAIN_OPS: frozenset[str] = frozenset({
     "view_events", "view_alerts", "view_dashboard", "export_events",
     "create_policy", "update_policy", "delete_policy", "assign_policy",
     "view_all_departments",
+    # Domain admins investigate incidents in their domain, which is not
+    # possible without the captured payload.
+    "view_sensitive_content",
 })
 
 # Fallback defaults for users with a UserRole enum value but no role_id FK.
 _ROLE_DEFAULTS: dict[str, frozenset[str]] = {
     "ADMIN":   _ALL_PERMISSIONS,
-    "ANALYST": frozenset({"view_events", "view_alerts", "view_dashboard", "view_users"}),
-    "MANAGER": frozenset({"view_events", "export_events", "view_dashboard", "view_users"}),
-    "VIEWER":  frozenset({"view_events", "view_dashboard"}),
+    # ANALYST investigates, so it needs the captured payload.
+    "ANALYST": frozenset({"view_events", "view_alerts", "view_dashboard", "view_users",
+                          "view_sensitive_content"}),
+    # MANAGER reports on posture: full event/alert visibility and export, but
+    # NOT the payload — a manager needs counts and trends, not the leaked text.
+    # (view_alerts was missing entirely, which hid Alerts *and* Incidents from
+    # the nav while the API served them to anyone.)
+    "MANAGER": frozenset({"view_events", "view_alerts", "export_events",
+                          "view_dashboard", "view_users"}),
+    # VIEWER is the default for SSO-provisioned accounts. It must be useful on
+    # its own — dashboard, agent health, events, alerts and incidents — while
+    # revealing no captured content. Everything here is metadata about an
+    # event, never the data the event was protecting.
+    "VIEWER":  frozenset({"view_events", "view_alerts", "view_dashboard"}),
     "AGENT":   frozenset(),
     # Domain-scoped admins (granular RBAC).
     "THREAT_ADMIN": _DOMAIN_OPS,

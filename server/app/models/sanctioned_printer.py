@@ -28,6 +28,12 @@ class SanctionedPrinter(Base):
     label = Column(String(255), nullable=True)
     printer_type = Column(String(20), nullable=True)   # local | network | unknown
     is_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    # "allow" (sanction — permitted under allowlist scope) or "deny" (explicit
+    # disapproval — blocked in EVERY scope, and it beats an allow row). Mirrors
+    # SanctionedUsbDevice.decision. Without it the only way to block one printer
+    # was to switch the whole estate to allowlist scope and enrol every other
+    # printer; see migration 026.
+    decision = Column(String(10), nullable=False, default="allow", server_default="allow")
     notes = Column(String(1000), nullable=True)
     approved_by = Column(UUID(as_uuid=True), nullable=True)
     approved_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)

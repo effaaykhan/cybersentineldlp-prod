@@ -248,12 +248,19 @@ async def _auto_init_schema_and_admin():
                     label         VARCHAR(255),
                     printer_type  VARCHAR(20),
                     is_enabled    BOOLEAN NOT NULL DEFAULT true,
+                    decision      VARCHAR(10) NOT NULL DEFAULT 'allow',
                     notes         VARCHAR(1000),
                     approved_by   UUID,
                     approved_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
                     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            ))
+            # Existing deployments predate `decision` (allow/deny); migration
+            # 026 adds it, this keeps the bootstrap path in step.
+            await conn.execute(text(
+                "ALTER TABLE sanctioned_printers "
+                "ADD COLUMN IF NOT EXISTS decision VARCHAR(10) NOT NULL DEFAULT 'allow'"
             ))
 
         # Seed default admin if no users exist yet.

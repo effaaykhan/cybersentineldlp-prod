@@ -1418,6 +1418,7 @@ class PrinterPolicyResponse(BaseModel):
     mode: str               # "enforce" | "audit" | "off"
     scope: str              # "block_all" | "block_network" | "block_local" | "allowlist" | "none"
     printers: List[str]     # sanctioned printer names (used when scope == "allowlist")
+    blocked_printers: List[str]  # explicitly denied names — blocked in EVERY scope
     content_inspection: bool  # an active print_content_prevention policy exists
     content_mode: str         # "enforce" | "audit" | "off" (print content control)
     generated_at: datetime
@@ -1434,10 +1435,15 @@ async def printer_policy(
     printing is governed and how: block_all / block_network / block_local, in
     enforce or audit mode. Requires X-Agent-Key.
 
-    The agent applies: enforced && mode=="enforce" -> cancel print jobs that match
-    the scope (all printers / network printers / local printers). audit or not
-    enforced -> do NOT cancel (monitor/log only). Content-aware print blocking
-    (sensitive documents) is a separate, existing layer and is unaffected.
+    The agent applies, in order:
+      1. blocked_printers — an explicit disapproval. Matches in EVERY scope and
+         beats the allowlist, so a single printer can be denied without putting
+         the whole estate on an allowlist.
+      2. scope — cancel jobs matching all / network / local printers, or (in
+         allowlist scope) anything whose name is not in `printers`.
+    mode=="enforce" cancels; "audit" or not enforced -> do NOT cancel
+    (monitor/log only). Content-aware print blocking (sensitive documents) is a
+    separate, existing layer and is unaffected.
     """
     await verify_agent_key(http_request)
     from sqlalchemy import select as _select, func
@@ -1463,7 +1469,23 @@ async def printer_policy(
         printers = [
             n for (n,) in (await db.execute(
                 _select(SanctionedPrinter.printer_name).where(
-                    SanctionedPrinter.is_enabled.is_(True)
+                    SanctionedPrinter.is_enabled.is_(True),
+                    SanctionedPrinter.decision == "allow",
+                )
+            )).all()
+        ]
+
+    # Explicit disapprovals apply in EVERY scope — that is the whole point of a
+    # deny row, and why it is not gated on scope == "allowlist" like the list
+    # above. Agent rule: if the job's printer name is here, cancel it (enforce)
+    # or log "would block" (audit), before any other scope check.
+    blocked_printers: List[str] = []
+    if enforced:
+        blocked_printers = [
+            n for (n,) in (await db.execute(
+                _select(SanctionedPrinter.printer_name).where(
+                    SanctionedPrinter.is_enabled.is_(True),
+                    SanctionedPrinter.decision == "deny",
                 )
             )).all()
         ]
@@ -1483,6 +1505,7 @@ async def printer_policy(
         if content_inspection else "off"
     return PrinterPolicyResponse(
         enforced=enforced, mode=mode, scope=scope, printers=printers,
+        blocked_printers=blocked_printers,
         content_inspection=content_inspection, content_mode=content_mode,
         generated_at=datetime.now(timezone.utc),
     )

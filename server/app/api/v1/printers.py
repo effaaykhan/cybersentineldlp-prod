@@ -1,10 +1,22 @@
 """
-Sanctioned printer registry — the allowlist that printer control enforces in
-"allowlist" scope.
+Printer registry — the per-printer exceptions that printer control enforces.
 
-When a printer_control policy runs with scope "allowlist", a print job is allowed
-only if its printer NAME has an enabled row here; every other printer is blocked.
-This module manages that list and surfaces printers already SEEN on endpoints
+Each row carries a ``decision``:
+
+* ``allow`` — a sanction. Under a printer_control policy in "allowlist" scope a
+  job is permitted only if its printer NAME has an enabled allow row here;
+  every other printer is blocked.
+* ``deny``  — an explicit disapproval. Blocked in EVERY scope, and it beats an
+  allow row for the same name. This is what makes "block just this printer,
+  leave the rest alone" expressible; previously the only lever was scope, so
+  denying one printer meant switching the whole estate to allowlist and
+  enrolling every other printer to spare it.
+
+Suspending a row (``is_enabled=false``) is a third, different thing: it parks the
+entry without deleting it, and a suspended row — allow or deny — enforces
+nothing.
+
+This module manages that registry and surfaces printers already SEEN on endpoints
 (from print events) for one-click enrolment. Writes admin-only, reads analyst.
 """
 from datetime import datetime, timezone
@@ -28,18 +40,39 @@ router = APIRouter()
 PRINTER_CONTROL_TYPE = "printer_control"
 
 
+DECISIONS = ("allow", "deny")
+
+
+def _clean_decision(value: Optional[str], default: Optional[str] = None) -> Optional[str]:
+    """Normalise + validate a decision, or 400. None means 'not supplied'."""
+    if value is None:
+        return default
+    d = str(value).strip().lower()
+    if d not in DECISIONS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"decision must be one of {list(DECISIONS)}, got '{value}'",
+        )
+    return d
+
+
 class PrinterApprove(BaseModel):
     printer_name: str = Field(..., min_length=1, max_length=500,
                               description="Printer name — the match key")
     label: Optional[str] = Field(None, max_length=255)
     printer_type: Optional[str] = Field(None, max_length=20, description="local | network | unknown")
     notes: Optional[str] = Field(None, max_length=1000)
+    # allow = sanction it; deny = explicitly disapprove it (blocked in every
+    # scope). Defaults to allow so existing callers are unaffected.
+    decision: Optional[str] = Field(None, description="allow | deny")
 
 
 class PrinterUpdate(BaseModel):
     label: Optional[str] = Field(None, max_length=255)
     notes: Optional[str] = Field(None, max_length=1000)
     is_enabled: Optional[bool] = None
+    # Flip an existing entry between sanctioned and disapproved.
+    decision: Optional[str] = Field(None, description="allow | deny")
 
 
 def _printer_out(p: SanctionedPrinter) -> dict:
@@ -49,6 +82,7 @@ def _printer_out(p: SanctionedPrinter) -> dict:
         "label": p.label,
         "printer_type": p.printer_type,
         "is_enabled": p.is_enabled,
+        "decision": (p.decision or "allow"),
         "notes": p.notes,
         "approved_at": p.approved_at.isoformat() if p.approved_at else None,
     }
@@ -66,12 +100,28 @@ async def _allowlist_active(db: AsyncSession) -> bool:
     return any((c or {}).get("scope") == "allowlist" for c in rows)
 
 
+async def _printer_control_active(db: AsyncSession) -> bool:
+    """True when any active printer_control policy exists, whatever its scope.
+
+    Deny rows are consulted in every scope, so this — not the allowlist-only
+    check above — is what decides whether a disapproval actually bites.
+    """
+    n = await db.scalar(
+        select(func.count()).select_from(Policy).where(
+            Policy.type == PRINTER_CONTROL_TYPE,
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        )
+    )
+    return bool(n and n > 0)
+
+
 @router.get("/")
 async def list_printers(
     current_user: User = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """The sanctioned-printer allowlist, plus whether allowlist enforcement is on."""
+    """The printer registry (allow + deny), plus what is actually being enforced."""
     rows = (await db.execute(
         select(SanctionedPrinter).order_by(SanctionedPrinter.approved_at.desc())
     )).scalars().all()
@@ -80,8 +130,14 @@ async def list_printers(
         "printers": printers,
         "count": len(printers),
         "enabled_count": sum(1 for p in printers if p["is_enabled"]),
-        # True only when a printer_control policy is active AND in allowlist scope.
+        "allow_count": sum(1 for p in printers if p["decision"] == "allow"),
+        "deny_count": sum(1 for p in printers if p["decision"] == "deny"),
+        # True only when a printer_control policy is active AND in allowlist
+        # scope — i.e. when the ALLOW rows are what decides a job.
         "enforced": await _allowlist_active(db),
+        # True whenever any printer_control policy is active. DENY rows apply in
+        # every scope, so they bite even when "enforced" above is False.
+        "deny_enforced": await _printer_control_active(db),
     }
 
 
@@ -91,10 +147,14 @@ async def approve_printer(
     current_user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Approve (sanction) a printer by name. Idempotent: re-approving updates it."""
+    """Register a printer exception by name, as either `allow` (sanction) or
+    `deny` (explicit disapproval). Idempotent per printer_name: re-submitting
+    updates the details and flips the decision, so the same call both approves
+    and disapproves."""
     name = body.printer_name.strip()
     if not name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "printer_name is required")
+    decision = _clean_decision(body.decision, "allow")
 
     existing = (await db.execute(
         select(SanctionedPrinter).where(SanctionedPrinter.printer_name == name)
@@ -104,22 +164,25 @@ async def approve_printer(
         existing.label = body.label or existing.label
         existing.printer_type = body.printer_type or existing.printer_type
         existing.notes = body.notes if body.notes is not None else existing.notes
+        existing.decision = decision
         existing.is_enabled = True
         existing.approved_by = current_user.id
         existing.approved_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(existing)
-        logger.info("printer_reapproved", printer=name, user=current_user.username)
+        logger.info("printer_rule_updated", printer=name, decision=decision,
+                    user=current_user.username)
         return _printer_out(existing)
 
     p = SanctionedPrinter(
         printer_name=name, label=body.label, printer_type=body.printer_type,
-        notes=body.notes, approved_by=current_user.id,
+        notes=body.notes, decision=decision, approved_by=current_user.id,
     )
     db.add(p)
     await db.commit()
     await db.refresh(p)
-    logger.info("printer_approved", printer=name, user=current_user.username)
+    logger.info("printer_rule_created", printer=name, decision=decision,
+                user=current_user.username)
     return _printer_out(p)
 
 
@@ -130,7 +193,8 @@ async def update_printer(
     current_user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Edit a printer's label/notes or suspend/resume its approval."""
+    """Edit a printer's label/notes, flip it between allow and deny, or
+    suspend/resume the entry."""
     p = (await db.execute(
         select(SanctionedPrinter).where(SanctionedPrinter.id == printer_id)
     )).scalar_one_or_none()
@@ -142,9 +206,12 @@ async def update_printer(
         p.notes = body.notes
     if body.is_enabled is not None:
         p.is_enabled = body.is_enabled
+    if body.decision is not None:
+        p.decision = _clean_decision(body.decision)
     await db.commit()
     await db.refresh(p)
-    logger.info("printer_updated", printer=p.printer_name, user=current_user.username)
+    logger.info("printer_updated", printer=p.printer_name, decision=p.decision,
+                user=current_user.username)
     return _printer_out(p)
 
 
@@ -170,9 +237,12 @@ async def seen_printers(
     current_user: User = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Printers observed in print events that are NOT yet sanctioned — the
-    enrolment candidates. Deduped by name, most-recent first."""
-    approved = {
+    """Printers observed in print events that have NO registry rule yet — the
+    enrolment candidates, to allow or deny in one click. Deduped by name,
+    most-recent first."""
+    # Any existing rule counts, allow or deny: a denied printer is already a
+    # decision, not a candidate.
+    ruled = {
         n for (n,) in (await db.execute(select(SanctionedPrinter.printer_name))).all()
     }
     mongo = get_mongodb()["dlp_events"]
@@ -190,7 +260,7 @@ async def seen_printers(
     ]
     out: List[dict] = []
     async for r in mongo.aggregate(pipeline):
-        if r.get("printer_name") in approved:
+        if r.get("printer_name") in ruled:
             continue
         ls = r.get("last_seen")
         out.append({

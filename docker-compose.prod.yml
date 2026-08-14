@@ -198,6 +198,16 @@ services:
 
       # SSO shared secret for SIEM integration (empty = SSO disabled)
       - DLP_SSO_SECRET=${DLP_SSO_SECRET:-}
+      # SSO role/attribute propagation (app/core/sso_roles.py). The SIEM may
+      # carry role/access/department/clearance_level on the exchange token, and
+      # may seed accounts with siem_role+access via POST /api/v1/users.
+      # SSO_MAX_ROLE caps what any SSO-derived identity can ever become —
+      # DLP_SSO_SECRET is shared with the SIEM, so this bounds a forged token.
+      - SSO_MAX_ROLE=${SSO_MAX_ROLE:-ADMIN}
+      - SSO_DEFAULT_ROLE=${SSO_DEFAULT_ROLE:-VIEWER}
+      - SSO_JIT_PROVISION=${SSO_JIT_PROVISION:-false}
+      - SSO_SYNC_ON_LOGIN=${SSO_SYNC_ON_LOGIN:-true}
+      - SSO_ROLE_MAP=${SSO_ROLE_MAP:-}
 
       # Initial admin password, used ONLY when seeding the first admin on a
       # brand-new database. Leave empty and the manager generates a random one

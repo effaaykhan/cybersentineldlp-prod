@@ -3,6 +3,7 @@ Authentication API Endpoints
 User login, registration, token refresh, SSO exchange
 """
 
+import secrets
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
@@ -30,6 +31,8 @@ from app.core.cache import get_cache
 from app.services.user_service import UserService
 from app.services.blacklist_service import TokenBlacklistService
 from app.services.audit_service import audit_log
+from app.services.user_dept_cache import DEFAULT_DEPARTMENT
+from app.core.sso_roles import resolve as resolve_sso_identity
 from app.models.user import User
 
 logger = structlog.get_logger()
@@ -462,6 +465,21 @@ async def check_user_exists(
 # Two distinct secrets:
 #   DLP_SSO_SECRET  →  verify exchange token from SIEM (never used to issue)
 #   SECRET_KEY      →  issue DLP tokens (never used to verify SIEM tokens)
+#
+# Exchange token claim contract
+# ─────────────────────────────
+# Required : purpose="sso_exchange", iss="cybersentineldlp-siem", nonce, email
+# Optional : username, full_name, organization
+# Optional : role             "Administrator" | "L1" | "L2" | "L3"
+#            access           "read-write" | "read-only"   (absent ⇒ read-only)
+#            department       ABAC department
+#            clearance_level  ABAC clearance (0-10)
+#
+# The optional block is what makes an SSO user land on the DLP role and
+# access level matching their SIEM account, and what lets the DLP create
+# the account on first login. Omit them and SSO behaves exactly as before:
+# VIEWER, and the account must already exist. Mapping lives in
+# app/core/sso_roles.py; SSO_MAX_ROLE bounds what any token can be granted.
 
 
 class SSOExchangeRequest(BaseModel):
@@ -560,15 +578,119 @@ async def sso_exchange(
             detail="Exchange token missing email claim",
         )
 
+    # ── Translate the SIEM's role/access pair into a DLP role ────────
+    # Optional claims. A SIEM that sends none of them resolves to
+    # SSO_DEFAULT_ROLE (VIEWER) — exactly what every SSO account got
+    # before this existed.
+    identity = resolve_sso_identity(payload)
+    if identity.clamped_from:
+        logger.warning(
+            "SSO exchange: role clamped by SSO_MAX_ROLE",
+            email=email, requested=identity.clamped_from, granted=identity.role,
+        )
+
     user_service = UserService(db)
     user = await user_service.get_user_by_email(email)
 
+    # ── Just-in-time provisioning ────────────────────────────────────
+    # Without this the SIEM has to hold DLP admin credentials purely to
+    # pre-register people, and every unregistered login dead-ends at 401.
     if not user:
-        logger.warning("SSO exchange: user not found", email=email)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found in DLP system",
+        if not settings.SSO_JIT_PROVISION:
+            logger.warning("SSO exchange: user not found", email=email)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found in DLP system",
+            )
+
+        siem_username = (payload.get("username") or "").strip() or None
+        # username is UNIQUE; a collision would abort the whole login, and a
+        # display alias is not worth that. Drop it and keep email as the
+        # canonical identifier.
+        if siem_username:
+            from sqlalchemy import select as _select
+
+            taken = await db.execute(
+                _select(User.id).where(User.username == siem_username)
+            )
+            if taken.scalar_one_or_none() is not None:
+                logger.warning("SSO JIT: username already taken, omitting",
+                               username=siem_username, email=email)
+                siem_username = None
+
+        full_name = (
+            payload.get("full_name") or payload.get("name")
+            or payload.get("username") or email.split("@")[0]
         )
+
+        try:
+            user = await user_service.create_user(
+                email=email,
+                # SSO accounts never authenticate with a password. Store an
+                # unguessable one rather than a blank/known hash so the
+                # /auth/login path can never be used against this account.
+                password=secrets.token_urlsafe(48),
+                full_name=str(full_name)[:255],
+                role=identity.role,
+                organization=str(payload.get("organization") or "CyberSentinelDLP")[:255],
+                # NULL department = denied every event by ABAC §C, which is
+                # how an SSO user ends up with a working login and a
+                # permanently empty console.
+                department=identity.department or DEFAULT_DEPARTMENT,
+                clearance_level=identity.clearance_level,
+                username=siem_username,
+                sso_managed=True,
+                sso_source_role=f"{identity.siem_role}:{identity.siem_access}"[:64],
+            )
+        except ValueError:
+            # Lost a race with a concurrent SSO login for the same email.
+            user = await user_service.get_user_by_email(email)
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found in DLP system",
+                )
+        else:
+            logger.info("SSO JIT provisioned user", email=email, **identity.as_log())
+            await audit_log(user.id, "auth.sso_provision", {
+                "email": email,
+                "siem_user": payload.get("username"),
+                **identity.as_log(),
+            })
+
+    # ── Sync role/attributes for accounts the SIEM owns ──────────────
+    # Only ever touches rows this flow itself created (sso_managed). A
+    # locally created account — or one an admin has edited by hand, which
+    # clears the flag — is never rewritten from a token.
+    elif settings.SSO_SYNC_ON_LOGIN and getattr(user, "sso_managed", False):
+        current_role = str(getattr(user.role, "value", user.role)).upper()
+        changes: Dict = {}
+
+        # Only when the SIEM actually sent a role we recognise. Otherwise a
+        # SIEM that stops sending the claim would silently demote everyone
+        # to SSO_DEFAULT_ROLE on their next login.
+        if identity.mapped and current_role != identity.role:
+            changes["role"] = identity.role
+        if identity.department and user.department != identity.department:
+            changes["department"] = identity.department
+        if (identity.clearance_level is not None
+                and getattr(user, "clearance_level", None) != identity.clearance_level):
+            changes["clearance_level"] = identity.clearance_level
+
+        if changes:
+            user = await user_service.update_user(
+                user_id=str(user.id),
+                sso_source_role=f"{identity.siem_role}:{identity.siem_access}"[:64],
+                **changes,
+            )
+            logger.info("SSO synced user from SIEM", email=email,
+                        previous_role=current_role, **identity.as_log())
+            await audit_log(user.id, "auth.sso_sync", {
+                "email": email,
+                "previous_role": current_role,
+                "changes": changes,
+                **identity.as_log(),
+            })
 
     if not getattr(user, "is_active", True):
         logger.warning("SSO exchange: user inactive", email=email)

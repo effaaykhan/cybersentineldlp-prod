@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
 from app.core.security import get_password_hash, verify_password
+from app.services.user_dept_cache import DEFAULT_DEPARTMENT
 
 
 class UserService:
@@ -92,6 +93,8 @@ class UserService:
         department: Optional[str] = None,
         clearance_level: Optional[int] = None,
         username: Optional[str] = None,
+        sso_managed: bool = False,
+        sso_source_role: Optional[str] = None,
     ) -> User:
         """
         Create a new user
@@ -123,10 +126,23 @@ class UserService:
             full_name=full_name,
             role=role,
             organization=organization,
-            department=department,
+            # ABAC denies EVERYTHING to a user whose department is NULL (see
+            # abac_service §C). Events are stamped department="DEFAULT" at
+            # ingest when the triggering user is unknown, so a user created
+            # without a department could hold view_events and still see an
+            # empty page forever. Admins never hit this because
+            # view_all_departments bypasses ABAC — which is exactly why this
+            # looked like "only admin can see anything".
+            # Default to the same DEFAULT/1 pair the bootstrap admin uses.
+            department=department or DEFAULT_DEPARTMENT,
             clearance_level=clearance_level if clearance_level is not None else 1,
             is_active=True,
             is_verified=False,
+            # True only for accounts the DLP provisioned from a SIEM SSO
+            # login; those track the SIEM's role on every login. See
+            # app/core/sso_roles.py.
+            sso_managed=sso_managed,
+            sso_source_role=sso_source_role,
         )
 
         self.db.add(user)
@@ -144,6 +160,8 @@ class UserService:
         is_active: Optional[bool] = None,
         department: Optional[str] = None,
         clearance_level: Optional[int] = None,
+        sso_managed: Optional[bool] = None,
+        sso_source_role: Optional[str] = None,
     ) -> Optional[User]:
         """
         Update user details
@@ -174,6 +192,10 @@ class UserService:
             user.department = department
         if clearance_level is not None:
             user.clearance_level = clearance_level
+        if sso_managed is not None:
+            user.sso_managed = sso_managed
+        if sso_source_role is not None:
+            user.sso_source_role = sso_source_role
 
         user.updated_at = datetime.utcnow()
 

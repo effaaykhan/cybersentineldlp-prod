@@ -49,6 +49,17 @@ class User(Base):
     is_verified = Column(Boolean, default=False, nullable=False)
     must_change_password = Column(Boolean, default=False, nullable=False, server_default="false")
 
+    # ── SSO provenance (app/core/sso_roles.py) ───────────────────────────
+    # sso_managed marks an account the DLP provisioned from a SIEM SSO login
+    # and whose role/department/clearance therefore track the SIEM on every
+    # login. It is cleared the moment a DLP admin edits the account's role
+    # by hand — a local decision outranks the upstream one, and without that
+    # rule a manual promotion would silently revert at the user's next login.
+    # sso_source_role records the SIEM-side role the mapping came from, so an
+    # unexpected DLP role can be traced back to what the SIEM actually sent.
+    sso_managed = Column(Boolean, default=False, nullable=False, server_default="false")
+    sso_source_role = Column(String(64), nullable=True)
+
     # ── Native TOTP MFA (opt-in, self-service) ───────────────────────────
     # mfa_secret holds the Fernet-encrypted base32 TOTP secret (see
     # app.core.crypto); mfa_recovery_codes is a list of hashed one-time

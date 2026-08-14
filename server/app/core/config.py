@@ -43,6 +43,39 @@ class Settings(BaseSettings):
     # its own tokens signed with SECRET_KEY.
     DLP_SSO_SECRET: str = Field(default="")
 
+    # ── SSO role/attribute propagation (app/core/sso_roles.py) ───────────
+    # The SIEM can carry its own role ("Administrator"/"L1"/"L2"/"L3"),
+    # access mode ("read-write"/"read-only") and ABAC attributes on the
+    # exchange token. These settings decide what the DLP does with them.
+    # Every one of them is optional: with the defaults and a SIEM that
+    # sends no such claims, SSO behaves exactly as it did before.
+    #
+    # Ceiling on what an SSO login can ever be granted. DLP_SSO_SECRET is
+    # shared with the SIEM, so this bounds the damage from a forged token:
+    # set it to MANAGER/ANALYST and no SSO login can reach ADMIN, no matter
+    # what the token claims. Default ADMIN = no clamp.
+    SSO_MAX_ROLE: str = Field(default="ADMIN")
+    # Role for a login whose SIEM role is missing or unrecognised. This is
+    # what every SSO account already got, so it is also the no-op default.
+    SSO_DEFAULT_ROLE: str = Field(default="VIEWER")
+    # Create the DLP account on first SSO login instead of 401-ing.
+    # OFF by default: the SIEM already seeds accounts itself (it exchanges an
+    # SSO token for an admin session and calls POST /api/v1/users), so
+    # /auth/sso/exchange stays a pure login and behaves exactly as it always
+    # has — unknown email ⇒ 401. Turn this on only if you want the DLP to
+    # provision on first login instead.
+    SSO_JIT_PROVISION: bool = Field(default=False)
+    # Re-apply the SIEM's role/department/clearance on every SSO login, so a
+    # promotion or transfer in the SIEM follows the user into the DLP. Only
+    # ever touches accounts the DLP itself provisioned via SSO
+    # (users.sso_managed); a locally-created or locally-edited account is
+    # never rewritten. See app/api/v1/auth.py.
+    SSO_SYNC_ON_LOGIN: bool = Field(default=True)
+    # Optional JSON override of the built-in SIEM→DLP translation table, e.g.
+    #   {"L3": {"rw": "ANALYST", "ro": "ANALYST"}, "L1": "VIEWER"}
+    # Invalid JSON falls back to the built-in table and logs an error.
+    SSO_ROLE_MAP: str = Field(default="")
+
     # TAXII 2.1 sharing server credentials (HTTP Basic for partner vendors).
     # If TAXII_SHARE_PASSWORD is empty/unset, the TAXII sharing endpoints return
     # 503 (sharing disabled) — nothing is published until a credential is set.

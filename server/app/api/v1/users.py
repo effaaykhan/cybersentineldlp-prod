@@ -45,6 +45,10 @@ class UserOut(BaseModel):
     clearance_level: int = 1
     is_active: bool = True
     created_at: Optional[datetime] = None
+    # True when the SIEM owns this account's role/department/clearance and
+    # re-applies them on every SSO login. Editing the role here clears it.
+    sso_managed: bool = False
+    sso_source_role: Optional[str] = None
     # Effective permission set (role defaults ∪ direct grants). Sorted.
     permissions: List[str] = []
     # Direct grants only (subset of `permissions`). Useful for the edit UI
@@ -60,13 +64,26 @@ class UserCreateRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
-    role: str = Field(default="VIEWER")
+    # None = "not supplied" so an explicit choice can be told apart from the
+    # default; still resolves to VIEWER below.
+    role: Optional[str] = Field(default=None)
     organization: str = Field(default="CyberSentinelDLP")
     username: Optional[str] = None
     department: Optional[str] = None
-    clearance_level: int = Field(default=1, ge=0, le=10)
+    clearance_level: Optional[int] = Field(default=None, ge=0, le=10)
     # Optional direct-permission grants, unioned on top of the role defaults.
     permissions: Optional[List[str]] = None
+
+    # ── SIEM seeding (optional) ──────────────────────────────────────────
+    # The SIEM provisions DLP accounts through this endpoint, holding an
+    # admin session it obtained from /auth/sso/exchange. These two fields let
+    # it seed in its OWN vocabulary — "L2" + "read-write" — instead of having
+    # to know the DLP's role names and keep that translation in sync on its
+    # side. The DLP resolves them through app/core/sso_roles.py, the same
+    # table SSO login uses, so both paths agree by construction.
+    # An explicit `role` always wins. Omit both and nothing changes.
+    siem_role: Optional[str] = None   # Administrator | L1 | L2 | L3
+    access: Optional[str] = None      # read-write | read-only (absent = read-only)
 
 
 class UserUpdate(BaseModel):
@@ -75,6 +92,12 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
     department: Optional[str] = None
     clearance_level: Optional[int] = Field(default=None, ge=0, le=10)
+    # SIEM-vocabulary role change, same fields as create. Use these — not
+    # `role` — when the SIEM is relaying its own role change, because they
+    # keep the account SIEM-owned. An explicit `role` is read as a local
+    # override and permanently detaches the account from SSO sync.
+    siem_role: Optional[str] = None   # Administrator | L1 | L2 | L3
+    access: Optional[str] = None      # read-write | read-only
     # When present (even empty list), replaces the user's direct grants.
     # `None` means "don't touch grants" — the edit UI can omit the field
     # when it only wants to change role/dept/etc.
@@ -94,6 +117,8 @@ def _to_out(user, effective: Optional[set] = None, direct: Optional[set] = None)
         "clearance_level": getattr(user, "clearance_level", 1) or 1,
         "is_active": user.is_active,
         "created_at": user.created_at,
+        "sso_managed": bool(getattr(user, "sso_managed", False)),
+        "sso_source_role": getattr(user, "sso_source_role", None),
         "permissions": sorted(effective) if effective is not None else [],
         "direct_permissions": sorted(direct) if direct is not None else [],
     }
@@ -162,6 +187,10 @@ async def create_user(
     * Email is the unique login identifier; username is an optional alias.
     * Password must satisfy the same complexity rules the auth flow enforces.
     * Role string is coerced to uppercase to match the UserRole enum.
+    * This is the endpoint the SIEM seeds through, using an admin session it
+      obtained from /auth/sso/exchange. It may send `role` directly, or send
+      `siem_role` + `access` ("L2" / "read-write") and let the DLP translate.
+      Sending neither yields VIEWER, exactly as before.
     """
     if not validate_password_strength(payload.password):
         raise HTTPException(
@@ -171,8 +200,39 @@ async def create_user(
                    "special character",
         )
 
-    # Coerce + whitelist role to match the enum.
-    role_in = (payload.role or "VIEWER").strip().upper()
+    # ── Resolve the SIEM's vocabulary, if it sent any ────────────────
+    # Same translation table as SSO login, so an account seeded as "L2 /
+    # read-write" lands on the same DLP role it would get by logging in.
+    # SSO_MAX_ROLE is applied inside resolve(), so the ceiling holds on this
+    # path too — the SIEM cannot seed above it.
+    siem_identity = None
+    if payload.siem_role:
+        from app.core.sso_roles import resolve as resolve_sso_identity
+
+        siem_identity = resolve_sso_identity({
+            "role": payload.siem_role,
+            "access": payload.access,
+            "department": payload.department,
+            "clearance_level": payload.clearance_level,
+        })
+        if not siem_identity.mapped:
+            # Do not silently fall back to VIEWER: the caller believes this
+            # role means something, and a silent downgrade would look like a
+            # successful provision until the user complains about an empty
+            # console.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unrecognised siem_role '{payload.siem_role}'. "
+                       "Expected one of: Administrator, L1, L2, L3.",
+            )
+
+    # Coerce + whitelist role to match the enum. Explicit role wins over the
+    # SIEM mapping; the mapping wins over the VIEWER default.
+    role_in = (
+        payload.role
+        or (siem_identity.role if siem_identity else None)
+        or "VIEWER"
+    ).strip().upper()
     allowed_roles = {"ADMIN", "ANALYST", "MANAGER", "VIEWER", "THREAT_ADMIN", "DATA_PROTECTION_ADMIN", "ACCESS_CONTROL_ADMIN"}
     if role_in not in allowed_roles:
         raise HTTPException(
@@ -198,7 +258,22 @@ async def create_user(
             organization=payload.organization or "CyberSentinelDLP",
             username=payload.username,
             department=payload.department,
-            clearance_level=payload.clearance_level,
+            # A NULL department is denied every event by ABAC, so when the
+            # SIEM seeds a tier we fall back to that tier's clearance rather
+            # than leaving the account at the baseline by accident.
+            clearance_level=(
+                payload.clearance_level
+                if payload.clearance_level is not None
+                else (siem_identity.clearance_level if siem_identity else None)
+            ),
+            # Only accounts seeded in SIEM vocabulary are handed to the SIEM
+            # to keep in sync on later logins. A user created from the DLP
+            # admin UI is never touched by SSO.
+            sso_managed=bool(siem_identity),
+            sso_source_role=(
+                f"{siem_identity.siem_role}:{siem_identity.siem_access}"[:64]
+                if siem_identity else None
+            ),
         )
     except ValueError as e:
         raise HTTPException(
@@ -227,6 +302,9 @@ async def create_user(
         new_user_id=str(user.id),
         role=role_in,
         direct_perms=len(payload.permissions or []),
+        siem_seeded=bool(siem_identity),
+        siem_role=siem_identity.siem_role if siem_identity else None,
+        clamped_from=siem_identity.clamped_from if siem_identity else None,
     )
     return await _to_out_with_perms(db, user)
 
@@ -278,6 +356,31 @@ async def update_user(
             detail="Only administrators can modify admin accounts.",
         )
 
+    # ── SIEM-relayed role change ─────────────────────────────────────
+    # Resolved through the same table as SSO login and create, and — unlike
+    # an explicit `role` — it re-asserts SIEM ownership instead of dropping
+    # it, so the account keeps tracking the SIEM afterwards.
+    siem_identity = None
+    if user_update.siem_role:
+        from app.core.sso_roles import resolve as resolve_sso_identity
+
+        siem_identity = resolve_sso_identity({
+            "role": user_update.siem_role,
+            "access": user_update.access,
+            "department": user_update.department,
+            "clearance_level": user_update.clearance_level,
+        })
+        if not siem_identity.mapped:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unrecognised siem_role '{user_update.siem_role}'. "
+                       "Expected one of: Administrator, L1, L2, L3.",
+            )
+        if user_update.role is None:
+            user_update.role = siem_identity.role
+        if user_update.clearance_level is None:
+            user_update.clearance_level = siem_identity.clearance_level
+
     if user_update.role is not None:
         new_role = user_update.role.strip().upper()
         allowed_roles = {"ADMIN", "ANALYST", "MANAGER", "VIEWER", "THREAT_ADMIN", "DATA_PROTECTION_ADMIN", "ACCESS_CONTROL_ADMIN"}
@@ -293,6 +396,17 @@ async def update_user(
             )
         user_update.role = new_role
 
+    # An admin changing the role by hand takes ownership of this account
+    # away from the SIEM. Without this, SSO would re-apply the SIEM's role
+    # at the user's next login and silently undo the change (see
+    # app/core/sso_roles.py). Department/clearance edits alone don't detach
+    # the account — only an explicit role decision does.
+    detach_from_sso = (
+        siem_identity is None
+        and user_update.role is not None
+        and getattr(existing, "sso_managed", False)
+    )
+
     user = await user_service.update_user(
         user_id=user_id,
         full_name=user_update.full_name,
@@ -300,6 +414,15 @@ async def update_user(
         is_active=user_update.is_active,
         department=user_update.department,
         clearance_level=user_update.clearance_level,
+        # SIEM-relayed change (re)claims the account for the SIEM; a local
+        # role edit releases it. Neither happens when only name/department/
+        # active state changed.
+        sso_managed=(True if siem_identity is not None
+                     else (False if detach_from_sso else None)),
+        sso_source_role=(
+            f"{siem_identity.siem_role}:{siem_identity.siem_access}"[:64]
+            if siem_identity else None
+        ),
     )
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -325,6 +448,8 @@ async def update_user(
         user_id=user_id,
         updated_by=str(current_user.id),
         direct_perms_touched=user_update.permissions is not None,
+        detached_from_sso=detach_from_sso,
+        siem_relayed=bool(siem_identity),
     )
     return await _to_out_with_perms(db, user)
 

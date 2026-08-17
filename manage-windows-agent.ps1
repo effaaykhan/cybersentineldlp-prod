@@ -675,6 +675,16 @@ objShell.Run """$exePath""", 0, False
       }
     }
 
+    # The browser extension is deployed BY the agent, so it goes with the agent.
+    # Left behind, its force-install policy would keep reinstalling an extension
+    # configured to report to a manager this machine no longer talks to.
+    try {
+      $extId = $null
+      $idFile = Join-Path $DATA_DIR 'extension-id.txt'
+      if (Test-Path $idFile) { $extId = (Get-Content $idFile -Raw -ErrorAction SilentlyContinue).Trim() }
+      if ($extId) { Remove-ExtensionPolicy $extId; Info 'Removed the browser extension policy'; $removed = $true }
+    } catch { Warn "Could not remove the browser extension policy: $($_.Exception.Message)" }
+
     foreach ($d in @($INSTALL_DIR, $DATA_DIR, $LEGACY_DIR, $LEGACY_DATA)) {
       if (Test-Path $d) {
         Info "Deleting $d"
@@ -909,14 +919,50 @@ objShell.Run """$exePath""", 0, False
     return $slot
   }
 
+  # Only what an ADMINISTRATOR owns. Enforcement mode and the uninspectable rule
+  # are properties of the Web Activity Control policy on the server, not of a
+  # per-browser setting — pushing them here would give an endpoint a way to
+  # disagree with the policy that is supposed to govern it.
   function Set-ManagedConfig {
-    param([string]$Root, [string]$ExtId, [string]$ServerUrl, [string]$AgentId, [string]$Mode)
+    param([string]$Root, [string]$ExtId, [string]$ServerUrl, [string]$AgentId)
     $mp = Join-Path $Root "3rdparty\extensions\$ExtId\policy"
     if (-not (Test-Path $mp)) { New-Item -Path $mp -Force | Out-Null }
     Set-ItemProperty -Path $mp -Name 'serverUrl' -Value $ServerUrl -Type String
     if ($AgentId) { Set-ItemProperty -Path $mp -Name 'agentId' -Value $AgentId -Type String }
     else { Remove-ItemProperty -Path $mp -Name 'agentId' -ErrorAction SilentlyContinue }
-    Set-ItemProperty -Path $mp -Name 'mode' -Value $Mode -Type String
+  }
+
+  # InPrivate / Incognito coverage.
+  #
+  # There is NO browser policy that turns an extension on in InPrivate. Chrome
+  # and Edge require the user to tick "Allow in InPrivate" per extension, by
+  # design, and enterprise policy cannot tick it for them — so a force-installed
+  # DLP extension simply does not run there. That is a genuine hole: anything a
+  # user does in an InPrivate window is uninspected.
+  #
+  # The only control that actually closes it is to disable InPrivate browsing,
+  # which is a supported policy and a normal posture on a managed endpoint. It is
+  # a browser-wide change, not a DLP-only one, so it is asked rather than
+  # assumed, and it is trivially reversible (delete the value).
+  function Set-InPrivateAvailability {
+    param([bool]$Disable)
+    foreach ($b in Get-BrowserPolicyRoots) {
+      if (-not (Test-Path $b.Root)) { New-Item -Path $b.Root -Force | Out-Null }
+      if ($Disable) {
+        # 1 = InPrivate/Incognito disabled. 0 = available (the default).
+        Set-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -Value 1 -Type DWord
+      } else {
+        Remove-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  function Get-InPrivateDisabled {
+    foreach ($b in Get-BrowserPolicyRoots) {
+      $v = (Get-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -ErrorAction SilentlyContinue).IncognitoModeAvailability
+      if ($v -eq 1) { return $true }
+    }
+    return $false
   }
 
   function Remove-ExtensionPolicy {
@@ -978,12 +1024,23 @@ objShell.Run """$exePath""", 0, False
     Field 'Extension ID' $extId
     Field 'Version'      $info.version
     Field 'Update feed'  $updateUrl
+    if ($Status.Installed -and -not $Status.IsLegacy) {
+      Hint 'The agent applies this automatically on every policy sync, from its'
+      Hint 'own config - so changing the server in agent_config.json and'
+      Hint 'restarting the agent moves the extension with it. Use [1] below only'
+      Hint 'to apply it right now instead of waiting for the next sync.'
+    }
     if (@($st.Forced).Count -gt 0) {
       Field 'Force-installed' ((@($st.Forced) | Select-Object -Unique) -join ', ') 'Green'
     } else {
       Field 'Force-installed' 'no - the extension is not deployed on this device' 'Yellow'
     }
     if ($st.AgentId) { Field 'Reports as' "$($st.AgentId)  (shared with the endpoint agent)" 'Green' }
+    if (Get-InPrivateDisabled) {
+      Field 'InPrivate' 'disabled - no uninspected browsing' 'Green'
+    } else {
+      Field 'InPrivate' 'available - browsing there is NOT inspected' 'Yellow'
+    }
 
     # Which identity the extension should report under. Without one it enrols
     # separately and this device appears TWICE on the dashboard.
@@ -1012,11 +1069,27 @@ objShell.Run """$exePath""", 0, False
             Info "The extension will report as agent '$agentId' - one agent for this device."
           }
 
-          $mode = 'protection'
+          # No policy can enable an extension in InPrivate, so the only way to
+          # avoid an uninspected window is to not have one. Asked, not assumed:
+          # it affects all browsing, not just DLP.
+          if (-not (Get-InPrivateDisabled)) {
+            Blank
+            Warn 'Extensions do not run in InPrivate/Incognito windows, and no'
+            Warn 'policy can change that - so anything done there is invisible to'
+            Warn 'DLP. Disabling InPrivate is the only way to close that hole.'
+            $ip = Read-Host '   Disable InPrivate browsing on this device? (Y/n)'
+            if ($ip -ne 'n' -and $ip -ne 'N') {
+              try { Set-InPrivateAvailability $true; Ok 'InPrivate browsing disabled' }
+              catch { Err "Could not disable InPrivate: $($_.Exception.Message)" }
+            } else {
+              Warn 'Left enabled - InPrivate browsing stays uninspected.'
+            }
+          }
+
           try {
             foreach ($b in Get-BrowserPolicyRoots) {
               $slot = Set-ForcelistEntry -Root $b.Root -ExtId $extId -UpdateUrl $updateUrl
-              Set-ManagedConfig -Root $b.Root -ExtId $extId -ServerUrl $apiBase -AgentId $agentId -Mode $mode
+              Set-ManagedConfig -Root $b.Root -ExtId $extId -ServerUrl $apiBase -AgentId $agentId
               Ok "$($b.Name): force-installed (slot $slot) + configured"
             }
             Blank
@@ -1036,6 +1109,12 @@ objShell.Run """$exePath""", 0, False
           Blank
           Warn 'This removes the enterprise policy. The extension stops being'
           Warn 'force-installed and the user can then disable or remove it.'
+          if ($Status.Installed -and -not $Status.IsLegacy) {
+            Blank
+            Warn 'NOTE: the agent re-applies this policy on its next sync, so the'
+            Warn 'extension will come back within a minute or two. To remove it'
+            Warn 'for good, uninstall the agent ([3] on the main menu).'
+          }
           Blank
           $confirm = Read-Host "   Type 'y' to confirm (anything else cancels)"
           if ($confirm -eq 'y' -or $confirm -eq 'Y') {

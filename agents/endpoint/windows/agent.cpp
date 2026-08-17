@@ -2817,6 +2817,211 @@ if (!shouldBlock) {
          }
      }
 
+     // ── Browser extension deployment ──────────────────────────────────────
+     //
+     // The agent owns the browser extension's identity and server address, and
+     // reconciles them into browser policy on every sync.
+     //
+     // WHY THE AGENT AND NOT THE INSTALLER: the installer writes a snapshot. Edit
+     // agent_config.json to point at a different manager, restart the agent, and
+     // a snapshot is stale — the agent reports to the new server while the
+     // extension keeps talking to the old one, silently, forever. Reconciling
+     // here means "change the config, restart the agent" is the whole procedure
+     // for both halves, which is what an operator expects and the only story
+     // that stays true after the first change.
+     //
+     // It also carries the agent's OWN id across, so the extension reports under
+     // this machine's agent instead of enrolling a second one. A device running
+     // both then appears ONCE on the dashboard.
+
+     // Set a policy string under HKLM when `set`, else delete it.
+     void SetPolicyString(const std::string& sub, const std::string& name,
+                          const std::string& value, bool set) {
+         HKEY k;
+         if (set) {
+             if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
+                 RegSetValueExA(k, name.c_str(), 0, REG_SZ,
+                                reinterpret_cast<const BYTE*>(value.c_str()),
+                                (DWORD)value.size() + 1);
+                 RegCloseKey(k);
+             }
+         } else {
+             if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                 RegDeleteValueA(k, name.c_str());
+                 RegCloseKey(k);
+             }
+         }
+     }
+
+     // Put "<id>;<update_url>" in the browser's force-install list, reusing our
+     // own slot if we already own one.
+     //
+     // Chrome reads every value under the key regardless of its name, but the
+     // documented convention is small integers and other tooling assumes it. So:
+     // find the entry that already starts with our extension id and overwrite
+     // it, otherwise take the lowest free integer. Blindly appending would leave
+     // a stale entry behind on every server change, and the browser would then
+     // try to install both.
+     void SetForcelistEntry(const std::string& policyRoot, const std::string& extId,
+                            const std::string& updateUrl) {
+         std::string sub = policyRoot + "\\ExtensionInstallForcelist";
+         HKEY k;
+         if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                             REG_OPTION_NON_VOLATILE, KEY_READ | KEY_SET_VALUE,
+                             nullptr, &k, nullptr) != ERROR_SUCCESS) {
+             return;
+         }
+
+         std::string slot;
+         std::set<std::string> used;
+         char nameBuf[256];
+         BYTE dataBuf[1024];
+         for (DWORD i = 0; ; i++) {
+             DWORD nameLen = sizeof(nameBuf);
+             DWORD dataLen = sizeof(dataBuf);
+             DWORD type = 0;
+             if (RegEnumValueA(k, i, nameBuf, &nameLen, nullptr, &type,
+                               dataBuf, &dataLen) != ERROR_SUCCESS) {
+                 break;
+             }
+             std::string vname(nameBuf, nameLen);
+             used.insert(vname);
+             if (type == REG_SZ && dataLen > 0) {
+                 std::string vdata(reinterpret_cast<char*>(dataBuf));
+                 if (vdata.rfind(extId + ";", 0) == 0) slot = vname;
+             }
+         }
+         if (slot.empty()) {
+             for (int n = 1; n < 500; n++) {
+                 std::string cand = std::to_string(n);
+                 if (used.find(cand) == used.end()) { slot = cand; break; }
+             }
+         }
+         if (slot.empty()) slot = "1";
+
+         std::string entry = extId + ";" + updateUrl;
+         RegSetValueExA(k, slot.c_str(), 0, REG_SZ,
+                        reinterpret_cast<const BYTE*>(entry.c_str()),
+                        (DWORD)entry.size() + 1);
+         RegCloseKey(k);
+     }
+
+     // Remember the id so a browser still gets the extension when the agent
+     // starts with the manager unreachable.
+     std::string ExtensionIdCachePath() const {
+         std::string dir = "C:\\ProgramData\\CyberSentinelDLP";
+         CreateDirectoryA(dir.c_str(), nullptr);
+         return dir + "\\extension-id.txt";
+     }
+
+     std::string browserExtensionId;      // last known, cached across restarts
+     std::string lastExtensionPolicySig;  // skip registry churn when unchanged
+
+     void ApplyBrowserExtensionPolicy() {
+         try {
+             // 1) Which extension? The server publishes it, so the id is never
+             //    typed by hand and a re-signed build is picked up automatically.
+             std::string extId = browserExtensionId;
+             if (httpClient) {
+                 auto [status, response] = httpClient->Get("/extension/info");
+                 if (status == 200) {
+                     std::string id = config.ExtractJsonValue(response, "extension_id");
+                     if (id.size() == 32) {
+                         extId = id;
+                         if (id != browserExtensionId) {
+                             browserExtensionId = id;
+                             std::ofstream f(ExtensionIdCachePath(), std::ios::trunc);
+                             if (f.is_open()) { f << id; f.close(); }
+                         }
+                     }
+                 } else if (status == 404) {
+                     // Nothing published on this server. Not an error: a
+                     // deployment that does not use the browser extension is a
+                     // perfectly normal deployment.
+                     return;
+                 }
+             }
+             if (extId.empty()) {
+                 std::ifstream f(ExtensionIdCachePath());
+                 if (f.is_open()) { std::getline(f, extId); f.close(); }
+             }
+             if (extId.size() != 32) return;
+
+             // 2) Both halves come from THIS agent's live config, so changing the
+             //    server in agent_config.json and restarting moves the extension
+             //    with it.
+             std::string updateUrl = config.serverUrl;
+             while (!updateUrl.empty() && updateUrl.back() == '/') updateUrl.pop_back();
+             updateUrl += "/extension/update.xml";
+
+             std::string sig = extId + "|" + config.serverUrl + "|" + config.agentId;
+             if (sig == lastExtensionPolicySig) return;   // nothing changed
+
+             const std::string roots[] = {
+                 "SOFTWARE\\Policies\\Google\\Chrome",
+                 "SOFTWARE\\Policies\\Microsoft\\Edge"
+             };
+             for (const auto& root : roots) {
+                 SetForcelistEntry(root, extId, updateUrl);
+
+                 // Managed configuration the extension reads through
+                 // chrome.storage.managed. agentId is what makes this device one
+                 // agent rather than two.
+                 std::string mp = root + "\\3rdparty\\extensions\\" + extId + "\\policy";
+                 SetPolicyString(mp, "serverUrl", config.serverUrl, true);
+                 SetPolicyString(mp, "agentId", config.agentId, true);
+             }
+
+             lastExtensionPolicySig = sig;
+             logger.Info("Browser extension policy applied: id=" + extId +
+                         " server=" + config.serverUrl + " agent=" + config.agentId);
+         } catch (...) {
+             logger.Warning("ApplyBrowserExtensionPolicy failed (non-fatal)");
+         }
+     }
+
+     // Drop the force-install so the extension can be removed with the agent.
+     // Leaving it behind would keep re-installing an extension pointed at a
+     // manager this machine no longer reports to.
+     void RemoveBrowserExtensionPolicy() {
+         std::string extId = browserExtensionId;
+         if (extId.empty()) {
+             std::ifstream f(ExtensionIdCachePath());
+             if (f.is_open()) { std::getline(f, extId); f.close(); }
+         }
+         if (extId.size() != 32) return;
+
+         const std::string roots[] = {
+             "SOFTWARE\\Policies\\Google\\Chrome",
+             "SOFTWARE\\Policies\\Microsoft\\Edge"
+         };
+         for (const auto& root : roots) {
+             std::string sub = root + "\\ExtensionInstallForcelist";
+             HKEY k;
+             if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0,
+                               KEY_READ | KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                 std::vector<std::string> drop;
+                 char nameBuf[256];
+                 BYTE dataBuf[1024];
+                 for (DWORD i = 0; ; i++) {
+                     DWORD nameLen = sizeof(nameBuf), dataLen = sizeof(dataBuf), type = 0;
+                     if (RegEnumValueA(k, i, nameBuf, &nameLen, nullptr, &type,
+                                       dataBuf, &dataLen) != ERROR_SUCCESS) break;
+                     if (type == REG_SZ && dataLen > 0) {
+                         std::string vdata(reinterpret_cast<char*>(dataBuf));
+                         if (vdata.rfind(extId + ";", 0) == 0) drop.push_back(std::string(nameBuf, nameLen));
+                     }
+                 }
+                 for (const auto& n : drop) RegDeleteValueA(k, n.c_str());
+                 RegCloseKey(k);
+             }
+             std::string mp = root + "\\3rdparty\\extensions\\" + extId;
+             RegDeleteTreeA(HKEY_LOCAL_MACHINE, mp.c_str());
+         }
+         logger.Info("Browser extension policy removed");
+     }
+
      // Apply/reconcile the wireless-transfer controls. Reconciled both ways so
      // clearing the policy restores the channels. NOTE: covers the built-in
      // Bluetooth file wizard + the Nearby Sharing/CDP policy; validate on hardware.
@@ -4779,6 +4984,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              FetchWirelessPolicy();
              // Refresh the network file-share transfer-control policy too.
              FetchNetworkSharePolicy();
+             // Reconcile the browser extension's deployment + configuration from
+             // THIS agent's live config, so changing the server in
+             // agent_config.json and restarting moves both halves together.
+             ApplyBrowserExtensionPolicy();
          } catch (const std::exception& e) {
              logger.Error(std::string("Failed to sync policies: ") + e.what());
          } catch (...) {

@@ -762,13 +762,46 @@
     return job;
   }
 
+  /* ── Idle teardown ──────────────────────────────────────────────────────
+   *
+   * Tesseract holds a worker, a WASM core and a loaded language model — on the
+   * order of a hundred megabytes — and once created it stayed resident for the
+   * life of the browser session. That is a real cost to leave sitting on a
+   * user's machine for the sake of the one attachment they sent this morning.
+   *
+   * The worker is torn down after a quiet period and rebuilt on demand. Rebuild
+   * costs a second or two on the next attachment, paid only by someone who is
+   * already waiting for an inspection, and it never happens mid-queue because
+   * the timer is reset by every job.
+   *
+   * The offscreen DOCUMENT is left to the service worker to close (see
+   * closeIdleOffscreen in background.js); this file only releases the engine.
+   */
+  const ENGINE_IDLE_MS = 3 * 60 * 1000;
+  let idleTimer = null;
+
+  function touchIdleTimer() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      if (!workerPromise) return;
+      discardWorker().then(() => {
+        console.info("[CyberSentinel] offscreen: OCR engine released after idle");
+      });
+    }, ENGINE_IDLE_MS);
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // The service worker and this document share the message bus; ignore
     // anything not explicitly addressed here.
     if (!message || message.target !== TARGET) return false;
 
     if (message.type === "OCR_RUN") {
-      enqueue(message.dataUrl, message.mimeType, message.name).then(sendResponse);
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      enqueue(message.dataUrl, message.mimeType, message.name).then((r) => {
+        touchIdleTimer();
+        sendResponse(r);
+      });
       return true;
     }
     return false;

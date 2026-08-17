@@ -1061,6 +1061,35 @@ async function ensureOffscreenDocument() {
   await offscreenCreating;
 }
 
+/**
+ * Close the inspection host when nothing has used it for a while.
+ *
+ * The offscreen document is a whole renderer process. Keeping one alive for the
+ * rest of a browser session because someone attached a photo at 9am is exactly
+ * the kind of cost that gets a security agent uninstalled. It is recreated
+ * transparently on the next attachment — ensureOffscreenDocument already does
+ * that — so the only price is a second on a cold inspection.
+ *
+ * Closing is also skipped while a job is in flight: lastOcrAt is stamped on
+ * every request, so an inspection that outruns the window keeps the host alive.
+ */
+const OFFSCREEN_IDLE_MS = 5 * 60 * 1000;
+let lastOcrAt = 0;
+let ocrInFlight = 0;
+
+async function closeIdleOffscreen() {
+  if (ocrInFlight > 0) return;
+  if (!lastOcrAt || Date.now() - lastOcrAt < OFFSCREEN_IDLE_MS) return;
+  if (!(await hasOffscreenDocument())) return;
+  try {
+    await chrome.offscreen.closeDocument();
+    lastOcrAt = 0;
+    log("inspection host closed after idle");
+  } catch (e) {
+    // Racing a document that is already gone is success, not failure.
+  }
+}
+
 async function runOcrRequest(dataUrl, name, mimeType) {
   if (!dataUrl) return { ok: false, error: "no attachment data received" };
   try {
@@ -1071,6 +1100,8 @@ async function runOcrRequest(dataUrl, name, mimeType) {
     return { ok: false, error };
   }
 
+  ocrInFlight++;
+  lastOcrAt = Date.now();
   try {
     const result = await chrome.runtime.sendMessage({
       target: OFFSCREEN_TARGET, type: "OCR_RUN", dataUrl, mimeType, name
@@ -1090,6 +1121,9 @@ async function runOcrRequest(dataUrl, name, mimeType) {
     const error = `Attachment-inspection host unreachable: ${err && err.message ? err.message : String(err)}`;
     console.error("[CyberSentinel]", error);
     return { ok: false, error };
+  } finally {
+    ocrInFlight--;
+    lastOcrAt = Date.now();
   }
 }
 
@@ -1151,7 +1185,7 @@ async function ensureAlarms() {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEARTBEAT_ALARM) sendHeartbeat();
-  if (alarm.name === SYNC_ALARM) syncAll();
+  if (alarm.name === SYNC_ALARM) { syncAll(); closeIdleOffscreen(); }
 });
 
 /** Write the defaults into storage if the user has never set any. */

@@ -46,6 +46,10 @@ _AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/(usb-allowlist|printer
 # keep classifying destinations from a coffee shop while the portal is
 # IP-restricted, or it silently stops recognising GenAI hosts off-network.
 _APP_CATALOG_SYNC = re.compile(r"^/api/v1/app-catalog/sync/?$")
+# Browser-extension update feed. Chrome fetches these itself, as the browser
+# process, with no credentials — and an endpoint must keep receiving extension
+# updates from any network, exactly like the agent routes above.
+_EXTENSION_DIST = re.compile(r"^/api/v1/extension/[^/]*$")
 
 
 def bump_ip_allowlist_cache() -> None:
@@ -90,6 +94,8 @@ def _is_exempt(method: str, path: str) -> bool:
     if method == "GET" and _AGENT_USB_ALLOWLIST.match(path):
         return True
     if method == "GET" and _APP_CATALOG_SYNC.match(path):
+        return True
+    if method == "GET" and _EXTENSION_DIST.match(path):
         return True
     if method == "DELETE" and _AGENT_UNREG.match(path):
         return True

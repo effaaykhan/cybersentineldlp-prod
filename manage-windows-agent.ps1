@@ -4,7 +4,7 @@
   A single, self-contained console app. Self-elevates to Administrator, detects any
   existing agent (current OR legacy layout), reports its live status, and offers:
 
-      [1] Install    [2] Update    [3] Uninstall    [4] Logs    [5] Exit
+      [1] Install  [2] Update  [3] Uninstall  [4] Logs  [5] Extension  [6] Exit
 
   Everything (install, update, uninstall) is implemented INLINE in this one file —
   it does not download or depend on any other script. The only things it fetches
@@ -497,7 +497,24 @@
       }
       quarantine_path = "$DATA_DIR\quarantine"; log_path = "$DATA_DIR\logs"; cache_path = "$DATA_DIR\cache"
     }
-    if ($recoveredId) { $config.agent_id = $recoveredId; Info "Preserving identity $recoveredId" }
+    # Identity is assigned HERE rather than left to the agent to mint on first
+    # run. Two reasons:
+    #   * The agent generates an id when the config has none and persists it back
+    #     — but only if it can resolve and write that config. When it cannot, it
+    #     generates a fresh one every restart, and the dashboard grows a new row
+    #     per reboot.
+    #   * The browser extension has to report under this exact id so a device
+    #     running BOTH appears once, not twice. This script is the only place
+    #     that knows the identity and can hand it to the extension's policy.
+    if ($recoveredId) {
+      Info "Preserving identity $recoveredId"
+    } else {
+      $slug = ($agentName.ToLower() -replace '[^a-z0-9]', '-').Trim('-')
+      if (-not $slug) { $slug = 'endpoint' }
+      $recoveredId = "win-$slug-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+      Info "Assigned agent identity $recoveredId"
+    }
+    $config.agent_id = $recoveredId
     $configPath = Join-Path $INSTALL_DIR $CONFIG_NAME
     $config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding ASCII -Force   # ASCII = no BOM
     Ok 'Configuration written'
@@ -797,6 +814,244 @@ objShell.Run """$exePath""", 0, False
   }
 
   # ============================================================
+  #  Browser extension  (force-install via enterprise policy)
+  # ============================================================
+  #
+  # WHY POLICY AND NOT "load unpacked": an unpacked extension can be switched off
+  # by the user in two clicks at chrome://extensions, and its id is derived from
+  # the folder path so it differs on every machine. A force-installed extension
+  # cannot be disabled or removed by the user, updates itself, and has one stable
+  # id everywhere. For a DLP control that difference is the whole point.
+  #
+  # ONE AGENT PER DEVICE: the same policy key also carries this machine's agent
+  # id, which the extension reads through chrome.storage.managed. It then reports
+  # under the endpoint agent instead of enrolling a second one, so a device
+  # running both shows up ONCE on the dashboard with USB, print and browser
+  # activity on the same agent.
+
+  $CHROME_POLICY = 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+  $EDGE_POLICY   = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+
+  function Get-BrowserPolicyRoots {
+    # Both are written unconditionally. Writing the key for a browser that is not
+    # installed is harmless, and it means the control is already in place if that
+    # browser is installed later — which is exactly the gap a user would drive
+    # through otherwise.
+    @(
+      [PSCustomObject]@{ Name = 'Chrome'; Root = $CHROME_POLICY },
+      [PSCustomObject]@{ Name = 'Edge';   Root = $EDGE_POLICY }
+    )
+  }
+
+  # Normalise whatever we know about the server into the API base, e.g.
+  # http://10.0.0.5:55100/api/v1
+  function Resolve-ServerApiBase {
+    param([string]$Known)
+    if ($Known -and $Known -match '/api/v\d+$') { return $Known.TrimEnd('/') }
+    if ($Known) {
+      try { $u = [Uri]$Known; return "$($u.Scheme)://$($u.Authority)/api/v1" } catch {}
+    }
+    $ip = Read-Host '   Server IP or hostname'
+    if ([string]::IsNullOrWhiteSpace($ip)) { return $null }
+    return "http://${ip}:55100/api/v1"
+  }
+
+  function Get-ExtensionStatus {
+    param([string]$ExtId)
+    $out = [PSCustomObject]@{ Forced = @(); Managed = $null; AgentId = $null; ServerUrl = $null }
+    foreach ($b in Get-BrowserPolicyRoots) {
+      $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+      if (Test-Path $fl) {
+        $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+        foreach ($p in $props.PSObject.Properties) {
+          if ($p.Name -like 'PS*') { continue }
+          if ($ExtId -and ($p.Value -like "$ExtId;*")) { $out.Forced += $b.Name }
+        }
+      }
+      if ($ExtId) {
+        $mp = Join-Path $b.Root "3rdparty\extensions\$ExtId\policy"
+        if (Test-Path $mp) {
+          $m = Get-ItemProperty -Path $mp -ErrorAction SilentlyContinue
+          if ($m.agentId)   { $out.AgentId   = $m.agentId }
+          if ($m.serverUrl) { $out.ServerUrl = $m.serverUrl }
+          $out.Managed = $b.Name
+        }
+      }
+    }
+    $out
+  }
+
+  # Write "<id>;<update_url>" into the forcelist, reusing our own slot if we
+  # already own one. Blindly appending would leave a stale entry behind on every
+  # re-run, and Chrome would then try to install both.
+  function Set-ForcelistEntry {
+    param([string]$Root, [string]$ExtId, [string]$UpdateUrl)
+    $fl = Join-Path $Root 'ExtensionInstallForcelist'
+    if (-not (Test-Path $fl)) { New-Item -Path $fl -Force | Out-Null }
+
+    $entry = "$ExtId;$UpdateUrl"
+    $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+    $slot = $null
+    $used = @()
+    if ($props) {
+      foreach ($p in $props.PSObject.Properties) {
+        if ($p.Name -like 'PS*') { continue }
+        $used += $p.Name
+        if ($p.Value -like "$ExtId;*") { $slot = $p.Name }
+      }
+    }
+    if (-not $slot) {
+      $n = 1
+      while ($used -contains "$n") { $n++ }
+      $slot = "$n"
+    }
+    Set-ItemProperty -Path $fl -Name $slot -Value $entry -Type String
+    return $slot
+  }
+
+  function Set-ManagedConfig {
+    param([string]$Root, [string]$ExtId, [string]$ServerUrl, [string]$AgentId, [string]$Mode)
+    $mp = Join-Path $Root "3rdparty\extensions\$ExtId\policy"
+    if (-not (Test-Path $mp)) { New-Item -Path $mp -Force | Out-Null }
+    Set-ItemProperty -Path $mp -Name 'serverUrl' -Value $ServerUrl -Type String
+    if ($AgentId) { Set-ItemProperty -Path $mp -Name 'agentId' -Value $AgentId -Type String }
+    else { Remove-ItemProperty -Path $mp -Name 'agentId' -ErrorAction SilentlyContinue }
+    Set-ItemProperty -Path $mp -Name 'mode' -Value $Mode -Type String
+  }
+
+  function Remove-ExtensionPolicy {
+    param([string]$ExtId)
+    foreach ($b in Get-BrowserPolicyRoots) {
+      $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+      if (Test-Path $fl) {
+        $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+        foreach ($p in $props.PSObject.Properties) {
+          if ($p.Name -like 'PS*') { continue }
+          if ($p.Value -like "$ExtId;*") {
+            Remove-ItemProperty -Path $fl -Name $p.Name -ErrorAction SilentlyContinue
+            Info "$($b.Name): removed forcelist entry $($p.Name)"
+          }
+        }
+      }
+      $mp = Join-Path $b.Root "3rdparty\extensions\$ExtId"
+      if (Test-Path $mp) {
+        Remove-Item $mp -Recurse -Force -ErrorAction SilentlyContinue
+        Info "$($b.Name): removed managed configuration"
+      }
+    }
+  }
+
+  function Show-Extension {
+    param($Status)
+    Blank
+    Header 'BROWSER EXTENSION' 'Cyan'
+
+    $apiBase = Resolve-ServerApiBase $Status.ServerUrl
+    if (-not $apiBase) { Warn 'No server given - cannot continue.'; Blank; Read-Host '   Press Enter to return' | Out-Null; return }
+
+    # The server is the source of truth for the id, so nobody ever types a
+    # 32-character extension id by hand - the single most error-prone step in a
+    # force-install, and one that fails completely silently when wrong.
+    $info = $null
+    $info = Invoke-Spinner -Text 'Asking the DLP server for the published extension' -ArgumentList @($apiBase) -Work {
+      param($b)
+      try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-RestMethod -Uri "$b/extension/info" -TimeoutSec 10 -ErrorAction Stop
+      } catch { $null }
+    }
+
+    if (-not $info -or -not $info.extension_id) {
+      Err 'The server has not published a browser extension yet.'
+      Hint 'On the DLP server run:'
+      Hint "  python3 scripts/pack-extension.py --server $($apiBase -replace '/api/v\d+$','')"
+      Hint 'then come back here.'
+      Blank; Read-Host '   Press Enter to return to the menu' | Out-Null
+      return
+    }
+
+    $extId     = $info.extension_id
+    $updateUrl = "$apiBase/extension/update.xml"
+    $st        = Get-ExtensionStatus $extId
+
+    Hr '-' 'DarkCyan'
+    Field 'Extension ID' $extId
+    Field 'Version'      $info.version
+    Field 'Update feed'  $updateUrl
+    if (@($st.Forced).Count -gt 0) {
+      Field 'Force-installed' ((@($st.Forced) | Select-Object -Unique) -join ', ') 'Green'
+    } else {
+      Field 'Force-installed' 'no - the extension is not deployed on this device' 'Yellow'
+    }
+    if ($st.AgentId) { Field 'Reports as' "$($st.AgentId)  (shared with the endpoint agent)" 'Green' }
+
+    # Which identity the extension should report under. Without one it enrols
+    # separately and this device appears TWICE on the dashboard.
+    $agentId = $Status.AgentId
+    if (-not $agentId) { $agentId = $st.AgentId }
+
+    while ($true) {
+      Blank
+      Write-Host '   [1] ' -ForegroundColor Green  -NoNewline; Write-Host 'Deploy / update  - force-install into Chrome and Edge'
+      Write-Host '   [2] ' -ForegroundColor Red    -NoNewline; Write-Host 'Remove           - drop the policy (user can then uninstall it)'
+      Write-Host '   [3] ' -ForegroundColor Gray   -NoNewline; Write-Host 'Back to main menu'
+      Blank
+      $c = Read-Host '   Choose (1-3)'
+      switch ($c.Trim()) {
+        '1' {
+          Blank
+          if (-not $agentId) {
+            Warn 'This device has no known agent id, so the extension would enrol'
+            Warn 'as a SEPARATE agent and the device would appear twice on the'
+            Warn 'dashboard. Install the agent first ([1] on the main menu), or'
+            Warn 'continue and accept two rows.'
+            Blank
+            $go = Read-Host "   Continue without an agent id? (y/N)"
+            if ($go -ne 'y' -and $go -ne 'Y') { continue }
+          } else {
+            Info "The extension will report as agent '$agentId' - one agent for this device."
+          }
+
+          $mode = 'protection'
+          try {
+            foreach ($b in Get-BrowserPolicyRoots) {
+              $slot = Set-ForcelistEntry -Root $b.Root -ExtId $extId -UpdateUrl $updateUrl
+              Set-ManagedConfig -Root $b.Root -ExtId $extId -ServerUrl $apiBase -AgentId $agentId -Mode $mode
+              Ok "$($b.Name): force-installed (slot $slot) + configured"
+            }
+            Blank
+            Ok 'Policy written.'
+            Hint 'Fully close and reopen Chrome/Edge. The extension installs itself'
+            Hint 'within a minute and CANNOT be disabled or removed by the user.'
+            Hint 'Verify at chrome://extensions (it shows "Installed by enterprise policy").'
+            if (-not $agentId) { Warn 'No agent id was set - this browser will enrol as its own agent.' }
+          } catch {
+            Err "Could not write the policy: $($_.Exception.Message)"
+            Hint 'This needs an ELEVATED PowerShell (Run as administrator).'
+          }
+          Blank; Read-Host '   Press Enter to continue' | Out-Null
+          return
+        }
+        '2' {
+          Blank
+          Warn 'This removes the enterprise policy. The extension stops being'
+          Warn 'force-installed and the user can then disable or remove it.'
+          Blank
+          $confirm = Read-Host "   Type 'y' to confirm (anything else cancels)"
+          if ($confirm -eq 'y' -or $confirm -eq 'Y') {
+            try { Remove-ExtensionPolicy $extId; Ok 'Policy removed. Restart the browser to apply.' }
+            catch { Err "Removal failed: $($_.Exception.Message)" }
+          } else { Warn 'Cancelled - no changes made.' }
+          Blank; Read-Host '   Press Enter to continue' | Out-Null
+          return
+        }
+        '3' { return }
+        default { Warn 'Enter 1, 2, or 3.' }
+      }
+    }
+  }
+
+  # ============================================================
   #  Main menu loop
   # ============================================================
   $first = $true
@@ -823,9 +1078,10 @@ objShell.Run """$exePath""", 0, False
     Write-Host '   [2] Update     ' -ForegroundColor Cyan   -NoNewline; Write-Host '- replace the binary with the latest build'
     Write-Host '   [3] Uninstall  ' -ForegroundColor Red    -NoNewline; Write-Host '- stop and completely remove the agent'
     Write-Host '   [4] Logs       ' -ForegroundColor Yellow -NoNewline; Write-Host '- view / follow the agent log file'
-    Write-Host '   [5] Exit       ' -ForegroundColor Gray   -NoNewline; Write-Host '- do nothing and quit'
+    Write-Host '   [5] Extension  ' -ForegroundColor Magenta -NoNewline; Write-Host '- force-install the browser extension (web + AI control)'
+    Write-Host '   [6] Exit       ' -ForegroundColor Gray   -NoNewline; Write-Host '- do nothing and quit'
     Blank
-    $choice = Read-Host '   Choose an option (1-5)'
+    $choice = Read-Host '   Choose an option (1-6)'
 
     switch ($choice.Trim()) {
       '1' {
@@ -868,8 +1124,11 @@ objShell.Run """$exePath""", 0, False
       '4' {
         try { Show-Logs } catch { Err "Log view failed: $($_.Exception.Message)" }
       }
-      '5' { Blank; Info 'Exiting - no changes made.'; return }
-      default { Blank; Warn 'Invalid choice - please enter 1, 2, 3, 4, or 5.'; Start-Sleep -Milliseconds 900 }
+      '5' {
+        try { Show-Extension $s } catch { Err "Extension step failed: $($_.Exception.Message)" }
+      }
+      '6' { Blank; Info 'Exiting - no changes made.'; return }
+      default { Blank; Warn 'Invalid choice - please enter 1, 2, 3, 4, 5, or 6.'; Start-Sleep -Milliseconds 900 }
     }
   }
 }

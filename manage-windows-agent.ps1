@@ -965,6 +965,126 @@ objShell.Run """$exePath""", 0, False
     return $false
   }
 
+  # ── Making an update actually happen ──────────────────────────────────
+  #
+  # Writing the force-install policy does NOT deploy a new build. It tells the
+  # browser which extension to keep installed; the browser then checks the update
+  # feed on its own schedule — roughly every few hours — so a freshly published
+  # version does not appear when you press Deploy, and the whole thing looks
+  # broken. chrome://extensions -> Update forces it, but that is a manual step on
+  # every endpoint and not something to hand an operator.
+  #
+  # A force-installed extension is self-healing: if its files are missing at
+  # startup, the browser re-downloads it from the update URL. So deleting the
+  # cached copy while the browser is closed makes the next launch fetch whatever
+  # the server is publishing now. That is deterministic, unlike waiting.
+  #
+  # Profiles are enumerated across ALL users on the box, not from $env:LOCALAPPDATA:
+  # this script self-elevates, so that variable points at the ADMINISTRATOR's
+  # profile and would silently miss the extension belonging to the person actually
+  # logged in.
+
+  function Get-BrowserProfileDirs {
+    $roots = @()
+    foreach ($u in (Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue)) {
+      $roots += Join-Path $u.FullName 'AppData\Local\Google\Chrome\User Data'
+      $roots += Join-Path $u.FullName 'AppData\Local\Microsoft\Edge\User Data'
+    }
+    $profiles = @()
+    foreach ($r in $roots) {
+      if (-not (Test-Path $r)) { continue }
+      $browser = if ($r -match 'Edge') { 'Edge' } else { 'Chrome' }
+      foreach ($d in (Get-ChildItem $r -Directory -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' })) {
+        $profiles += [PSCustomObject]@{ Browser = $browser; Path = $d.FullName; Name = $d.Name; User = (Split-Path (Split-Path (Split-Path (Split-Path $r -Parent) -Parent) -Parent) -Leaf) }
+      }
+    }
+    $profiles
+  }
+
+  # Which version is actually on disk, per profile. This is the honest answer to
+  # "did the update land?" — the version is the name of the folder the browser
+  # unpacked it into (e.g. "2.1.0_0").
+  function Get-InstalledExtensionVersions {
+    param([string]$ExtId)
+    $found = @()
+    foreach ($p in (Get-BrowserProfileDirs)) {
+      $dir = Join-Path $p.Path "Extensions\$ExtId"
+      if (-not (Test-Path $dir)) { continue }
+      foreach ($v in (Get-ChildItem $dir -Directory -ErrorAction SilentlyContinue)) {
+        $found += [PSCustomObject]@{
+          Browser = $p.Browser; User = $p.User; Profile = $p.Name
+          Version = ($v.Name -replace '_\d+$', ''); Path = $v.FullName
+        }
+      }
+    }
+    $found
+  }
+
+  function Stop-Browsers {
+    $names = @('chrome', 'msedge')
+    $running = @()
+    foreach ($n in $names) {
+      if (Get-Process -Name $n -ErrorAction SilentlyContinue) { $running += $n }
+    }
+    if ($running.Count -eq 0) { return $true }
+
+    Blank
+    Warn "Chrome/Edge must be closed to replace the extension's files."
+    $go = Read-Host '   Close them now? (Y/n)'
+    if ($go -eq 'n' -or $go -eq 'N') { Warn 'Left running - the refresh was skipped.'; return $false }
+
+    foreach ($n in $running) {
+      Info "Closing $n..."
+      # Ask politely first so open tabs are restored on next launch.
+      Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object {
+        $null = $_.CloseMainWindow()
+      }
+      Start-Sleep -Seconds 2
+      Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+    return $true
+  }
+
+  # Delete the cached copy so the next launch re-downloads the published build.
+  function Invoke-ExtensionRefresh {
+    param([string]$ExtId, [string]$WantVersion)
+
+    $before = Get-InstalledExtensionVersions $ExtId
+    if (@($before).Count -eq 0) {
+      Info 'The extension is not installed in any profile yet - nothing to refresh.'
+      Hint 'It installs itself the next time a browser starts.'
+      return
+    }
+
+    $stale = @($before | Where-Object { $_.Version -ne $WantVersion })
+    if (@($stale).Count -eq 0) {
+      Ok "Every profile already has v$WantVersion."
+      return
+    }
+
+    Blank
+    Warn "$(@($stale).Count) profile(s) are on an older build:"
+    foreach ($s in $stale) { Hint "  $($s.Browser) / $($s.User) / $($s.Profile) : v$($s.Version)" }
+
+    if (-not (Stop-Browsers)) { return }
+
+    $removed = 0
+    foreach ($s in $before) {
+      $extDir = Split-Path $s.Path -Parent
+      try {
+        Remove-Item $extDir -Recurse -Force -ErrorAction Stop
+        $removed++
+      } catch {
+        Warn "Could not remove $extDir : $($_.Exception.Message)"
+      }
+    }
+    Ok "Cleared the cached extension from $removed profile(s)."
+    Hint "Start Chrome/Edge - it re-downloads v$WantVersion from the server within a"
+    Hint 'few seconds and re-applies the policy. Nothing else to do.'
+  }
+
   function Remove-ExtensionPolicy {
     param([string]$ExtId)
     foreach ($b in Get-BrowserPolicyRoots) {
@@ -1036,6 +1156,14 @@ objShell.Run """$exePath""", 0, False
       Field 'Force-installed' 'no - the extension is not deployed on this device' 'Yellow'
     }
     if ($st.AgentId) { Field 'Reports as' "$($st.AgentId)  (shared with the endpoint agent)" 'Green' }
+    $installed = Get-InstalledExtensionVersions $extId
+    if (@($installed).Count -gt 0) {
+      $vers = (@($installed) | Select-Object -ExpandProperty Version -Unique) -join ', '
+      $col = if (@($installed | Where-Object { $_.Version -ne $info.version }).Count -gt 0) { 'Yellow' } else { 'Green' }
+      Field 'Installed' "v$vers  in $(@($installed).Count) profile(s)" $col
+    } else {
+      Field 'Installed' 'not yet - installs on the next browser start' 'Yellow'
+    }
     if (Get-InPrivateDisabled) {
       Field 'InPrivate' 'disabled - no uninspected browsing' 'Green'
     } else {
@@ -1094,9 +1222,20 @@ objShell.Run """$exePath""", 0, False
             }
             Blank
             Ok 'Policy written.'
-            Hint 'Fully close and reopen Chrome/Edge. The extension installs itself'
-            Hint 'within a minute and CANNOT be disabled or removed by the user.'
-            Hint 'Verify at chrome://extensions (it shows "Installed by enterprise policy").'
+
+            # Writing the policy is not the same as deploying the build - the
+            # browser fetches on its own schedule. Finish the job here rather
+            # than leaving someone to wonder why nothing changed.
+            Invoke-ExtensionRefresh -ExtId $extId -WantVersion $info.version
+
+            Blank
+            Info 'Verify at chrome://extensions - it must show:'
+            Hint "    ID       $extId"
+            Hint "    Version  $($info.version)"
+            Hint '    "Installed by enterprise policy"'
+            Hint 'A different ID means the policy points at an extension this'
+            Hint 'server does not publish, and it will NEVER update: use [2]'
+            Hint 'Remove here, then Deploy again.'
             if (-not $agentId) { Warn 'No agent id was set - this browser will enrol as its own agent.' }
           } catch {
             Err "Could not write the policy: $($_.Exception.Message)"

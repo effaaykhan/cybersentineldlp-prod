@@ -116,9 +116,9 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
   return (
     <div className="space-y-6">
       {/* Info Box */}
-      <div className="bg-indigo-900/20 border border-indigo-500/50 rounded-xl p-4">
+      <div className="bg-cs-indigo-faint border border-cs-indigo rounded-cs-card p-4">
         <div className="flex items-start gap-3">
-          <Info className="w-5 h-5 text-indigo-400 flex-shrink-0 mt-0.5" />
+          <Info className="w-5 h-5 text-cs-indigo flex-shrink-0 mt-0.5" />
           <div className="text-sm text-indigo-200">
             <p className="font-semibold mb-1">Classification-Aware Policies</p>
             <p>Create policies based on content classification, confidence scores, and labels.
@@ -130,7 +130,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
       {/* Conditions */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h5 className="text-md font-semibold text-white">Conditions</h5>
+          <h5 className="text-md font-semibold text-cs-ink">Conditions</h5>
           <select
             value={policy.conditions.match}
             onChange={(e) => onChange({
@@ -140,7 +140,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                 match: e.target.value as 'all' | 'any'
               }
             })}
-            className="px-3 py-1.5 bg-gray-900/50 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+            className="px-3 py-1.5 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
           >
             <option value="all">Match ALL conditions</option>
             <option value="any">Match ANY condition</option>
@@ -152,16 +152,16 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
             const fieldConfig = getFieldConfig(condition.field)
 
             return (
-              <div key={index} className="bg-gray-900/50 border border-gray-600 rounded-lg p-4">
+              <div key={index} className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm p-4">
                 <div className="flex items-start gap-3">
                   <div className="flex-1 grid grid-cols-3 gap-3">
                     {/* Field */}
                     <div>
-                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Field</label>
+                      <label className="block text-xs font-medium text-cs-muted mb-1.5">Field</label>
                       <select
                         value={condition.field}
                         onChange={(e) => updateCondition(index, 'field', e.target.value)}
-                        className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                        className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                       >
                         {FIELD_OPTIONS.map(opt => (
                           <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -171,11 +171,11 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
                     {/* Operator */}
                     <div>
-                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Operator</label>
+                      <label className="block text-xs font-medium text-cs-muted mb-1.5">Operator</label>
                       <select
                         value={condition.operator}
                         onChange={(e) => updateCondition(index, 'operator', e.target.value)}
-                        className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                        className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                       >
                         {OPERATOR_OPTIONS.map(opt => (
                           <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -185,7 +185,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
                     {/* Value */}
                     <div>
-                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Value</label>
+                      <label className="block text-xs font-medium text-cs-muted mb-1.5">Value</label>
                       {fieldConfig?.type === 'select' ? (
                         condition.operator === 'in' ? (
                           <input
@@ -196,13 +196,13 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                               updateCondition(index, 'value', values)
                             }}
                             placeholder="value1, value2, ..."
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                           />
                         ) : (
                           <select
                             value={condition.value}
                             onChange={(e) => updateCondition(index, 'value', e.target.value)}
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                            className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                           >
                             {fieldConfig.options?.map(opt => (
                               <option key={opt} value={opt}>{opt}</option>
@@ -218,7 +218,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                           value={condition.value}
                           onChange={(e) => updateCondition(index, 'value', parseFloat(e.target.value))}
                           placeholder="0.0 - 1.0"
-                          className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                         />
                       ) : (
                         <input
@@ -226,7 +226,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                           value={condition.value}
                           onChange={(e) => updateCondition(index, 'value', e.target.value)}
                           placeholder="Enter value..."
-                          className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                          className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                         />
                       )}
                     </div>
@@ -235,7 +235,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                   {/* Remove button */}
                   <button
                     onClick={() => removeCondition(index)}
-                    className="mt-6 p-2 text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+                    className="mt-6 p-2 text-cs-crit hover:bg-cs-crit/10 rounded-cs-sm transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -246,7 +246,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
           <button
             onClick={addCondition}
-            className="w-full px-4 py-3 bg-gray-900/50 border-2 border-dashed border-gray-600 hover:border-indigo-500 rounded-lg text-gray-400 hover:text-indigo-400 transition-colors flex items-center justify-center gap-2"
+            className="w-full px-4 py-3 bg-cs-panel-2 border-2 border-dashed border-cs-hair hover:border-cs-indigo rounded-cs-sm text-cs-muted hover:text-cs-indigo transition-colors flex items-center justify-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add Condition
@@ -256,20 +256,20 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
       {/* Actions */}
       <div>
-        <h5 className="text-md font-semibold text-white mb-4">Actions (when conditions match)</h5>
+        <h5 className="text-md font-semibold text-cs-ink mb-4">Actions (when conditions match)</h5>
 
         <div className="space-y-3">
           {/* Alert Action */}
-          <div className="bg-gray-900/50 border border-gray-600 rounded-lg p-4">
+          <div className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm p-4">
             <div className="flex items-center gap-3 mb-3">
               <input
                 type="checkbox"
                 id="action-alert"
                 checked={!!policy.actions.alert}
                 onChange={(e) => updateAction('alert', e.target.checked, { severity: 'high', message: '' })}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-600 focus:ring-cs-indigo-faint border-cs-hair rounded bg-cs-panel-2"
               />
-              <label htmlFor="action-alert" className="text-sm font-medium text-white flex-1">
+              <label htmlFor="action-alert" className="text-sm font-medium text-cs-ink flex-1">
                 Create Alert
               </label>
             </div>
@@ -277,11 +277,11 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
             {policy.actions.alert && (
               <div className="ml-7 space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">Severity</label>
+                  <label className="block text-xs font-medium text-cs-muted mb-1.5">Severity</label>
                   <select
                     value={policy.actions.alert.severity}
                     onChange={(e) => updateAction('alert', true, { ...policy.actions.alert, severity: e.target.value })}
-                    className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                   >
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
@@ -290,13 +290,13 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">Message</label>
+                  <label className="block text-xs font-medium text-cs-muted mb-1.5">Message</label>
                   <input
                     type="text"
                     value={policy.actions.alert.message || ''}
                     onChange={(e) => updateAction('alert', true, { ...policy.actions.alert, message: e.target.value })}
                     placeholder="Optional alert message..."
-                    className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                    className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                   />
                 </div>
               </div>
@@ -304,73 +304,73 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
           </div>
 
           {/* Block Action */}
-          <div className="bg-gray-900/50 border border-gray-600 rounded-lg p-4">
+          <div className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm p-4">
             <div className="flex items-center gap-3">
               <input
                 type="checkbox"
                 id="action-block"
                 checked={!!policy.actions.block}
                 onChange={(e) => updateAction('block', e.target.checked, {})}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-600 focus:ring-cs-indigo-faint border-cs-hair rounded bg-cs-panel-2"
               />
-              <label htmlFor="action-block" className="text-sm font-medium text-white flex-1">
+              <label htmlFor="action-block" className="text-sm font-medium text-cs-ink flex-1">
                 Block Action
               </label>
-              <span className="text-xs text-gray-400">Prevents file transfer/clipboard copy</span>
+              <span className="text-xs text-cs-muted">Prevents file transfer/clipboard copy</span>
             </div>
           </div>
 
           {/* Quarantine Action */}
-          <div className="bg-gray-900/50 border border-gray-600 rounded-lg p-4">
+          <div className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm p-4">
             <div className="flex items-center gap-3 mb-3">
               <input
                 type="checkbox"
                 id="action-quarantine"
                 checked={!!policy.actions.quarantine}
                 onChange={(e) => updateAction('quarantine', e.target.checked, { location: '/var/quarantine/' })}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-600 focus:ring-cs-indigo-faint border-cs-hair rounded bg-cs-panel-2"
               />
-              <label htmlFor="action-quarantine" className="text-sm font-medium text-white flex-1">
+              <label htmlFor="action-quarantine" className="text-sm font-medium text-cs-ink flex-1">
                 Quarantine File
               </label>
             </div>
 
             {policy.actions.quarantine && (
               <div className="ml-7">
-                <label className="block text-xs font-medium text-gray-400 mb-1.5">Location</label>
+                <label className="block text-xs font-medium text-cs-muted mb-1.5">Location</label>
                 <input
                   type="text"
                   value={policy.actions.quarantine.location || ''}
                   onChange={(e) => updateAction('quarantine', true, { location: e.target.value })}
                   placeholder="/var/quarantine/"
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                  className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                 />
               </div>
             )}
           </div>
 
           {/* Log Action */}
-          <div className="bg-gray-900/50 border border-gray-600 rounded-lg p-4">
+          <div className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm p-4">
             <div className="flex items-center gap-3 mb-3">
               <input
                 type="checkbox"
                 id="action-log"
                 checked={!!policy.actions.log}
                 onChange={(e) => updateAction('log', e.target.checked, { level: 'info' })}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-600 focus:ring-cs-indigo-faint border-cs-hair rounded bg-cs-panel-2"
               />
-              <label htmlFor="action-log" className="text-sm font-medium text-white flex-1">
+              <label htmlFor="action-log" className="text-sm font-medium text-cs-ink flex-1">
                 Log Event
               </label>
             </div>
 
             {policy.actions.log && (
               <div className="ml-7">
-                <label className="block text-xs font-medium text-gray-400 mb-1.5">Log Level</label>
+                <label className="block text-xs font-medium text-cs-muted mb-1.5">Log Level</label>
                 <select
                   value={policy.actions.log.level || 'info'}
                   onChange={(e) => updateAction('log', true, { level: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                  className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint"
                 >
                   <option value="info">Info</option>
                   <option value="warning">Warning</option>
@@ -383,9 +383,9 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
       </div>
 
       {/* Example Scenarios */}
-      <div className="bg-gray-900/30 border border-gray-700 rounded-xl p-4">
-        <h6 className="text-sm font-semibold text-gray-300 mb-2">💡 Example Scenarios</h6>
-        <div className="text-xs text-gray-400 space-y-1">
+      <div className="bg-cs-panel-2 border border-cs-hair rounded-cs-card p-4">
+        <h6 className="text-sm font-semibold text-cs-ink-2 mb-2">💡 Example Scenarios</h6>
+        <div className="text-xs text-cs-muted space-y-1">
           <p>• <strong>Block USB with Restricted Data:</strong> classification_level = "Restricted" AND destination_type = "removable_drive"</p>
           <p>• <strong>Alert High Confidence:</strong> confidence_score ≥ 0.8</p>
           <p>• <strong>Block Credentials in Clipboard:</strong> classification_labels contains "CREDENTIAL" AND event_type = "clipboard"</p>

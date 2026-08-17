@@ -29,21 +29,21 @@ export default function FileIdentityDenylist({ config, onChange }: Props) {
     onChange({ ...config, blockedExtensionAction: a, blockedHashAction: a })
 
   const inputCls =
-    'w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white ' +
-    'placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm'
+    'w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-white ' +
+    'placeholder:text-cs-muted-2 focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint transition-all font-mono text-sm'
 
   return (
-    <div className="space-y-4 pt-4 border-t border-gray-700">
+    <div className="space-y-4 pt-4 border-t border-cs-hair">
       <div>
-        <h4 className="text-sm font-semibold text-white">File Identity Denylist <span className="text-gray-500 font-normal">(optional)</span></h4>
-        <p className="text-xs text-gray-400 mt-1">
+        <h4 className="text-sm font-semibold text-cs-ink">File Identity Denylist <span className="text-cs-muted-2 font-normal">(optional)</span></h4>
+        <p className="text-xs text-cs-muted mt-1">
           Block or alert on files by <strong>custom extension</strong> or <strong>exact hash</strong> — matched by file
           identity, so it also catches renamed files and non-text documents. Leave blank to disable.
         </p>
       </div>
 
       <div>
-        <label className="block text-sm text-gray-300 mb-1">Blocked file extensions</label>
+        <label className="block text-sm text-cs-ink-2 mb-1">Blocked file extensions</label>
         <input
           type="text"
           defaultValue={exts.join(', ')}
@@ -54,15 +54,15 @@ export default function FileIdentityDenylist({ config, onChange }: Props) {
         {exts.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {exts.map((x, i) => (
-              <span key={i} className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-xs font-mono">{x}</span>
+              <span key={i} className="px-2 py-0.5 rounded bg-cs-indigo/20 text-cs-indigo text-xs font-mono">{x}</span>
             ))}
           </div>
         )}
-        <p className="text-xs text-gray-500 mt-1">Comma- or space-separated. Normalised to lowercase with a leading dot.</p>
+        <p className="text-xs text-cs-muted-2 mt-1">Comma- or space-separated. Normalised to lowercase with a leading dot.</p>
       </div>
 
       <div>
-        <label className="block text-sm text-gray-300 mb-1">Blocked file hashes <span className="text-gray-500">(MD5 or SHA-256)</span></label>
+        <label className="block text-sm text-cs-ink-2 mb-1">Blocked file hashes <span className="text-cs-muted-2">(MD5 or SHA-256)</span></label>
         <textarea
           defaultValue={hashes.join('\n')}
           onBlur={e => setHashes(e.target.value)}
@@ -70,15 +70,15 @@ export default function FileIdentityDenylist({ config, onChange }: Props) {
           rows={4}
           className={inputCls}
         />
-        <p className="text-xs text-gray-500 mt-1">One hash per line (or comma-separated). Case-insensitive.</p>
+        <p className="text-xs text-cs-muted-2 mt-1">One hash per line (or comma-separated). Case-insensitive.</p>
       </div>
 
       <div>
-        <label className="block text-sm text-gray-300 mb-1">On match</label>
+        <label className="block text-sm text-cs-ink-2 mb-1">On match</label>
         <select
           value={action}
           onChange={e => setAction(e.target.value as 'block' | 'alert')}
-          className="px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500"
+          className="px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink text-sm focus:border-cs-indigo"
         >
           <option value="block">Block the transfer/print</option>
           <option value="alert">Alert only (don't block)</option>

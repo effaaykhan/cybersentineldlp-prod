@@ -43,10 +43,10 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
     <div className="space-y-6">
       {/* Monitored Directories */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-cs-ink-2 mb-3">
           Monitored Directories *
         </label>
-        <p className="text-xs text-gray-400 mb-3">
+        <p className="text-xs text-cs-muted mb-3">
           Only files from these directories will trigger this policy when copied to USB drives
         </p>
         
@@ -56,12 +56,12 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
             {config.monitoredPaths.map((path, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+                className="flex items-center justify-between p-3 bg-cs-panel-2 rounded-cs-sm border border-cs-hair"
               >
-                <code className="text-sm text-indigo-300 flex-1">{path}</code>
+                <code className="text-sm text-cs-indigo flex-1">{path}</code>
                 <button
                   onClick={() => handleRemovePath(index)}
-                  className="ml-3 p-1 text-gray-400 hover:text-red-400 transition-colors"
+                  className="ml-3 p-1 text-cs-muted hover:text-cs-crit transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -78,28 +78,28 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
             onChange={(e) => setNewPath(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleAddPath()}
             placeholder="e.g., C:\\Users\\%USERNAME%\\Documents"
-            className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            className="flex-1 px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink placeholder:text-cs-muted-2 focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint transition-all font-mono text-sm"
           />
           <button
             onClick={handleAddPath}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-cs-indigo hover:bg-cs-indigo-d text-white rounded-cs-sm transition-colors flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add
           </button>
         </div>
-        <p className="text-xs text-gray-400 mt-2">
+        <p className="text-xs text-cs-muted mt-2">
           Supports environment variables: %USERNAME%, $USER, etc.
         </p>
       </div>
 
       {/* Action Selection */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-cs-ink-2 mb-3">
           Action When Transfer Detected
         </label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="usb-transfer-action"
@@ -109,12 +109,12 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Block Transfer</div>
-              <div className="text-gray-400 text-xs">Delete file immediately on USB drive</div>
+              <div className="text-cs-ink font-medium text-sm">Block Transfer</div>
+              <div className="text-cs-muted text-xs">Delete file immediately on USB drive</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="usb-transfer-action"
@@ -124,8 +124,8 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
               className="w-4 h-4 text-indigo-600"
             />
             <div className="flex-1">
-              <div className="text-white font-medium text-sm">Quarantine Transfer</div>
-              <div className="text-gray-400 text-xs">Move file to quarantine folder on USB drive</div>
+              <div className="text-cs-ink font-medium text-sm">Quarantine Transfer</div>
+              <div className="text-cs-muted text-xs">Move file to quarantine folder on USB drive</div>
             </div>
           </label>
 
@@ -136,15 +136,15 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
                 value={config.quarantinePath || ''}
                 onChange={(e) => onChange({ ...config, quarantinePath: e.target.value })}
                 placeholder="e.g., C:\\Quarantine or /quarantine"
-                className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+                className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink placeholder:text-cs-muted-2 focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint transition-all font-mono text-sm"
               />
-              <p className="text-xs text-gray-400 mt-1">
+              <p className="text-xs text-cs-muted mt-1">
                 Path on the USB drive where quarantined files will be moved
               </p>
             </div>
           )}
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="usb-transfer-action"
@@ -154,8 +154,8 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Alert Only</div>
-              <div className="text-gray-400 text-xs">Log and alert, but don't block the transfer</div>
+              <div className="text-cs-ink font-medium text-sm">Alert Only</div>
+              <div className="text-cs-muted text-xs">Log and alert, but don't block the transfer</div>
             </div>
           </label>
         </div>

@@ -22,11 +22,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
     <div className="space-y-6">
       {/* Events to Monitor */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-cs-ink-2 mb-3">
           Events to Monitor *
         </label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="checkbox"
               checked={config.events.connect}
@@ -34,12 +34,12 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               className="w-4 h-4 text-indigo-600 rounded"
             />
             <div>
-              <div className="text-white font-medium text-sm">Device Connection</div>
-              <div className="text-gray-400 text-xs">Monitor when USB devices are connected</div>
+              <div className="text-cs-ink font-medium text-sm">Device Connection</div>
+              <div className="text-cs-muted text-xs">Monitor when USB devices are connected</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="checkbox"
               checked={config.events.disconnect}
@@ -47,12 +47,12 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               className="w-4 h-4 text-indigo-600 rounded"
             />
             <div>
-              <div className="text-white font-medium text-sm">Device Disconnection</div>
-              <div className="text-gray-400 text-xs">Monitor when USB devices are disconnected</div>
+              <div className="text-cs-ink font-medium text-sm">Device Disconnection</div>
+              <div className="text-cs-muted text-xs">Monitor when USB devices are disconnected</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="checkbox"
               checked={config.events.fileTransfer}
@@ -60,8 +60,8 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               className="w-4 h-4 text-indigo-600 rounded"
             />
             <div>
-              <div className="text-white font-medium text-sm">File Transfer</div>
-              <div className="text-gray-400 text-xs">Monitor file transfer operations on USB devices</div>
+              <div className="text-cs-ink font-medium text-sm">File Transfer</div>
+              <div className="text-cs-muted text-xs">Monitor file transfer operations on USB devices</div>
             </div>
           </label>
         </div>
@@ -69,11 +69,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
 
       {/* Action Selection */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-cs-ink-2 mb-3">
           Action When Event Detected
         </label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="usb-device-action"
@@ -83,12 +83,12 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-gray-400 text-xs">Send alert notification</div>
+              <div className="text-cs-ink font-medium text-sm">Alert</div>
+              <div className="text-cs-muted text-xs">Send alert notification</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="usb-device-action"
@@ -98,12 +98,12 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Log Only</div>
-              <div className="text-gray-400 text-xs">Log the event without sending alerts</div>
+              <div className="text-cs-ink font-medium text-sm">Log Only</div>
+              <div className="text-cs-muted text-xs">Log the event without sending alerts</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="usb-device-action"
@@ -113,8 +113,8 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Block Device</div>
-              <div className="text-gray-400 text-xs">Block USB device access (if supported)</div>
+              <div className="text-cs-ink font-medium text-sm">Block Device</div>
+              <div className="text-cs-muted text-xs">Block USB device access (if supported)</div>
             </div>
           </label>
         </div>

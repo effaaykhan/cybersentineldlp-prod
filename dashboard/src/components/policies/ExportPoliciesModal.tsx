@@ -74,38 +74,38 @@ export default function ExportPoliciesModal({ isOpen, policies, onClose }: Expor
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div
-        className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] flex flex-col border border-gray-200 shadow-2xl"
+        className="bg-white rounded-cs-card max-w-3xl w-full max-h-[90vh] flex flex-col border border-cs-hair shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-cs-hair">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-blue-100">
-              <Download className="h-6 w-6 text-blue-600" />
+            <div className="p-2 rounded-cs-sm bg-cs-indigo-faint">
+              <Download className="h-6 w-6 text-cs-indigo" />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-gray-900">Export Policies</h3>
-              <p className="text-sm text-gray-600 mt-0.5">Choose the policies to save to a JSON file.</p>
+              <h3 className="text-xl font-bold text-cs-ink">Export Policies</h3>
+              <p className="text-sm text-cs-muted-2 mt-0.5">Choose the policies to save to a JSON file.</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 transition-colors">
-            <X className="h-5 w-5 text-gray-500" />
+          <button onClick={onClose} className="p-2 rounded-cs-sm hover:bg-cs-hair-2 transition-colors">
+            <X className="h-5 w-5 text-cs-muted-2" />
           </button>
         </div>
 
         {/* Table */}
         <div className="flex-1 overflow-y-auto p-6">
           {policies.length === 0 ? (
-            <p className="text-sm text-gray-500 text-center py-8">There are no policies to export.</p>
+            <p className="text-sm text-cs-muted-2 text-center py-8">There are no policies to export.</p>
           ) : (
-            <div className="border border-gray-200 rounded-lg overflow-hidden">
+            <div className="border border-cs-hair rounded-cs-sm overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-gray-600">
+                <thead className="bg-cs-panel-2 text-cs-muted-2">
                   <tr>
                     <th className="w-12 px-4 py-3 text-left">
                       <input
                         type="checkbox"
-                        className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        className="w-4 h-4 rounded border-cs-hair text-cs-indigo focus:ring-blue-500 cursor-pointer"
                         checked={allSelected}
                         ref={el => { if (el) el.indeterminate = !allSelected && !noneSelected }}
                         onChange={toggleAll}
@@ -126,29 +126,29 @@ export default function ExportPoliciesModal({ isOpen, policies, onClose }: Expor
                       <tr
                         key={p.id}
                         onClick={() => toggleOne(p.id)}
-                        className={`cursor-pointer ${checked ? 'bg-blue-50/60' : 'hover:bg-gray-50'}`}
+                        className={`cursor-pointer ${checked ? 'bg-cs-indigo-faint/60' : 'hover:bg-cs-panel-2'}`}
                       >
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <input
                             type="checkbox"
-                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                            className="w-4 h-4 rounded border-cs-hair text-cs-indigo focus:ring-blue-500 cursor-pointer"
                             checked={checked}
                             onChange={() => toggleOne(p.id)}
                             aria-label={`Select ${p.name}`}
                           />
                         </td>
                         <td className="px-3 py-3">
-                          <div className="font-medium text-gray-900 truncate max-w-xs">{p.name}</div>
-                          {p.description && <div className="text-xs text-gray-400 truncate max-w-xs">{p.description}</div>}
+                          <div className="font-medium text-cs-ink truncate max-w-xs">{p.name}</div>
+                          {p.description && <div className="text-xs text-cs-muted truncate max-w-xs">{p.description}</div>}
                         </td>
-                        <td className="px-3 py-3 text-gray-600">
+                        <td className="px-3 py-3 text-cs-muted-2">
                           {p.type ? getPolicyTypeLabel(p.type) : 'Classification-aware'}
                         </td>
                         <td className="px-3 py-3">
                           <span className={`badge ${sev.badge}`}>{p.severity || 'medium'}</span>
                         </td>
                         <td className="px-3 py-3">
-                          <span className={`text-xs font-medium ${p.enabled ? 'text-green-600' : 'text-gray-400'}`}>
+                          <span className={`text-xs font-medium ${p.enabled ? 'text-green-600' : 'text-cs-muted'}`}>
                             {p.enabled ? 'Active' : 'Inactive'}
                           </span>
                         </td>
@@ -162,12 +162,12 @@ export default function ExportPoliciesModal({ isOpen, policies, onClose }: Expor
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between p-6 border-t border-gray-200">
-          <span className="text-sm text-gray-500">{selected.size} of {policies.length} selected</span>
+        <div className="flex items-center justify-between p-6 border-t border-cs-hair">
+          <span className="text-sm text-cs-muted-2">{selected.size} of {policies.length} selected</span>
           <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm"
+              className="px-4 py-2 bg-cs-hair-2 text-cs-ink-2 rounded-cs-sm hover:bg-cs-hair transition-colors text-sm"
             >
               Cancel
             </button>

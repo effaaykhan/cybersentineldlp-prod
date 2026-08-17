@@ -124,20 +124,20 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
       {/* Predefined Patterns */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <label className="block text-sm font-medium text-gray-200">
+          <label className="block text-sm font-medium text-cs-ink-2">
             Detection Patterns
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-medium text-gray-300 hover:text-white transition-colors">
+          <label className="flex items-center gap-2 cursor-pointer select-none text-xs font-medium text-cs-ink-2 hover:text-cs-ink transition-colors">
             <input
               ref={selectAllRef}
               type="checkbox"
               checked={allSelected}
               onChange={handleToggleAll}
-              className="w-4 h-4 rounded border-2 border-gray-600 bg-gray-900 text-indigo-600 focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
+              className="w-4 h-4 rounded border border-cs-hair bg-cs-panel text-indigo-600 focus:ring-2 focus:ring-cs-indigo-faint/40 cursor-pointer"
             />
             <span>
               {allSelected ? 'Deselect all' : 'Select all'}
-              <span className="ml-1 text-gray-500">({selectedCount}/{allPatternIds.length})</span>
+              <span className="ml-1 text-cs-muted-2">({selectedCount}/{allPatternIds.length})</span>
             </span>
           </label>
         </div>
@@ -149,10 +149,10 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
               <button
                 key={pattern.id}
                 onClick={() => handlePredefinedToggle(pattern.id)}
-                className={`p-3 rounded-lg border-2 text-left transition-all ${
+                className={`p-3 rounded-cs-sm border-2 text-left transition-all ${
                   isSelected
-                    ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                    : 'border-gray-600 bg-gray-900/30 text-gray-400 hover:border-gray-500'
+                    ? 'border-cs-indigo bg-indigo-900/30 text-white'
+                    : 'border-cs-hair bg-cs-panel-2 text-cs-muted hover:border-cs-hair'
                 }`}
               >
                 <div className="flex items-center justify-between">
@@ -160,7 +160,7 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
                     <div className="font-medium text-sm">{pattern.name}</div>
                     <div className="text-xs mt-1 opacity-70 font-mono">{pattern.example}</div>
                   </div>
-                  {isSelected && <Check className="w-5 h-5 text-indigo-400" />}
+                  {isSelected && <Check className="w-5 h-5 text-cs-indigo" />}
                 </div>
               </button>
             )
@@ -170,7 +170,7 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
 
       {/* Custom Patterns */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-cs-ink-2 mb-3">
           Custom Regex Patterns
         </label>
         
@@ -180,17 +180,17 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
             {config.patterns.custom.map((custom, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+                className="flex items-center justify-between p-3 bg-cs-panel-2 rounded-cs-sm border border-cs-hair"
               >
                 <div className="flex-1">
-                  <code className="text-sm text-indigo-300">{custom.regex}</code>
+                  <code className="text-sm text-cs-indigo">{custom.regex}</code>
                   {custom.description && (
-                    <p className="text-xs text-gray-400 mt-1">{custom.description}</p>
+                    <p className="text-xs text-cs-muted mt-1">{custom.description}</p>
                   )}
                 </div>
                 <button
                   onClick={() => handleRemoveCustomPattern(index)}
-                  className="ml-3 p-1 text-gray-400 hover:text-red-400 transition-colors"
+                  className="ml-3 p-1 text-cs-muted hover:text-cs-crit transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -200,9 +200,9 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
         )}
 
         {/* Add Custom Pattern */}
-        <div className="space-y-3 p-4 bg-gray-900/30 rounded-lg border border-gray-700">
+        <div className="space-y-3 p-4 bg-cs-panel-2 rounded-cs-sm border border-cs-hair">
           <div>
-            <label className="block text-xs font-medium text-gray-300 mb-2">
+            <label className="block text-xs font-medium text-cs-ink-2 mb-2">
               Regex Pattern
             </label>
             <div className="flex gap-2">
@@ -211,23 +211,23 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
                 value={customRegex}
                 onChange={(e) => setCustomRegex(e.target.value)}
                 placeholder="e.g., \\d{4}-\\d{4}-\\d{4}"
-                className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+                className="flex-1 px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink placeholder:text-cs-muted-2 focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint transition-all font-mono text-sm"
               />
               {regexValidation && (
                 <div className={`flex items-center px-2 ${
-                  regexValidation.valid ? 'text-green-400' : 'text-red-400'
+                  regexValidation.valid ? 'text-cs-ok' : 'text-cs-crit'
                 }`}>
                   {regexValidation.valid ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
                 </div>
               )}
             </div>
             {regexValidation && !regexValidation.valid && (
-              <p className="text-xs text-red-400 mt-1">{regexValidation.error}</p>
+              <p className="text-xs text-cs-crit mt-1">{regexValidation.error}</p>
             )}
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-300 mb-2">
+            <label className="block text-xs font-medium text-cs-ink-2 mb-2">
               Description (Optional)
             </label>
             <input
@@ -235,13 +235,13 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
               value={customDescription}
               onChange={(e) => setCustomDescription(e.target.value)}
               placeholder="e.g., Custom ID Pattern"
-              className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm"
+              className="w-full px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink placeholder:text-cs-muted-2 focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint transition-all text-sm"
             />
           </div>
 
           {/* Test Regex */}
           <div>
-            <label className="block text-xs font-medium text-gray-300 mb-2">
+            <label className="block text-xs font-medium text-cs-ink-2 mb-2">
               Test Pattern
             </label>
             <div className="flex gap-2">
@@ -250,19 +250,19 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
                 value={testText}
                 onChange={(e) => setTestText(e.target.value)}
                 placeholder="Enter sample text to test"
-                className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-gray-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm"
+                className="flex-1 px-3 py-2 bg-cs-panel-2 border border-cs-hair rounded-cs-sm text-cs-ink placeholder:text-cs-muted-2 focus:border-cs-indigo focus:ring-2 focus:ring-cs-indigo-faint transition-all text-sm"
               />
               <button
                 onClick={handleTestRegex}
                 disabled={!customRegex.trim() || !testText.trim()}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg transition-colors text-sm font-medium"
+                className="px-4 py-2 bg-cs-indigo hover:bg-cs-indigo-d disabled:bg-cs-hair-2 disabled:text-cs-muted-2 text-white rounded-cs-sm transition-colors text-sm font-medium"
               >
                 Test
               </button>
             </div>
             {testResult !== null && (
               <p className={`text-xs mt-2 ${
-                testResult ? 'text-green-400' : 'text-red-400'
+                testResult ? 'text-cs-ok' : 'text-cs-crit'
               }`}>
                 {testResult ? '✓ Pattern matches!' : '✗ Pattern does not match'}
               </p>
@@ -272,7 +272,7 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
           <button
             onClick={handleAddCustomPattern}
             disabled={!customRegex.trim() || (regexValidation && !regexValidation.valid)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg transition-colors text-sm font-medium"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-cs-indigo hover:bg-cs-indigo-d disabled:bg-cs-hair-2 disabled:text-cs-muted-2 text-white rounded-cs-sm transition-colors text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
             Add Custom Pattern
@@ -282,11 +282,11 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
 
       {/* Action Selection */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-cs-ink-2 mb-3">
           Action When Pattern Detected
         </label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="clipboard-action"
@@ -296,14 +296,14 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Block</div>
-              <div className="text-gray-400 text-xs">
+              <div className="text-cs-ink font-medium text-sm">Block</div>
+              <div className="text-cs-muted text-xs">
                 Clear the clipboard so the copied content cannot be pasted, and raise an alert
               </div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="clipboard-action"
@@ -313,12 +313,12 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-gray-400 text-xs">Send alert notification when pattern is detected</div>
+              <div className="text-cs-ink font-medium text-sm">Alert</div>
+              <div className="text-cs-muted text-xs">Send alert notification when pattern is detected</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-cs-sm border border-cs-hair bg-cs-panel-2 cursor-pointer hover:border-cs-hair transition-all">
             <input
               type="radio"
               name="clipboard-action"
@@ -328,8 +328,8 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
               className="w-4 h-4 text-indigo-600"
             />
             <div>
-              <div className="text-white font-medium text-sm">Log Only</div>
-              <div className="text-gray-400 text-xs">Log the event without sending alerts</div>
+              <div className="text-cs-ink font-medium text-sm">Log Only</div>
+              <div className="text-cs-muted text-xs">Log the event without sending alerts</div>
             </div>
           </label>
         </div>

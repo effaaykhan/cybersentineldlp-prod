@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { 
   Policy, 
   PolicyType, 
@@ -21,6 +21,9 @@ import {
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
+import PolicySummary from './PolicySummary'
+import { Section, Field, TextInput, TextArea, Select, Toggle } from './formKit'
+import { getPolicyTypeLabel } from '@/utils/policyUtils'
 import ClipboardPolicyForm from './ClipboardPolicyForm'
 import FileSystemPolicyForm from './FileSystemPolicyForm'
 import FileTransferPolicyForm from './FileTransferPolicyForm'
@@ -374,6 +377,35 @@ export default function PolicyCreatorModal({
       .catch(() => setAgents([]))
   }, [isOpen])
 
+  // Escape closes the dialog. Without it a keyboard user has to tab to the X,
+  // and the overlay's click-to-dismiss is mouse-only.
+  useEffect(() => {
+    if (!isOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [isOpen])
+
+  // Move focus into the dialog when it opens, so the first Tab lands somewhere
+  // sensible instead of continuing from whatever was behind it.
+  const panelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!isOpen) return
+    const t = setTimeout(() => {
+      // querySelector returns DOM order, not the order of the selector list, so
+      // a single call landed on the Close button in the header. Fields first,
+      // then anything focusable — on the type step there are no fields and the
+      // first policy tile is the right place to be.
+      const root = panelRef.current
+      const field = root?.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea')
+      const fallback = root?.querySelector<HTMLElement>('button:not([disabled])')
+      ;(field || fallback)?.focus()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [isOpen, step])
+
   const handleClose = () => {
     setStep(1)
     onClose()
@@ -483,60 +515,92 @@ export default function PolicyCreatorModal({
 
   if (!isOpen) return null
 
+  const typeLabel = policyType ? getPolicyTypeLabel(policyType) : null
+  const agentName = agents.find((a) => a.agent_id === agentId)?.name || null
+  const STEPS = ['Type', 'Configure', 'Review'] as const
+
   return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={handleClose}>
+    <div
+      className="fixed inset-0 z-50 overflow-y-auto bg-cs-scrim p-4 sm:p-6"
+      onClick={handleClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={editingPolicy ? 'Edit policy' : 'New policy'}
+    >
       <div
-        className="bg-gray-900 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto border border-gray-700 shadow-2xl ring-1 ring-white/5"
+        ref={panelRef}
+        className="mx-auto w-full max-w-6xl rounded-cs-card border border-cs-hair bg-cs-panel
+                   shadow-[0_24px_64px_-16px_rgba(21,23,28,0.28)]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-700 sticky top-0 bg-gray-900 z-10">
-          <div>
-            <h3 className="text-2xl font-bold text-white">
-              {editingPolicy ? 'Edit Policy' : 'Create New Policy'}
-            </h3>
-            <p className="text-gray-400 mt-1">
-              {step === 1 && 'Select policy type'}
-              {step === 2 && 'Configure policy settings'}
-              {step === 3 && 'Review and save'}
-            </p>
-          </div>
-          <button onClick={handleClose} className="text-gray-400 hover:text-white transition-colors">
-            <X className="w-6 h-6" />
-          </button>
-        </div>
-
-        {/* Progress Indicator */}
-        <div className="px-6 pt-6">
-          <div className="flex items-center justify-between max-w-md mx-auto">
-            {[1, 2, 3].map((s) => (
-              <div key={s} className="flex items-center flex-1">
-                <div className="flex flex-col items-center w-full">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all ${
-                    step >= s
-                      ? 'bg-indigo-600 border-indigo-500 text-white'
-                      : 'bg-gray-700 border-gray-600 text-gray-400'
-                  }`}>
-                    {step > s ? <Check className="w-5 h-5" /> : s}
-                  </div>
-                  <span className={`text-xs mt-2 ${
-                    step >= s ? 'text-white' : 'text-gray-400'
-                  }`}>
-                    {s === 1 ? 'Type' : s === 2 ? 'Config' : 'Review'}
-                  </span>
-                </div>
-                {s < 3 && (
-                  <div className={`h-0.5 flex-1 mx-2 ${
-                    step > s ? 'bg-indigo-600' : 'bg-gray-700'
-                  }`} />
-                )}
+        {/*
+          The header states the POLICY TYPE once one is chosen, not "Create New
+          Policy". After step 1 the type is the single most important fact about
+          what you are editing, and it used to vanish the moment you left the
+          type list.
+        */}
+        <header className="sticky top-0 z-10 rounded-t-cs-card border-b border-cs-hair bg-cs-panel px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-cs-muted-2">
+                {editingPolicy ? 'Edit policy' : 'New policy'}
               </div>
-            ))}
+              <h3 className="text-[19px] font-semibold tracking-[-0.01em] text-cs-ink mt-0.5 truncate">
+                {typeLabel || 'Choose what to protect'}
+              </h3>
+            </div>
+            <button
+              onClick={handleClose}
+              aria-label="Close"
+              className="shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                         focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+            >
+              <X className="h-4.5 w-4.5" />
+            </button>
           </div>
-        </div>
 
-        {/* Content */}
-        <div className="p-6">
+          {/*
+            Replaces three large numbered circles and their connecting rules.
+            In a modal that already scrolls, that device cost a band of vertical
+            space to say what four words say — and steps you have completed are
+            more useful as a way BACK than as decoration.
+          */}
+          <nav className="mt-3 flex items-center gap-1" aria-label="Progress">
+            {STEPS.map((label, i) => {
+              const n = i + 1
+              const done = step > n
+              const current = step === n
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  disabled={!done}
+                  onClick={() => done && setStep(n)}
+                  aria-current={current ? 'step' : undefined}
+                  className={`flex items-center gap-1.5 rounded-cs-pill px-2.5 py-1 text-[11.5px] font-medium transition-colors
+                    focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint
+                    ${current ? 'bg-cs-indigo-faint text-cs-indigo' : ''}
+                    ${done ? 'text-cs-ink-2 hover:bg-cs-panel-2 cursor-pointer' : ''}
+                    ${!done && !current ? 'text-cs-muted-2 cursor-default' : ''}`}
+                >
+                  {done ? (
+                    <Check className="h-3 w-3" />
+                  ) : (
+                    <span
+                      className={`grid h-[15px] w-[15px] place-items-center rounded-full text-[9.5px] font-semibold
+                        ${current ? 'bg-cs-indigo text-white' : 'bg-cs-hair text-cs-muted'}`}
+                    >
+                      {n}
+                    </span>
+                  )}
+                  {label}
+                </button>
+              )
+            })}
+          </nav>
+        </header>
+
+        <div className="px-6 py-5">
           {step === 1 && (
             <PolicyTypeSelector
               selectedType={policyType}
@@ -556,98 +620,97 @@ export default function PolicyCreatorModal({
           )}
 
           {step === 2 && policyType && (
-            <div className="space-y-6">
-              {/* Basic Information */}
-              <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                <h4 className="text-lg font-semibold text-white mb-4">Basic Information</h4>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-200 mb-2">Policy Name *</label>
-                    <input
-                      type="text"
-                      value={policyName}
-                      onChange={(e) => setPolicyName(e.target.value)}
-                      className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white placeholder-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all"
-                      placeholder="e.g., Block Sensitive Data Transfer"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-200 mb-2">Description</label>
-                    <textarea
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      rows={3}
-                      className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white placeholder-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all resize-none"
-                      placeholder="Describe what this policy does..."
-                    />
-                  </div>
-                  <div className={`grid ${usesClassificationBuilder(policyType) ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
-                    {!usesClassificationBuilder(policyType) && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-200 mb-2">Severity Level</label>
-                        <select
-                          value={severity}
-                          onChange={(e) => setSeverity(e.target.value as typeof severity)}
-                          className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all"
-                        >
-                          <option value="low">Low</option>
-                          <option value="medium">Medium</option>
-                          <option value="high">High</option>
-                          <option value="critical">Critical</option>
-                        </select>
-                      </div>
-                    )}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-200 mb-2">Priority</label>
-                      <input
-                        type="number"
-                        value={priority}
-                        onChange={(e) => setPriority(parseInt(e.target.value) || 100)}
-                        min="1"
-                        max="1000"
-                        className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white placeholder-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all"
-                        placeholder="1-1000"
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="min-w-0 space-y-6">
+                <Section eyebrow="Identity" title="Name and describe it">
+                  <div className="space-y-3.5">
+                    <Field label="Policy name" required htmlFor="policy-name">
+                      <TextInput
+                        id="policy-name"
+                        value={policyName}
+                        onChange={(e) => setPolicyName(e.target.value)}
+                        placeholder="Block sensitive data leaving over USB"
                       />
-                      <p className="text-xs text-gray-400 mt-1">Higher priority policies are evaluated first</p>
-                    </div>
+                    </Field>
+                    <Field
+                      label="Description"
+                      htmlFor="policy-desc"
+                      hint="Why this exists. The next person to inherit it will thank you."
+                    >
+                      <TextArea
+                        id="policy-desc"
+                        rows={2}
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        placeholder="Stops Confidential documents reaching removable drives."
+                      />
+                    </Field>
                   </div>
-                {/* Agent Scope */}
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-200 mb-2">Target Agent (optional)</label>
-                  <select
-                    value={agentId}
-                    onChange={(e) => setAgentId(e.target.value)}
-                    className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all text-sm"
-                  >
-                    <option value="">All agents</option>
-                    {agents.map((agent) => (
-                      <option key={agent.agent_id} value={agent.agent_id}>
-                        {agent.name} ({agent.agent_id})
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-400">
-                    Leave empty to apply to all agents. Select one agent to scope this policy.
-                  </p>
-                </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
+                </Section>
+
+                <Section eyebrow="Scope" title="Where it applies">
+                  <div className="space-y-3.5">
+                    <div className="grid gap-3.5 sm:grid-cols-2">
+                      {!usesClassificationBuilder(policyType) && (
+                        <Field label="Severity" htmlFor="policy-severity">
+                          <Select
+                            id="policy-severity"
+                            value={severity}
+                            onChange={(e) => setSeverity(e.target.value as typeof severity)}
+                          >
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                            <option value="critical">Critical</option>
+                          </Select>
+                        </Field>
+                      )}
+                      <Field
+                        label="Priority"
+                        htmlFor="policy-priority"
+                        hint="Higher numbers are evaluated first."
+                      >
+                        <TextInput
+                          id="policy-priority"
+                          type="number"
+                          min={1}
+                          max={1000}
+                          value={priority}
+                          onChange={(e) => setPriority(parseInt(e.target.value) || 100)}
+                        />
+                      </Field>
+                    </div>
+
+                    <Field
+                      label="Applies to"
+                      htmlFor="policy-agent"
+                      hint="Leave on every agent unless you are piloting this on one machine."
+                    >
+                      <Select
+                        id="policy-agent"
+                        value={agentId}
+                        onChange={(e) => setAgentId(e.target.value)}
+                      >
+                        <option value="">Every agent</option>
+                        {agents.map((agent) => (
+                          <option key={agent.agent_id} value={agent.agent_id}>
+                            {agent.name} ({agent.agent_id})
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+
+                    <Toggle
                       id="policy-enabled"
                       checked={enabled}
-                      onChange={(e) => setEnabled(e.target.checked)}
-                      className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                      onChange={setEnabled}
+                      label="Active"
+                      hint="Turn this off to save the policy without enforcing it."
                     />
-                    <label htmlFor="policy-enabled" className="text-sm font-medium text-gray-200">
-                      Enable Policy
-                    </label>
                   </div>
-                </div>
-              </div>
+                </Section>
 
-              {/* Policy Type Specific Configuration */}
-              <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                <h4 className="text-lg font-semibold text-white mb-4">Policy Configuration</h4>
+                <Section eyebrow="Rules" title="What it does">
                 {policyType === 'clipboard_monitoring' && (
                   <ClipboardPolicyForm
                     config={config as ClipboardConfig}
@@ -752,123 +815,151 @@ export default function PolicyCreatorModal({
                     onChange={(newPolicy) => setClassificationPolicy(newPolicy)}
                   />
                 )}
+                </Section>
               </div>
+
+              <PolicySummary
+                draft={{
+                  policyType,
+                  name: policyName,
+                  severity,
+                  enabled,
+                  agentName,
+                  config,
+                  classification: classificationPolicy,
+                }}
+              />
             </div>
           )}
 
           {step === 3 && (
-            <div className="space-y-6">
-              <div className="bg-indigo-900/20 border border-indigo-500/50 rounded-xl p-6">
-                <h4 className="text-lg font-semibold text-indigo-300 mb-4">Policy Summary</h4>
-                <div className="space-y-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Name:</span>
-                    <span className="text-white font-medium">{policyName || 'Not set'}</span>
-                  </div>
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+              <div className="min-w-0 space-y-6">
+                <Section eyebrow="Review" title={policyName || 'Untitled policy'}>
                   {description && (
-                    <div>
-                      <span className="text-gray-400">Description:</span>
-                      <p className="text-white mt-1">{description}</p>
-                    </div>
+                    <p className="text-[13px] leading-relaxed text-cs-ink-2">{description}</p>
                   )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Type:</span>
-                    <span className="text-white font-medium">{policyType ? policyType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Not set'}</span>
-                  </div>
-                  {!usesClassificationBuilder(policyType) && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-400">Severity:</span>
-                      <span className="text-white font-medium uppercase">{severity}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Priority:</span>
-                    <span className="text-white font-medium">{priority}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Status:</span>
-                    <span className="text-white font-medium">{enabled ? 'Enabled' : 'Disabled'}</span>
-                  </div>
-                </div>
+                  <dl className="mt-3 divide-y divide-cs-hair-2 rounded-cs-card border border-cs-hair">
+                    {[
+                      ['Type', typeLabel],
+                      ...(!usesClassificationBuilder(policyType)
+                        ? [['Severity', <span key="s" className="capitalize">{severity}</span>]]
+                        : []),
+                      ['Priority', String(priority)],
+                      ['Applies to', agentName || 'Every agent'],
+                      ['State', enabled ? 'Active' : 'Saved but switched off'],
+                    ].map(([k, v]) => (
+                      <div key={String(k)} className="flex items-baseline gap-4 px-3.5 py-2.5">
+                        <dt className="w-28 shrink-0 text-[11.5px] font-medium text-cs-muted">{k}</dt>
+                        <dd className="text-[13px] text-cs-ink">{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </Section>
+
+                {usesClassificationBuilder(policyType) && (
+                  <Section eyebrow="Conditions" title={
+                    classificationPolicy.conditions.match === 'all'
+                      ? 'All of these must match'
+                      : 'Any of these may match'
+                  }>
+                    <ul className="space-y-1.5">
+                      {classificationPolicy.conditions.rules.map((rule, idx) => (
+                        <li
+                          key={idx}
+                          className="rounded-cs-sm border border-cs-hair bg-cs-panel-2 px-3 py-2 font-mono text-[12px]"
+                        >
+                          <span className="text-cs-indigo">{rule.field}</span>{' '}
+                          <span className="text-cs-muted">{rule.operator}</span>{' '}
+                          <span className="text-cs-ink">{JSON.stringify(rule.value)}</span>
+                        </li>
+                      ))}
+                      {classificationPolicy.conditions.rules.length === 0 && (
+                        <li className="text-[12.5px] text-cs-muted">
+                          No conditions — this policy matches everything on its channel.
+                        </li>
+                      )}
+                    </ul>
+                  </Section>
+                )}
+
+                {/*
+                  The raw config used to be dumped as JSON on this screen. It is
+                  kept, because it is genuinely useful when a policy misbehaves —
+                  but folded away, because it is not how anyone decides whether
+                  to press Create.
+                */}
+                <details className="group rounded-cs-card border border-cs-hair">
+                  <summary className="cursor-pointer list-none px-3.5 py-2.5 text-[12px] font-medium text-cs-muted
+                                      hover:text-cs-ink focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint">
+                    Show the stored configuration
+                  </summary>
+                  <pre className="overflow-x-auto border-t border-cs-hair-2 bg-cs-panel-2 px-3.5 py-3 font-mono text-[11.5px] leading-relaxed text-cs-ink-2">
+{JSON.stringify(usesClassificationBuilder(policyType) ? classificationPolicy : config, null, 2)}
+                  </pre>
+                </details>
               </div>
 
-              {/* Configuration Preview */}
-              {usesClassificationBuilder(policyType) ? (
-                <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                  <h4 className="text-lg font-semibold text-white mb-4">Policy Rules</h4>
-                  <div className="space-y-4">
-                    <div>
-                      <h5 className="text-sm font-semibold text-gray-300 mb-2">Conditions ({classificationPolicy.conditions.match === 'all' ? 'Match ALL' : 'Match ANY'})</h5>
-                      <div className="space-y-2">
-                        {classificationPolicy.conditions.rules.map((rule, idx) => (
-                          <div key={idx} className="bg-gray-800 p-3 rounded-lg text-xs text-gray-300">
-                            <span className="text-indigo-400">{rule.field}</span>
-                            {' '}<span className="text-gray-500">{rule.operator}</span>{' '}
-                            <span className="text-green-400">{JSON.stringify(rule.value)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <h5 className="text-sm font-semibold text-gray-300 mb-2">Actions</h5>
-                      <pre className="bg-gray-800 p-4 rounded-lg text-xs overflow-x-auto text-gray-300">
-                        {JSON.stringify(classificationPolicy.actions, null, 2)}
-                      </pre>
-                    </div>
-                  </div>
-                </div>
-              ) : config && (
-                <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                  <h4 className="text-lg font-semibold text-white mb-4">Configuration</h4>
-                  <pre className="bg-gray-800 p-4 rounded-lg text-xs overflow-x-auto text-gray-300">
-                    {JSON.stringify(config, null, 2)}
-                  </pre>
-                </div>
-              )}
+              <PolicySummary
+                draft={{
+                  policyType,
+                  name: policyName,
+                  severity,
+                  enabled,
+                  agentName,
+                  config,
+                  classification: classificationPolicy,
+                }}
+              />
             </div>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex gap-3 p-6 border-t border-gray-700 sticky bottom-0 bg-gray-900">
+        <footer className="sticky bottom-0 flex items-center gap-2 rounded-b-cs-card border-t border-cs-hair bg-cs-panel px-6 py-3.5">
           {step > 1 && (
             <button
               onClick={handleBack}
-              className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
+              className="inline-flex items-center gap-1 rounded-cs-sm px-3 py-2 text-[13px] font-medium text-cs-ink-2
+                         transition-colors hover:bg-cs-panel-2 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
             >
-              <ChevronLeft className="w-5 h-5" />
+              <ChevronLeft className="h-4 w-4" />
               Back
             </button>
           )}
-          
+
           <div className="flex-1" />
-          
+
+          <button
+            onClick={handleClose}
+            className="rounded-cs-sm px-3.5 py-2 text-[13px] font-medium text-cs-ink-2
+                       transition-colors hover:bg-cs-panel-2 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+          >
+            Cancel
+          </button>
+
           {step < 3 ? (
             <button
               onClick={handleNext}
               disabled={step === 1 ? !canProceedFromStep1 : !canProceedFromStep2}
-              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-gray-500 text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
+              className="inline-flex items-center gap-1 rounded-cs-sm bg-cs-indigo px-4 py-2 text-[13px] font-semibold text-white
+                         transition-colors hover:bg-cs-indigo-d disabled:cursor-not-allowed disabled:bg-cs-hair disabled:text-cs-muted-2
+                         focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
             >
-              Next
-              <ChevronRight className="w-5 h-5" />
+              Continue
+              <ChevronRight className="h-4 w-4" />
             </button>
           ) : (
             <button
               onClick={handleSave}
               disabled={!canSave}
-              className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 text-white font-semibold rounded-xl transition-all"
+              className="rounded-cs-sm bg-cs-indigo px-4 py-2 text-[13px] font-semibold text-white
+                         transition-colors hover:bg-cs-indigo-d disabled:cursor-not-allowed disabled:bg-cs-hair disabled:text-cs-muted-2
+                         focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
             >
-              {editingPolicy ? 'Update Policy' : 'Create Policy'}
+              {editingPolicy ? 'Save changes' : 'Create policy'}
             </button>
           )}
-          
-          <button
-            onClick={handleClose}
-            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
+        </footer>
       </div>
     </div>
   )

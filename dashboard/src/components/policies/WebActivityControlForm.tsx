@@ -19,18 +19,21 @@ interface Props {
 
 const CATEGORIES: Array<{ value: WebActivityCategory; label: string; hint: string }> = [
   { value: 'webmail', label: 'Webmail', hint: 'Gmail, Outlook Web, Yahoo, Proton, Zoho' },
-  { value: 'cloud_storage', label: 'File sharing / Cloud storage', hint: 'Drive, OneDrive, Dropbox, Box, WeTransfer' },
+  { value: 'cloud_storage', label: 'Cloud storage', hint: 'Drive, OneDrive, Dropbox, Box, WeTransfer' },
   { value: 'collaboration', label: 'Collaboration', hint: 'Slack, Teams, Discord, WhatsApp Web, Notion' },
   { value: 'genai', label: 'Generative AI', hint: 'ChatGPT, Claude, Gemini, Copilot, Perplexity' },
 ]
 
-const ACTIVITIES: Array<{ value: WebActivity; label: string }> = [
-  { value: 'upload', label: 'Upload' },
-  { value: 'download', label: 'Download' },
-  { value: 'attach', label: 'Attach' },
-  { value: 'send', label: 'Send' },
-  { value: 'post', label: 'Post / Generate' },
-  { value: 'ai_response', label: 'AI Response' },
+// `short` is what the column header shows: the full label is the sentence an
+// operator reads elsewhere, but as a header it made the table wider than the
+// panel and clipped the last column off the right edge.
+const ACTIVITIES: Array<{ value: WebActivity; label: string; short: string }> = [
+  { value: 'upload', label: 'Upload', short: 'Upload' },
+  { value: 'download', label: 'Download', short: 'Download' },
+  { value: 'attach', label: 'Attach', short: 'Attach' },
+  { value: 'send', label: 'Send', short: 'Send' },
+  { value: 'post', label: 'Post / Generate', short: 'Post' },
+  { value: 'ai_response', label: 'AI Response', short: 'AI reply' },
 ]
 
 // Which activities are meaningful for which category. Mirrors
@@ -192,14 +195,16 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
           </span>
         </label>
 
-        <div className="overflow-x-auto rounded-cs-card border border-cs-hair">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-cs-card border border-cs-hair
+                        [mask-image:linear-gradient(to_right,#000_calc(100%-24px),transparent)]
+                        [@media(hover:hover)]:[mask-image:none]">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="bg-cs-panel-2 border-b border-cs-hair">
-                <th className="text-left px-3 py-2 font-semibold text-cs-ink">Category</th>
+                <th className="text-left px-3 py-2 font-semibold text-cs-ink w-[168px]">Category</th>
                 {ACTIVITIES.map((a) => (
                   <th key={a.value} className="px-2 py-2 font-semibold text-cs-ink text-center whitespace-nowrap">
-                    {a.label}
+                    {a.short}
                   </th>
                 ))}
                 <th className="px-2 py-2 font-semibold text-cs-ink text-center">All</th>
@@ -210,12 +215,14 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
                 const row = matrix[cat.value] || {}
                 return (
                   <tr key={cat.value} className="border-b border-cs-hair last:border-0">
-                    <td className="px-3 py-2 align-top">
-                      <div className="font-medium text-cs-ink flex items-center gap-1.5">
-                        {cat.value === 'genai' && <Sparkles className="h-3.5 w-3.5 text-cs-indigo" />}
+                    <td className="px-3 py-2.5 align-middle">
+                      <div className="font-medium text-cs-ink flex items-center gap-1.5 whitespace-nowrap">
+                        {cat.value === 'genai' && <Sparkles className="h-3.5 w-3.5 text-cs-indigo shrink-0" />}
                         {cat.label}
                       </div>
-                      <div className="text-[11px] text-cs-ink-3 mt-0.5">{cat.hint}</div>
+                      <div className="text-[11px] text-cs-muted-2 mt-0.5 truncate max-w-[150px]" title={cat.hint}>
+                        {cat.hint}
+                      </div>
                     </td>
 
                     {ACTIVITIES.map((act) => {
@@ -232,8 +239,12 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
                         <td key={act.value} className="px-2 py-2 text-center">
                           <select
                             value={current}
+                            aria-label={`${cat.label}: ${act.label}`}
                             onChange={(e) => setCell(cat.value, act.value, e.target.value as WebActivityAction)}
-                            className={`bg-cs-panel border border-cs-hair rounded-cs-sm px-2 py-1 text-xs font-medium ${
+                            className={`appearance-none cursor-pointer rounded-cs-sm border border-cs-hair bg-cs-panel
+                              bg-[url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath fill='%239aa0aa' d='M0 0h8L4 5z'/%3E%3C/svg%3E")]
+                              bg-[length:7px] bg-[right_6px_center] bg-no-repeat py-1 pl-2 pr-5 text-[11.5px] font-semibold
+                              transition-colors hover:border-cs-muted-2 focus:outline-none focus:ring-[3px] focus:ring-cs-indigo-faint ${
                               ACTIONS.find((a) => a.value === current)?.cls || ''
                             }`}
                           >
@@ -250,10 +261,13 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
                     <td className="px-2 py-2 text-center">
                       <select
                         value=""
+                        aria-label={`Set every activity for ${cat.label}`}
                         onChange={(e) => {
                           if (e.target.value) setRow(cat.value, e.target.value as WebActivityAction)
                         }}
-                        className="bg-cs-panel border border-cs-hair rounded-cs-sm px-2 py-1 text-xs text-cs-ink-2"
+                        className="appearance-none cursor-pointer rounded-cs-sm border border-cs-hair bg-cs-panel py-1 px-2
+                                   text-[11.5px] text-cs-muted transition-colors hover:border-cs-muted-2 hover:text-cs-ink-2
+                                   focus:outline-none focus:ring-[3px] focus:ring-cs-indigo-faint"
                       >
                         <option value="">Set…</option>
                         {ACTIONS.map((a) => (

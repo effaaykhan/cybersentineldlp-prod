@@ -1021,6 +1021,54 @@ objShell.Run """$exePath""", 0, False
     $found
   }
 
+  # Where did the browser get this extension from?
+  #
+  # THE TRAP THIS EXISTS FOR: manifest.json pins the signing key, so an unpacked
+  # "Load unpacked" copy has the SAME extension id as the published build. That is
+  # deliberate — you debug the extension you deploy — but it means a leftover
+  # unpacked folder from an earlier test occupies the id the policy is trying to
+  # fill. The managed build never takes over, and every symptom points somewhere
+  # else: the popup, the icon and the settings all come from the stale folder, so
+  # publishing a new version changes nothing and looks like the server or the
+  # script is broken.
+  #
+  # Chrome records the origin in each profile's Preferences JSON as a numeric
+  # `location` under extensions.settings.<id>. The values that matter here:
+  #   1  = installed from a packaged .crx
+  #   4  = LOADED UNPACKED  <- the one that shadows everything
+  #   10 = installed by enterprise policy (what we want)
+  function Get-ExtensionInstallSources {
+    param([string]$ExtId)
+    $out = @()
+    foreach ($p in (Get-BrowserProfileDirs)) {
+      foreach ($file in @('Secure Preferences', 'Preferences')) {
+        $path = Join-Path $p.Path $file
+        if (-not (Test-Path $path)) { continue }
+        try {
+          $json = Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json
+          $entry = $json.extensions.settings.$ExtId
+          if (-not $entry) { continue }
+          $loc = $entry.location
+          $label = switch ($loc) {
+            1  { 'packaged .crx' }
+            4  { 'LOADED UNPACKED' }
+            5  { 'component' }
+            10 { 'enterprise policy' }
+            default { "location $loc" }
+          }
+          $out += [PSCustomObject]@{
+            Browser = $p.Browser; User = $p.User; Profile = $p.Name
+            Location = $loc; Label = $label
+            Path = $entry.path
+            Version = $entry.manifest.version
+          }
+          break   # one record per profile is enough
+        } catch { }
+      }
+    }
+    $out
+  }
+
   function Stop-Browsers {
     $names = @('chrome', 'msedge')
     $running = @()
@@ -1163,6 +1211,28 @@ objShell.Run """$exePath""", 0, False
       Field 'Installed' "v$vers  in $(@($installed).Count) profile(s)" $col
     } else {
       Field 'Installed' 'not yet - installs on the next browser start' 'Yellow'
+    }
+
+    $sources = Get-ExtensionInstallSources $extId
+    $unpacked = @($sources | Where-Object { $_.Location -eq 4 })
+    if (@($sources).Count -gt 0) {
+      $labels = (@($sources) | Select-Object -ExpandProperty Label -Unique) -join ', '
+      Field 'Installed via' $labels $(if (@($unpacked).Count -gt 0) { 'Red' } else { 'Green' })
+    }
+    if (@($unpacked).Count -gt 0) {
+      Blank
+      Err 'AN UNPACKED COPY IS LOADED, AND IT IS WHAT YOU ARE SEEING.'
+      foreach ($u in $unpacked) {
+        Hint "  $($u.Browser) / $($u.User) / $($u.Profile)  v$($u.Version)"
+        if ($u.Path) { Hint "    from: $($u.Path)" }
+      }
+      Hint 'It has the same extension id as the published build (the signing key is'
+      Hint 'pinned so you debug what you deploy), so it occupies the slot the policy'
+      Hint 'is trying to fill. Nothing published will ever take effect until it is'
+      Hint 'gone - the popup, the icon and the settings all come from that folder.'
+      Blank
+      Hint 'FIX: chrome://extensions -> find CyberSentinel DLP -> Remove.'
+      Hint '     Then run [1] here again.'
     }
     if (Get-InPrivateDisabled) {
       Field 'InPrivate' 'disabled - no uninspected browsing' 'Green'

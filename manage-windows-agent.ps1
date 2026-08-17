@@ -1158,6 +1158,44 @@ objShell.Run """$exePath""", 0, False
     Hint 'few seconds and re-applies the policy. Nothing else to do.'
   }
 
+  # Asked on EVERY deploy, whatever the current state.
+  #
+  # Not conditional on private browsing still being open: a deploy is the moment
+  # someone is looking at this machine's coverage, and silently skipping the
+  # question because it happened to be handled last time hides the one blind spot
+  # the extension cannot cover. Three explicit choices, and Enter changes
+  # nothing — so it is a confirmation, not a trap.
+  function Invoke-PrivateBrowsingPrompt {
+    Blank
+    Info 'Private browsing:'
+    foreach ($st in (Get-InPrivateState)) {
+      if ($st.Disabled) { Ok "  $($st.Browser) $($st.Label): disabled" }
+      else { Warn "  $($st.Browser) $($st.Label): available - NOT inspected" }
+    }
+    Hint 'Extensions cannot run in a private window and no policy can change that,'
+    Hint 'so disabling it is the only way to remove that blind spot.'
+    Blank
+    $want = Read-Host '   [d] disable everywhere   [a] allow everywhere   [Enter] leave as is'
+    if ($want -eq 'd' -or $want -eq 'D') {
+      try {
+        Set-InPrivateAvailability $true
+        foreach ($st in (Get-InPrivateState)) {
+          if ($st.Disabled) { Ok "$($st.Browser) $($st.Label) disabled" }
+          else { Warn "$($st.Browser) $($st.Label) could NOT be disabled" }
+        }
+        Hint 'Takes effect when the browser restarts.'
+      } catch { Err "Failed: $($_.Exception.Message)" }
+    } elseif ($want -eq 'a' -or $want -eq 'A') {
+      try {
+        Set-InPrivateAvailability $false
+        Ok 'Private browsing allowed again.'
+        Warn 'Anything done in a private window is not inspected.'
+      } catch { Err "Failed: $($_.Exception.Message)" }
+    } else {
+      Info 'Left unchanged.'
+    }
+  }
+
   function Remove-ExtensionPolicy {
     param([string]$ExtId)
     foreach ($b in Get-BrowserPolicyRoots) {
@@ -1274,11 +1312,12 @@ objShell.Run """$exePath""", 0, False
 
     while ($true) {
       Blank
-      Write-Host '   [1] ' -ForegroundColor Green  -NoNewline; Write-Host 'Deploy / update  - force-install into Chrome and Edge'
-      Write-Host '   [2] ' -ForegroundColor Red    -NoNewline; Write-Host 'Remove           - drop the policy (user can then uninstall it)'
-      Write-Host '   [3] ' -ForegroundColor Gray   -NoNewline; Write-Host 'Back to main menu'
+      Write-Host '   [1] ' -ForegroundColor Green   -NoNewline; Write-Host 'Deploy / update  - force-install into Chrome and Edge'
+      Write-Host '   [2] ' -ForegroundColor Magenta -NoNewline; Write-Host 'Private browsing - disable it, or allow it again'
+      Write-Host '   [3] ' -ForegroundColor Red     -NoNewline; Write-Host 'Remove           - drop the policy (user can then uninstall it)'
+      Write-Host '   [4] ' -ForegroundColor Gray    -NoNewline; Write-Host 'Back to main menu'
       Blank
-      $c = Read-Host '   Choose (1-3)'
+      $c = Read-Host '   Choose (1-4)'
       switch ($c.Trim()) {
         '1' {
           Blank
@@ -1294,30 +1333,7 @@ objShell.Run """$exePath""", 0, False
             Info "The extension will report as agent '$agentId' - one agent for this device."
           }
 
-          # No policy can enable an extension in InPrivate, so the only way to
-          # avoid an uninspected window is to not have one. Asked, not assumed:
-          # it affects all browsing, not just DLP.
-          $ipOpen = @(Get-InPrivateState | Where-Object { -not $_.Disabled })
-          if (@($ipOpen).Count -gt 0) {
-            Blank
-            Warn 'Extensions do not run in InPrivate/Incognito windows, and no'
-            Warn 'policy can change that - so anything done there is invisible to'
-            Warn 'DLP. Disabling it is the only way to close that hole.'
-            foreach ($o in $ipOpen) { Hint "  still open: $($o.Browser) $($o.Label)" }
-            $ip = Read-Host '   Disable private browsing on this device? (Y/n)'
-            if ($ip -ne 'n' -and $ip -ne 'N') {
-              try {
-                Set-InPrivateAvailability $true
-                foreach ($st in (Get-InPrivateState)) {
-                  if ($st.Disabled) { Ok "$($st.Browser) $($st.Label) disabled" }
-                  else { Warn "$($st.Browser) $($st.Label) could NOT be disabled" }
-                }
-                Hint 'Takes effect when the browser restarts.'
-              } catch { Err "Could not disable private browsing: $($_.Exception.Message)" }
-            } else {
-              Warn 'Left enabled - private browsing stays uninspected.'
-            }
-          }
+          Invoke-PrivateBrowsingPrompt
 
           try {
             foreach ($b in Get-BrowserPolicyRoots) {
@@ -1350,6 +1366,11 @@ objShell.Run """$exePath""", 0, False
           return
         }
         '2' {
+          Invoke-PrivateBrowsingPrompt
+          Blank; Read-Host '   Press Enter to continue' | Out-Null
+          return
+        }
+        '3' {
           Blank
           Warn 'This removes the enterprise policy. The extension stops being'
           Warn 'force-installed and the user can then disable or remove it.'
@@ -1368,8 +1389,8 @@ objShell.Run """$exePath""", 0, False
           Blank; Read-Host '   Press Enter to continue' | Out-Null
           return
         }
-        '3' { return }
-        default { Warn 'Enter 1, 2, or 3.' }
+        '4' { return }
+        default { Warn 'Enter 1, 2, 3, or 4.' }
       }
     }
   }

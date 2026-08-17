@@ -2010,6 +2010,19 @@ static ClassificationResult Classify(const std::string& content,
     std::set<std::string> sanctionedUsbManufacturers;   // match_type=manufacturer (lowercase)
     std::set<std::string> sanctionedUsbDeviceIds;       // match_type=device_id "vid:pid" (lowercase)
     std::set<std::string> sanctionedUsbModels;          // match_type=model product name (lowercase)
+    // Explicit DISALLOWS. A deny beats any allow that would otherwise cover the
+    // device, and must be subtracted AFTER allow matching — the same precedence
+    // the server's /device/authorize applies.
+    //
+    // Without these the OFFLINE decision below disagreed with the server: allow a
+    // vendor fleet, deny one bad serial inside it, and with the manager
+    // unreachable the agent matched the vendor allow and mounted the denied
+    // stick. The online path had always blocked it, so the bug only appeared
+    // during an outage — which is exactly when nobody is watching.
+    std::set<std::string> deniedUsbSerials;             // UPPERCASE
+    std::set<std::string> deniedUsbManufacturers;       // lowercase
+    std::set<std::string> deniedUsbDeviceIds;           // lowercase "vid:pid"
+    std::set<std::string> deniedUsbModels;              // lowercase
     std::mutex usbAllowlistMutex;
     std::string lastAllowlistSig;                       // skip registry churn when unchanged
 
@@ -2484,6 +2497,14 @@ if (!shouldBlock) {
              auto devids = lc(ParseJsonStrArray(response, "device_ids"));
              auto models = lc(ParseJsonStrArray(response, "models"));
 
+             // Explicit disallows. An older server omits these arrays entirely,
+             // in which case they parse empty and behaviour is exactly as before.
+             auto up = [](std::vector<std::string> v) { for (auto& s : v) s = ToUpperStr(s); return v; };
+             auto dSerials = up(ParseJsonStrArray(response, "denied_serials"));
+             auto dMfgs    = lc(ParseJsonStrArray(response, "denied_manufacturers"));
+             auto dDevids  = lc(ParseJsonStrArray(response, "denied_device_ids"));
+             auto dModels  = lc(ParseJsonStrArray(response, "denied_models"));
+
              {
                  std::lock_guard<std::mutex> lock(usbAllowlistMutex);
                  usbDeviceControlMode = mode;
@@ -2491,6 +2512,10 @@ if (!shouldBlock) {
                  sanctionedUsbManufacturers = std::set<std::string>(mfgs.begin(), mfgs.end());
                  sanctionedUsbDeviceIds     = std::set<std::string>(devids.begin(), devids.end());
                  sanctionedUsbModels        = std::set<std::string>(models.begin(), models.end());
+                 deniedUsbSerials       = std::set<std::string>(dSerials.begin(), dSerials.end());
+                 deniedUsbManufacturers = std::set<std::string>(dMfgs.begin(), dMfgs.end());
+                 deniedUsbDeviceIds     = std::set<std::string>(dDevids.begin(), dDevids.end());
+                 deniedUsbModels        = std::set<std::string>(dModels.begin(), dModels.end());
              }
              usbDeviceControlEnforced.store(enforced);
 
@@ -2518,6 +2543,8 @@ if (!shouldBlock) {
              std::string sig = std::string(enforced ? "1" : "0") + "|" + mode + "|" +
                                (readOnly ? "ro" : "rw") + "|";
              for (const auto& s : serials) sig += s + ",";
+             sig += "|deny:";
+             for (const auto& s : dSerials) sig += s + ",";
              if (sig != lastAllowlistSig) {
                  ClearUsbInstallRestrictions();
                  // Read-only USB storage (global WriteProtect). Reconciled here so a
@@ -3156,6 +3183,7 @@ if (!shouldBlock) {
              // Offline / no response: decide from the cached allowlist.
              std::string mode;
              bool sanctioned = false;
+             bool denied = false;
              {
                  std::lock_guard<std::mutex> lock(usbAllowlistMutex);
                  mode = usbDeviceControlMode;
@@ -3167,13 +3195,24 @@ if (!shouldBlock) {
                      (!mfg.empty()      && sanctionedUsbManufacturers.count(mfg) > 0) ||
                      (devid != ":"      && sanctionedUsbDeviceIds.count(devid) > 0) ||
                      (!model.empty()    && sanctionedUsbModels.count(model) > 0);
+                 // An explicit disallow BEATS any allow covering the same device.
+                 // Checked after, and applied over, the sanctioned result — the
+                 // whole point of a deny row is to carve one device out of a
+                 // broader allow, so evaluating it as just another match would
+                 // let list order decide the verdict.
+                 denied =
+                     (!serialUp.empty() && deniedUsbSerials.count(serialUp) > 0) ||
+                     (!mfg.empty()      && deniedUsbManufacturers.count(mfg) > 0) ||
+                     (devid != ":"      && deniedUsbDeviceIds.count(devid) > 0) ||
+                     (!model.empty()    && deniedUsbModels.count(model) > 0);
              }
+             if (denied) sanctioned = false;
              if (!usbDeviceControlEnforced.load() || mode != "enforce")
                  action = "allow";
              else
                  action = sanctioned ? "allow" : "block";
              logger.Info("USB device control (offline): serial=" + details.serialNumber +
-                         " -> " + action);
+                         (denied ? " [explicitly disallowed]" : "") + " -> " + action);
          }
 
          // 2) Enforce.

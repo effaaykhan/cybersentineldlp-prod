@@ -1332,6 +1332,23 @@ class UsbAllowlistResponse(BaseModel):
     device_ids: List[str]          # allowed "vid:pid" (match_type=device_id), lowercase
     models: List[str]              # allowed product names (match_type=model), lowercase
     devices: List[Dict[str, Any]]  # serial + vid/pid/model, for building device IDs
+    # ── Explicit disallows ───────────────────────────────────────────────────
+    # A deny row means "never this device", and it BEATS any allow that would
+    # otherwise cover it. The agent must subtract these AFTER matching the allow
+    # lists above, exactly as the runtime authorize endpoint does.
+    #
+    # Without them the offline path and the runtime path disagreed, and the
+    # offline one wins in practice: allow a vendor fleet, deny one bad serial
+    # inside it, and the agent's Device Installation Restrictions admitted the
+    # denied stick on the strength of the vendor rule — the runtime check that
+    # would have blocked it never got the chance, which is the whole point of
+    # enforcing offline. Same defect the printer policy had before
+    # ``blocked_printers`` was added; this is the USB half of that fix.
+    denied_serials: List[str] = []        # UPPERCASE, to match `serials`
+    denied_manufacturers: List[str] = []  # lowercase
+    denied_device_ids: List[str] = []     # lowercase "vid:pid"
+    denied_models: List[str] = []         # lowercase
+    denied_count: int = 0
     generated_at: datetime
 
 
@@ -1376,8 +1393,10 @@ async def usb_allowlist(
         _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
     )).scalars().all()
     # Only ALLOW rows feed the agent's sanctioned sets — deny rows must never leak
-    # into the offline allow lists (they mean the opposite).
+    # into the offline allow lists (they mean the opposite). They are sent
+    # separately below, because leaving them out entirely was its own bug.
     allow_rows = [d for d in rows if (getattr(d, "decision", None) or "allow") == "allow"]
+    deny_rows = [d for d in rows if (getattr(d, "decision", None) or "allow") == "deny"]
 
     devices = [{
         "serial_number": d.serial_number,
@@ -1389,10 +1408,10 @@ async def usb_allowlist(
         "match_value": getattr(d, "match_value", None),
     } for d in allow_rows]
 
-    def _mv(mt: str) -> List[str]:
-        # each allow row's match value (fall back to serial for legacy serial rows).
+    def _mv(source, mt: str) -> List[str]:
+        # each row's match value (fall back to serial for legacy serial rows).
         out = []
-        for d in allow_rows:
+        for d in source:
             row_mt = (getattr(d, "match_type", None) or "serial")
             if row_mt != mt:
                 continue
@@ -1405,10 +1424,15 @@ async def usb_allowlist(
         enforced=enforced, mode=mode, access_mode=access_mode, read_only=read_only,
         count=len(devices),
         # serials UPPERCASE (agent compares serials in upper); the rest lowercase.
-        serials=[s.upper() for s in _mv("serial")],
-        manufacturers=[s.lower() for s in _mv("manufacturer")],
-        device_ids=[s.lower() for s in _mv("device_id")],
-        models=[s.lower() for s in _mv("model")],
+        serials=[s.upper() for s in _mv(allow_rows, "serial")],
+        manufacturers=[s.lower() for s in _mv(allow_rows, "manufacturer")],
+        device_ids=[s.lower() for s in _mv(allow_rows, "device_id")],
+        models=[s.lower() for s in _mv(allow_rows, "model")],
+        denied_serials=[s.upper() for s in _mv(deny_rows, "serial")],
+        denied_manufacturers=[s.lower() for s in _mv(deny_rows, "manufacturer")],
+        denied_device_ids=[s.lower() for s in _mv(deny_rows, "device_id")],
+        denied_models=[s.lower() for s in _mv(deny_rows, "model")],
+        denied_count=len(deny_rows),
         devices=devices, generated_at=datetime.now(timezone.utc),
     )
 

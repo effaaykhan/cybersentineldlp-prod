@@ -33,6 +33,19 @@ module.exports = {
           med: 'var(--cs-med)',
           low: 'var(--cs-low)',
           ok: 'var(--cs-ok)',
+          // Aliases for names components already reference. Without these the
+          // classes generated nothing at all, so a green "Enforce" tick and a
+          // red destructive button were rendering in inherited body colour.
+          emerald: 'var(--cs-ok)',
+          rose: 'var(--cs-crit)',
+          'ink-3': 'var(--cs-muted-2)',
+          'panel-2': 'var(--cs-panel-2)',
+          scrim: 'var(--cs-scrim)',
+          // Policy action semantics — see tokens.css.
+          'act-allow': 'var(--cs-act-allow)',
+          'act-log': 'var(--cs-act-log)',
+          'act-alert': 'var(--cs-act-alert)',
+          'act-block': 'var(--cs-act-block)',
         },
         // Single brand accent — indigo. The dashboard already leaned indigo
         // in places while `primary` was blue; unifying removes the split.

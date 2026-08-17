@@ -14,8 +14,12 @@
   /* ink */
   --cs-ink:       #15171c;
   --cs-ink-2:     #3b3f47;
-  --cs-muted:     #7a808b;
-  --cs-muted-2:   #9aa0aa;
+  /* 4.7:1 on panel — hint text is content and must clear WCAG AA.
+     Was #7a808b (3.9:1), which failed on every form hint in the app. */
+  --cs-muted:     #6e7481;
+  /* 3.2:1 — reserved for placeholders, eyebrows and disabled states,
+     never for text that carries meaning on its own. */
+  --cs-muted-2:   #8b919e;
   /* accent (single) */
   --cs-indigo:    #4f46e5;
   --cs-indigo-d:  #4338ca;
@@ -26,6 +30,19 @@
   --cs-med:       #d0a215;
   --cs-low:       #64748b;
   --cs-ok:        #22a558;   /* live / online */
+  /* surfaces, continued */
+  --cs-panel-2:   #fafbfc;   /* inset fill: table headers, quiet rows */
+  --cs-scrim:     rgba(21, 23, 28, 0.42);   /* modal backdrop */
+
+  /* Action semantics for policy authoring.
+     Deliberately NO new hues: a policy action IS a severity statement, so these
+     alias the severity ramp rather than widening the palette. allow is absence
+     of action and therefore absence of colour. */
+  --cs-act-allow: var(--cs-muted-2);
+  --cs-act-log:   var(--cs-indigo);
+  --cs-act-alert: var(--cs-med);
+  --cs-act-block: var(--cs-crit);
+
   /* fonts */
   --cs-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
   --cs-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;

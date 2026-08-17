@@ -30,6 +30,7 @@ from app.api.v1 import (
     ml_classifier,
     usb_devices,
     printers,
+    app_catalog,
     scans,
     decision,
     permissions,
@@ -71,5 +72,6 @@ api_router.include_router(data_matching.router, prefix="/data-matching", tags=["
 api_router.include_router(ml_classifier.router, prefix="/ml-classifier", tags=["ML Sensitivity Classifier"])
 api_router.include_router(usb_devices.router, prefix="/usb-devices", tags=["USB Device Control"])
 api_router.include_router(printers.router, prefix="/printers", tags=["Printer Control"])
+api_router.include_router(app_catalog.router, prefix="/app-catalog", tags=["Web Activity Control"])
 api_router.include_router(scans.router, prefix="/scans", tags=["Scans"])
 api_router.include_router(decision.router, prefix="/decision", tags=["Decision"])

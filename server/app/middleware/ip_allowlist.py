@@ -41,7 +41,11 @@ _LOOPBACK = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128"
 _AGENT_HEARTBEAT = re.compile(r"^/api/v1/agents/[^/]+/heartbeat/?$")
 _AGENT_SYNC = re.compile(r"^/api/v1/agents/[^/]+/(policies/sync|policy/evaluate|device/authorize)/?$")
 _AGENT_UNREG = re.compile(r"^/api/v1/agents/[^/]+/unregister/?$")
-_AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/(usb-allowlist|printer-policy|application-control|wireless-policy|network-share-policy|messaging-app-policy)/?$")
+_AGENT_USB_ALLOWLIST = re.compile(r"^/api/v1/agents/[^/]+/(usb-allowlist|printer-policy|application-control|wireless-policy|network-share-policy|messaging-app-policy|web-activity-policy)/?$")
+# App-catalog pull. The browser extension is an endpoint like any other: it must
+# keep classifying destinations from a coffee shop while the portal is
+# IP-restricted, or it silently stops recognising GenAI hosts off-network.
+_APP_CATALOG_SYNC = re.compile(r"^/api/v1/app-catalog/sync/?$")
 
 
 def bump_ip_allowlist_cache() -> None:
@@ -84,6 +88,8 @@ def _is_exempt(method: str, path: str) -> bool:
     if method == "POST" and _AGENT_SYNC.match(path):
         return True
     if method == "GET" and _AGENT_USB_ALLOWLIST.match(path):
+        return True
+    if method == "GET" and _APP_CATALOG_SYNC.match(path):
         return True
     if method == "DELETE" and _AGENT_UNREG.match(path):
         return True

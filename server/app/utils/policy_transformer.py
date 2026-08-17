@@ -117,6 +117,8 @@ def transform_frontend_config_to_backend(
         return _transform_network_config(config)
     elif policy_type == "print_content_prevention":
         return _transform_print_content_config(config)
+    elif policy_type == "web_activity_control":
+        return _transform_web_activity_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -216,6 +218,114 @@ def _transform_print_content_config(config: Dict[str, Any]) -> Tuple[Dict[str, A
         "block": {},
         "alert": {"severity": "high", "message": "Sensitive document blocked from printing"},
     }
+    return conditions, actions
+
+
+def _transform_web_activity_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform granular web activity control config to backend conditions/actions.
+
+    Frontend format::
+
+        {
+            "mode": "enforce" | "audit",
+            "minLevel": "Confidential",
+            "matrix": {
+                "webmail": {"send": "block", "attach": "block", "download": "log"},
+                "genai":   {"post": "alert", "attach": "block"}
+            },
+            "appOverrides": [ {"app_id": "copilot", "action": "allow"} ],
+            "blockUninspectable": true
+        }
+
+    THE MATRIX IS NOT TRANSFORMED INTO RULES, and that is deliberate. The generic
+    policy shape carries one actions dict per policy; a matrix needs a different
+    action per cell, so faithfully expressing a filled 4x6 grid as conditions
+    would take up to 24 separate policies. ``_match_web_activity`` in the agents
+    API reads ``config`` directly instead — the same way the USB/print file-hash
+    denylists are evaluated.
+
+    ── WHY THE ACTIONS ARE ALWAYS "log" ──────────────────────────────────────
+
+    The obvious thing to emit here is the strongest action in the grid, so the
+    policy's badge reads "block" when the matrix blocks something. That was the
+    first version, and it was wrong in a way that took an end-to-end test to see:
+    the generic evaluator matched this policy on (event_type, classification) and
+    applied its ``block`` action — with no idea which ACTIVITY the event was. So
+    a matrix saying "block GenAI posts, log GenAI downloads" blocked downloads
+    too, and a per-app exception for Copilot was overruled by a policy that had
+    already decided before the exception was consulted. The activity dimension
+    existed in the config and was discarded by the very step meant to represent
+    the config.
+
+    Two evaluators cannot both decide. The matrix decides; these conditions exist
+    only so the policy still MATCHES its own events, which is what keeps
+    domain-scoped reporting and policy attribution working. Hence log — the one
+    action that records without overriding.
+    """
+    from app.core import web_activity as WA
+
+    matrix = config.get("matrix") or {}
+    overrides = config.get("appOverrides") or []
+    min_level = str(config.get("minLevel") or "").strip()
+
+    # Which event types and activities this policy can possibly fire on — only
+    # the cells the operator actually filled in. A policy covering GenAI alone
+    # must not claim to gate email.
+    categories: List[str] = []
+    activities: List[str] = []
+    unscoped_activity = False
+
+    for category, row in matrix.items():
+        c = WA.normalize_category(category)
+        if not c or not isinstance(row, dict):
+            continue
+        for activity, cell in row.items():
+            a = WA.normalize_activity(activity)
+            action = cell.get("action") if isinstance(cell, dict) else cell
+            if not a or WA.normalize_action(action, default=WA.ACTION_LOG) == WA.ACTION_ALLOW:
+                continue
+            categories.append(c)
+            activities.append(a)
+
+    for entry in overrides:
+        if not isinstance(entry, dict):
+            continue
+        if WA.normalize_action(entry.get("action"), default=WA.ACTION_LOG) == WA.ACTION_ALLOW:
+            # An "allow" exception carves a hole in the matrix; it never adds
+            # coverage, so it must not widen what this policy claims to match.
+            continue
+        c = WA.normalize_category(entry.get("category"))
+        a = WA.normalize_activity(entry.get("activity"))
+        if c:
+            categories.append(c)
+        if a:
+            activities.append(a)
+        else:
+            # An exception that names no activity applies to all of them, so the
+            # activity rule below would wrongly exclude events it covers.
+            unscoped_activity = True
+
+    event_types = sorted({WA.event_type_for(c) for c in categories}) or ["web_activity"]
+
+    rules: List[Dict[str, Any]] = [
+        {"field": "event_type", "operator": "in", "value": event_types},
+    ]
+    if activities and not unscoped_activity:
+        rules.append({"field": "activity", "operator": "in", "value": sorted(set(activities))})
+    if min_level:
+        order = ["Public", "Internal", "Confidential", "Restricted"]
+        idx = next((i for i, l in enumerate(order) if l.lower() == min_level.lower()), 2)
+        rules.append(
+            {"field": "classification_level", "operator": "in", "value": order[idx:]}
+        )
+
+    conditions = {"match": "all", "rules": rules}
+
+    # See the docstring: never block or alert from here. _match_web_activity is
+    # the single decider for this policy type.
+    actions = {"log": {}}
+
     return conditions, actions
 
 

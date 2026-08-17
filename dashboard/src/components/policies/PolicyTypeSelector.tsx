@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer, AppWindow, Bluetooth, FolderInput, MessageSquare } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network, Printer, AppWindow, Bluetooth, FolderInput, MessageSquare, Globe } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -109,6 +109,12 @@ const policyTypes: Array<{
     label: 'Network Prevention',
     description: 'Block sensitive data leaving over any network channel — FTP/SCP/SFTP, python http.server, curl/wget, netcat, DNS tunnelling, cloud CLIs',
     icon: Network
+  },
+  {
+    type: 'web_activity_control',
+    label: 'Web Activity Control',
+    description: 'Per-activity control in web apps — Upload, Download, Attach, Send, Post and AI Response across webmail, cloud storage, collaboration and generative AI',
+    icon: Globe
   }
 ]
 

@@ -279,6 +279,48 @@ async def _auto_init_schema_and_admin():
                 "ADD COLUMN IF NOT EXISTS decision VARCHAR(10) NOT NULL DEFAULT 'allow'"
             ))
 
+        # app_catalog — which web destinations are webmail / cloud / collaboration
+        # / GenAI. Seeded from core.web_activity.DEFAULT_CATALOG so a fresh
+        # deployment can classify a ChatGPT tab without anyone running a
+        # migration first; migration 028 does the same thing for installs that
+        # do run alembic. Both paths are ON CONFLICT DO NOTHING, so an operator's
+        # edits to a built-in row survive every restart and re-seed.
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS app_catalog (
+                    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    host_pattern VARCHAR(255) NOT NULL UNIQUE,
+                    app_id       VARCHAR(100) NOT NULL,
+                    app_name     VARCHAR(255) NOT NULL,
+                    vendor       VARCHAR(255),
+                    category     VARCHAR(50)  NOT NULL,
+                    is_enabled   BOOLEAN      NOT NULL DEFAULT TRUE,
+                    is_builtin   BOOLEAN      NOT NULL DEFAULT FALSE,
+                    priority     INTEGER      NOT NULL DEFAULT 0,
+                    notes        VARCHAR(1000),
+                    created_by   UUID,
+                    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+                    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+                )
+                """
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_app_catalog_category ON app_catalog (category)"
+            ))
+            from app.core.web_activity import DEFAULT_CATALOG as _CATALOG_SEED
+            for _hp, _aid, _an, _vendor, _cat in _CATALOG_SEED:
+                await conn.execute(
+                    text(
+                        "INSERT INTO app_catalog "
+                        "(host_pattern, app_id, app_name, vendor, category, is_builtin, priority) "
+                        "VALUES (:hp, :aid, :an, :v, :c, TRUE, :p) "
+                        "ON CONFLICT (host_pattern) DO NOTHING"
+                    ),
+                    {"hp": _hp, "aid": _aid, "an": _an, "v": _vendor, "c": _cat,
+                     "p": 10 if "/" in _hp else 0},
+                )
+
         # Seed default admin if no users exist yet.
         # Uses ON CONFLICT to handle race conditions with multiple workers.
         async with _db.postgres_session_factory() as session:

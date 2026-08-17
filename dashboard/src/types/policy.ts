@@ -23,6 +23,7 @@ export type PolicyType =
   | 'email_send_prevention'
   | 'print_content_prevention'
   | 'network_exfiltration_prevention'
+  | 'web_activity_control'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log' | 'block'
@@ -165,6 +166,65 @@ export interface PrintContentConfig extends FileIdentityDenylist {
   levels: string[]
 }
 
+// ── Granular web activity control ────────────────────────────────────────────
+//
+// The requirement this models is per-ACTIVITY control, not per-destination
+// control: "block Attach and Send on webmail, but allow Download" is a sentence
+// the rest of the policy vocabulary cannot express, because every other type
+// carries one action for the whole policy.
+//
+// Hence a matrix. Each cell is one category crossed with one activity, and each
+// cell gets its own action — which is also why this config is read directly by
+// the server (_match_web_activity) rather than transformed into conditions:
+// faithfully expressing a filled grid as rules would take up to 24 policies.
+export type WebActivityCategory = 'webmail' | 'cloud_storage' | 'collaboration' | 'genai'
+export type WebActivity = 'upload' | 'download' | 'attach' | 'send' | 'post' | 'ai_response'
+export type WebActivityAction = 'allow' | 'log' | 'alert' | 'block'
+
+export interface WebActivityCell {
+  action: WebActivityAction
+  // Per-cell sensitivity threshold, overriding the policy-wide minLevel. Lets
+  // "alert on anything posted to GenAI, but block only Restricted" be one policy.
+  minLevel?: string
+}
+
+export interface WebActivityOverride {
+  // Catalog app id ('chatgpt', 'copilot'). Omit or '*' to apply to every app in
+  // the scoped category.
+  app_id?: string
+  category?: WebActivityCategory
+  activity?: WebActivity
+  action: WebActivityAction
+  minLevel?: string
+}
+
+export interface WebActivityControlConfig {
+  // enforce = block what the matrix says to block; audit = log what WOULD have
+  // been blocked, and block nothing. Rolling a matrix out in audit first is the
+  // difference between discovering it is too aggressive from a report and
+  // discovering it from the helpdesk queue.
+  mode: 'enforce' | 'audit'
+  // Policy-wide sensitivity threshold. A cell only fires once content
+  // classifies at this level or above; leave empty to act on any content, which
+  // is how "no GenAI at all" is written.
+  minLevel?: string
+  // category -> activity -> action. A cell that is absent (or 'allow') is not
+  // ruled by this policy, which is NOT the same as being denied by it — another
+  // policy remains free to rule it.
+  matrix: Partial<Record<WebActivityCategory, Partial<Record<WebActivity, WebActivityAction | WebActivityCell>>>>
+  // Per-app exceptions, which beat the category row. This is what makes "GenAI
+  // is blocked, except the Copilot we pay for" one policy instead of two.
+  appOverrides?: WebActivityOverride[]
+  // Content nobody could read is not content nobody needs to worry about: a
+  // password-protected archive classifies Public, so without this the documented
+  // way past a threshold is to zip the file with a password.
+  blockUninspectable?: boolean
+  // Derived, not authored: the strongest action anywhere in the matrix, stamped
+  // by the form so the policy list's action badge reflects what this policy
+  // actually does. Enforcement never reads it — see _match_web_activity.
+  action?: WebActivityAction
+}
+
 export interface USBTransferConfig extends FileIdentityDenylist {
   monitoredPaths: string[]
   action: USBTransferAction
@@ -259,6 +319,7 @@ export type PolicyConfig =
   | MessagingAppControlConfig
   | PrinterControlConfig
   | PrintContentConfig
+  | WebActivityControlConfig
   | USBTransferConfig
   | GoogleDriveLocalConfig
   | GoogleDriveCloudConfig

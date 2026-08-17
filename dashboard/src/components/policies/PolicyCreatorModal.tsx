@@ -14,6 +14,7 @@ import {
   NetworkShareControlConfig,
   MessagingAppControlConfig,
   PrintContentConfig,
+  WebActivityControlConfig,
   USBTransferConfig,
   FileTransferConfig,
   NetworkPreventionConfig
@@ -32,6 +33,7 @@ import WirelessTransferControlForm from './WirelessTransferControlForm'
 import NetworkShareControlForm from './NetworkShareControlForm'
 import MessagingAppControlForm from './MessagingAppControlForm'
 import PrintContentForm from './PrintContentForm'
+import WebActivityControlForm from './WebActivityControlForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
@@ -95,7 +97,7 @@ const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in PO
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | WebActivityControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
@@ -194,6 +196,19 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
     case 'print_content_prevention':
       return { mode: 'enforce', levels: ['Confidential', 'Restricted'] } as PrintContentConfig
 
+    // Deliberately rules NOTHING. Every other type ships defaults that do
+    // something; this one ships an empty matrix, because an operator who saves
+    // it unchanged must not discover afterwards that they have started blocking
+    // their own company's email. Enforcement here is opt-in, cell by cell.
+    case 'web_activity_control':
+      return {
+        mode: 'enforce',
+        minLevel: 'Confidential',
+        matrix: {},
+        appOverrides: [],
+        blockUninspectable: true,
+      } as WebActivityControlConfig
+
     default:
       return {}
   }
@@ -250,7 +265,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | WebActivityControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -713,6 +728,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'print_content_prevention' && (
                   <PrintContentForm
                     config={config as PrintContentConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'web_activity_control' && (
+                  <WebActivityControlForm
+                    config={config as WebActivityControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

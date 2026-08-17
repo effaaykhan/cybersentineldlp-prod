@@ -21,6 +21,7 @@ from app.core.security import (
 from app.core.redaction import may_view_sensitive, redact_event, redact_events
 from app.core.database import get_mongodb, get_db
 from app.core.domains import domain_for_event_type
+from app.core import web_activity as _WA
 from app.services.domain_service import build_domain_mongo_filter
 from app.services.event_processor import get_event_processor
 from app.integrations.siem.integration_service import siem_service
@@ -215,6 +216,26 @@ class EventCreate(BaseModel):
     destination_port: Optional[str] = Field(None, description="Remote port (string — agent may send '' when unknown)")
     direction: Optional[str] = Field(None, description="Traffic direction (outbound/inbound)")
     bytes_transferred: Optional[str] = Field(None, description="Bytes moved (decimal string)")
+    # ── Web activity context (browser extension) ─────────────────────────────
+    # WHAT the user was doing and WHAT KIND of app they were doing it in. See
+    # app/core/web_activity.py. Without these two fields a GenAI prompt and a
+    # Google Drive upload are the same "cloud_upload" row on the dashboard, and
+    # a requirement written per-activity cannot be reported on at all.
+    activity: Optional[str] = Field(None, description="upload|download|attach|send|post|ai_response")
+    app_category: Optional[str] = Field(None, description="webmail|cloud_storage|collaboration|genai")
+    app_id: Optional[str] = Field(None, description="Catalog app id, e.g. 'chatgpt'")
+    app_name: Optional[str] = Field(None, description="Human app name, e.g. 'ChatGPT'")
+    page_url: Optional[str] = Field(None, description="Page the activity happened on")
+    page_host: Optional[str] = Field(None, description="Hostname of that page")
+    # The typed/pasted body itself — the GenAI prompt, the email body, the chat
+    # message. Stored so an analyst investigating "an Aadhaar number went to
+    # ChatGPT" can see what was actually asked; `content` already carries the
+    # same convention for clipboard events and inherits its retention and
+    # redaction handling.
+    text_content: Optional[str] = Field(None, description="Typed/pasted body text of the activity")
+    text_truncated: Optional[bool] = Field(None, description="True when text_content was capped")
+    attachment_names: Optional[List[str]] = Field(None, description="Attachment filenames on this activity")
+    recipients: Optional[str] = Field(None, description="Recipients / destination of a send")
 
 
 class DLPEvent(BaseModel):
@@ -603,6 +624,37 @@ async def create_event(
     if network_event_fields:
         event_doc.update(network_event_fields)
         event_doc["network"] = {**event_doc.get("network", {}), **network_event_fields}
+
+    # Web activity context (browser extension). Same pattern as the two blocks
+    # above — flat for the event-detail UI (DLPEvent has extra="allow") and
+    # mirrored under "web" for the SIEM formatter and title builder. Values are
+    # normalised so a slightly-off agent build ("ai"/"generate") still lands on
+    # the canonical row instead of creating a parallel vocabulary in the event
+    # store that no dashboard filter will ever match.
+    web_event_fields = {
+        "activity": _WA.normalize_activity(event.activity) or (event.activity or None),
+        "app_category": _WA.normalize_category(event.app_category) or (event.app_category or None),
+        "app_id": event.app_id,
+        "app_name": event.app_name,
+        "page_url": event.page_url,
+        "page_host": event.page_host,
+        "recipients": event.recipients,
+    }
+    web_event_fields = {k: v for k, v in web_event_fields.items() if v not in (None, "")}
+    if web_event_fields:
+        event_doc.update(web_event_fields)
+        event_doc["web"] = {**event_doc.get("web", {}), **web_event_fields}
+    if event.attachment_names:
+        event_doc["attachment_names"] = event.attachment_names
+    # The prompt / body text. Written to `content` as well when the agent did
+    # not populate it, so every existing consumer that renders captured content
+    # (event detail, incident view, SIEM payload) shows it without changes.
+    if event.text_content:
+        event_doc["text_content"] = event.text_content
+        if not event_doc.get("content"):
+            event_doc["content"] = event.text_content
+    if event.text_truncated is not None:
+        event_doc["text_truncated"] = event.text_truncated
 
     # Hydrate agent-asserted matched policies. The agent ran the policy
     # bundle against the content and is authoritative on which monitoring

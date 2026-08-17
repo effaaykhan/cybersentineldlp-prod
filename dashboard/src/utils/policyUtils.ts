@@ -13,7 +13,7 @@ import {
   USBTransferConfig,
   FileTransferConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, UploadCloud, Mail, Network, MessageSquare } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, UploadCloud, Mail, Network, MessageSquare, Globe } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -40,6 +40,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Mail
     case 'network_exfiltration_prevention':
       return Network
+    case 'web_activity_control':
+      return Globe
     case 'messaging_app_control':
       return MessageSquare
     default:
@@ -72,6 +74,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Email Send Prevention'
     case 'network_exfiltration_prevention':
       return 'Network Prevention'
+    case 'web_activity_control':
+      return 'Web Activity Control'
     case 'messaging_app_control':
       return 'Messaging App Control'
     default:
@@ -199,6 +203,32 @@ export const formatPolicyConfig = (policy: Policy): string => {
           ? `${dts} categor${dts === 1 ? 'y' : 'ies'}${custom ? ` + ${custom} custom` : ''}`
           : 'Any file'
         return `Channels: ${methods} | Detect: ${detect} | Action: ${effAction}`
+      }
+
+      case 'web_activity_control': {
+        const c = config as any
+        const matrix = c.matrix || {}
+        // Summarised by what it actually STOPS, not by how many cells are
+        // filled. A matrix of twenty "log" cells and one "block" is, from an
+        // operator's point of view, one blocking rule — and that is the number
+        // they need to see in a list of policies.
+        const ruled: string[] = []
+        let blocks = 0
+        for (const [category, row] of Object.entries(matrix)) {
+          const acts = Object.entries((row as any) || {})
+            .map(([activity, cell]) => [activity, typeof cell === 'object' ? (cell as any).action : cell])
+            .filter(([, action]) => action && action !== 'allow')
+          if (!acts.length) continue
+          blocks += acts.filter(([, action]) => action === 'block').length
+          ruled.push(`${category} (${acts.length})`)
+        }
+        const overrides = (c.appOverrides || []).length
+        const scope = ruled.length ? ruled.join(', ') : 'nothing ruled yet'
+        return (
+          `Activities: ${scope} | ${blocks} blocking | ` +
+          `${c.minLevel ? `${c.minLevel}+` : 'any content'} | Mode: ${c.mode || 'enforce'}` +
+          (overrides ? ` | ${overrides} app exception(s)` : '')
+        )
       }
 
       case 'google_drive_local_monitoring': {

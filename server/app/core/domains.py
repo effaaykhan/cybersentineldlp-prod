@@ -66,6 +66,10 @@ POLICY_TYPE_DOMAIN = {
     # Print channel content control — block/alert on printing sensitive documents.
     # Enforced agent-side via the real-time evaluate endpoint, like USB file transfer.
     "print_content_prevention": PolicyDomain.DATA_PROTECTION,
+    # Granular web activity control — webmail / cloud / collaboration / GenAI
+    # crossed with upload / download / attach / send / post / ai_response.
+    # Enforced by the browser extension via the real-time evaluate endpoint.
+    "web_activity_control": PolicyDomain.DATA_PROTECTION,
     # Access Control — device authorization
     "usb_device_control": PolicyDomain.ACCESS_CONTROL,
     "printer_control": PolicyDomain.ACCESS_CONTROL,
@@ -98,6 +102,12 @@ EVENT_TYPE_DOMAIN = {
     # _attempt / _prevented all carry event_type "email").
     "email": PolicyDomain.DATA_PROTECTION,
     "cloud_upload": PolicyDomain.DATA_PROTECTION,
+    # Browser-observed web activity. One event_type per app category (see
+    # core/web_activity.CATEGORY_EVENT_TYPE) so per-type reporting keeps
+    # working; "web_activity" is the umbrella when the category is unknown.
+    "genai": PolicyDomain.DATA_PROTECTION,
+    "collaboration": PolicyDomain.DATA_PROTECTION,
+    "web_activity": PolicyDomain.DATA_PROTECTION,
     "google_drive": PolicyDomain.DATA_PROTECTION,
     "onedrive": PolicyDomain.DATA_PROTECTION,
     "classification": PolicyDomain.DATA_PROTECTION,

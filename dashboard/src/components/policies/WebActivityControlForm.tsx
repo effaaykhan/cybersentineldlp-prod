@@ -1,0 +1,459 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Globe, ShieldCheck, ShieldAlert, Plus, X, Sparkles } from 'lucide-react'
+import {
+  WebActivityControlConfig,
+  WebActivityCategory,
+  WebActivity,
+  WebActivityAction,
+  WebActivityCell,
+  WebActivityOverride,
+} from '@/types/policy'
+import apiClient from '@/lib/api'
+
+interface Props {
+  config: WebActivityControlConfig
+  onChange: (config: WebActivityControlConfig) => void
+}
+
+const CATEGORIES: Array<{ value: WebActivityCategory; label: string; hint: string }> = [
+  { value: 'webmail', label: 'Webmail', hint: 'Gmail, Outlook Web, Yahoo, Proton, Zoho' },
+  { value: 'cloud_storage', label: 'File sharing / Cloud storage', hint: 'Drive, OneDrive, Dropbox, Box, WeTransfer' },
+  { value: 'collaboration', label: 'Collaboration', hint: 'Slack, Teams, Discord, WhatsApp Web, Notion' },
+  { value: 'genai', label: 'Generative AI', hint: 'ChatGPT, Claude, Gemini, Copilot, Perplexity' },
+]
+
+const ACTIVITIES: Array<{ value: WebActivity; label: string }> = [
+  { value: 'upload', label: 'Upload' },
+  { value: 'download', label: 'Download' },
+  { value: 'attach', label: 'Attach' },
+  { value: 'send', label: 'Send' },
+  { value: 'post', label: 'Post / Generate' },
+  { value: 'ai_response', label: 'AI Response' },
+]
+
+// Which activities are meaningful for which category. Mirrors
+// server/app/core/web_activity.py CATEGORY_ACTIVITIES — a cell outside this map
+// is ignored server-side, so offering it would be offering a control that
+// silently does nothing.
+const CATEGORY_ACTIVITIES: Record<WebActivityCategory, WebActivity[]> = {
+  webmail: ['upload', 'download', 'attach', 'send'],
+  cloud_storage: ['upload', 'download', 'post'],
+  collaboration: ['upload', 'download', 'post'],
+  genai: ['upload', 'download', 'attach', 'post', 'ai_response'],
+}
+
+const ACTIONS: Array<{ value: WebActivityAction; label: string; cls: string }> = [
+  { value: 'allow', label: 'Allow', cls: 'text-cs-ink-2' },
+  { value: 'log', label: 'Log', cls: 'text-cs-indigo' },
+  { value: 'alert', label: 'Alert', cls: 'text-cs-med' },
+  { value: 'block', label: 'Block', cls: 'text-cs-crit' },
+]
+
+const LEVELS = ['', 'Internal', 'Confidential', 'Restricted']
+
+function cellAction(cell: WebActivityAction | WebActivityCell | undefined): WebActivityAction {
+  if (!cell) return 'allow'
+  return typeof cell === 'object' ? cell.action : cell
+}
+
+function cellMinLevel(cell: WebActivityAction | WebActivityCell | undefined): string {
+  return cell && typeof cell === 'object' ? cell.minLevel || '' : ''
+}
+
+const ACTION_RANK: Record<WebActivityAction, number> = { allow: 0, log: 1, alert: 2, block: 3 }
+
+/**
+ * Stamp the policy's headline action onto the config.
+ *
+ * The policy list shows one action badge per policy, resolved from
+ * `config.action` first and the backend `actions` dict second. This type's
+ * backend actions are deliberately always `{log}` — the matrix is the decider,
+ * and emitting `block` there made the generic evaluator block activities the
+ * matrix only wanted logged. That fix left the badge reading "log" for a policy
+ * that blocks GenAI outright, which is worse than useless in a list an operator
+ * scans to see what is enforced. Deriving it here keeps the badge honest without
+ * putting a second decider back into the pipeline.
+ */
+function withDerivedAction(next: WebActivityControlConfig): WebActivityControlConfig {
+  const seen: WebActivityAction[] = ['allow']
+  for (const row of Object.values(next.matrix || {})) {
+    for (const cell of Object.values(row || {})) seen.push(cellAction(cell))
+  }
+  for (const o of next.appOverrides || []) seen.push(o.action)
+
+  let strongest = seen.reduce((best, a) => (ACTION_RANK[a] > ACTION_RANK[best] ? a : best))
+  // Audit never advertises block, because it never blocks.
+  if ((next.mode || 'enforce') === 'audit' && strongest === 'block') strongest = 'alert'
+  return { ...next, action: strongest === 'allow' ? 'log' : strongest }
+}
+
+export default function WebActivityControlForm({ config, onChange: rawOnChange }: Props) {
+  const onChange = (next: WebActivityControlConfig) => rawOnChange(withDerivedAction(next))
+
+  const mode = config.mode || 'enforce'
+  const matrix = config.matrix || {}
+  const overrides = config.appOverrides || []
+  const blockUninspectable = config.blockUninspectable !== false
+
+  // The catalog drives the per-app exception picker. Fetched rather than
+  // hardcoded for the same reason the catalog is a table at all: an operator who
+  // adds a GenAI vendor this morning must be able to write an exception for it
+  // this afternoon, without a dashboard release.
+  const [apps, setApps] = useState<Array<{ app_id: string; app_name: string; category: string }>>([])
+  const [catalogError, setCatalogError] = useState<string | null>(null)
+
+  useEffect(() => {
+    apiClient
+      .get('/app-catalog/', { params: { include_disabled: false } })
+      .then(({ data }) => {
+        const seen = new Set<string>()
+        const unique: Array<{ app_id: string; app_name: string; category: string }> = []
+        for (const e of data.entries || []) {
+          if (seen.has(e.app_id)) continue
+          seen.add(e.app_id)
+          unique.push({ app_id: e.app_id, app_name: e.app_name, category: e.category })
+        }
+        unique.sort((a, b) => a.app_name.localeCompare(b.app_name))
+        setApps(unique)
+      })
+      .catch(() => setCatalogError('Could not load the app catalog — exceptions must be typed by hand.'))
+  }, [])
+
+  const setCell = (category: WebActivityCategory, activity: WebActivity, action: WebActivityAction) => {
+    const row = { ...(matrix[category] || {}) }
+    const existingMin = cellMinLevel(row[activity])
+    if (action === 'allow') {
+      delete row[activity]
+    } else if (existingMin) {
+      row[activity] = { action, minLevel: existingMin }
+    } else {
+      row[activity] = action
+    }
+    const next = { ...matrix, [category]: row }
+    if (Object.keys(row).length === 0) delete next[category]
+    onChange({ ...config, matrix: next })
+  }
+
+  const setRow = (category: WebActivityCategory, action: WebActivityAction) => {
+    const row: Record<string, WebActivityAction> = {}
+    if (action !== 'allow') {
+      for (const a of CATEGORY_ACTIVITIES[category]) row[a] = action
+    }
+    const next = { ...matrix, [category]: row }
+    if (Object.keys(row).length === 0) delete next[category]
+    onChange({ ...config, matrix: next })
+  }
+
+  const addOverride = () => {
+    onChange({
+      ...config,
+      appOverrides: [...overrides, { app_id: '', action: 'allow' } as WebActivityOverride],
+    })
+  }
+
+  const updateOverride = (index: number, patch: Partial<WebActivityOverride>) => {
+    const next = overrides.map((o, i) => (i === index ? { ...o, ...patch } : o))
+    onChange({ ...config, appOverrides: next })
+  }
+
+  const removeOverride = (index: number) => {
+    onChange({ ...config, appOverrides: overrides.filter((_, i) => i !== index) })
+  }
+
+  const ruledCells = Object.values(matrix).reduce(
+    (sum, row) => sum + Object.values(row || {}).filter((c) => cellAction(c) !== 'allow').length,
+    0,
+  )
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-cs-card border border-cs-hair bg-cs-panel p-4 flex items-start gap-3">
+        <Globe className="h-5 w-5 text-cs-indigo shrink-0 mt-0.5" />
+        <p className="text-sm text-cs-ink-2">
+          Controls what users may <strong>do</strong> in web applications, not just which sites they can
+          reach. Enforced by the CyberSentinel browser extension, which inspects content before it
+          leaves — including text inside attached images and PDFs — and asks this server for a verdict.
+          <br />
+          <span className="text-cs-ink-3">
+            An activity left on <strong>Allow</strong> is not intercepted at all: the extension installs
+            no hooks for it and the user notices nothing.
+          </span>
+        </p>
+      </div>
+
+      {/* Matrix */}
+      <div>
+        <label className="text-sm font-semibold text-cs-ink mb-2 block">
+          Activity matrix
+          <span className="ml-2 text-xs font-normal text-cs-ink-2">
+            {ruledCells === 0 ? 'nothing is ruled yet' : `${ruledCells} activities ruled`}
+          </span>
+        </label>
+
+        <div className="overflow-x-auto rounded-cs-card border border-cs-hair">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-cs-panel-2 border-b border-cs-hair">
+                <th className="text-left px-3 py-2 font-semibold text-cs-ink">Category</th>
+                {ACTIVITIES.map((a) => (
+                  <th key={a.value} className="px-2 py-2 font-semibold text-cs-ink text-center whitespace-nowrap">
+                    {a.label}
+                  </th>
+                ))}
+                <th className="px-2 py-2 font-semibold text-cs-ink text-center">All</th>
+              </tr>
+            </thead>
+            <tbody>
+              {CATEGORIES.map((cat) => {
+                const row = matrix[cat.value] || {}
+                return (
+                  <tr key={cat.value} className="border-b border-cs-hair last:border-0">
+                    <td className="px-3 py-2 align-top">
+                      <div className="font-medium text-cs-ink flex items-center gap-1.5">
+                        {cat.value === 'genai' && <Sparkles className="h-3.5 w-3.5 text-cs-indigo" />}
+                        {cat.label}
+                      </div>
+                      <div className="text-[11px] text-cs-ink-3 mt-0.5">{cat.hint}</div>
+                    </td>
+
+                    {ACTIVITIES.map((act) => {
+                      const applicable = CATEGORY_ACTIVITIES[cat.value].includes(act.value)
+                      if (!applicable) {
+                        return (
+                          <td key={act.value} className="px-2 py-2 text-center text-cs-ink-3">
+                            <span title={`${act.label} does not apply to ${cat.label}`}>—</span>
+                          </td>
+                        )
+                      }
+                      const current = cellAction(row[act.value])
+                      return (
+                        <td key={act.value} className="px-2 py-2 text-center">
+                          <select
+                            value={current}
+                            onChange={(e) => setCell(cat.value, act.value, e.target.value as WebActivityAction)}
+                            className={`bg-cs-panel border border-cs-hair rounded-cs-sm px-2 py-1 text-xs font-medium ${
+                              ACTIONS.find((a) => a.value === current)?.cls || ''
+                            }`}
+                          >
+                            {ACTIONS.map((a) => (
+                              <option key={a.value} value={a.value}>
+                                {a.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      )
+                    })}
+
+                    <td className="px-2 py-2 text-center">
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          if (e.target.value) setRow(cat.value, e.target.value as WebActivityAction)
+                        }}
+                        className="bg-cs-panel border border-cs-hair rounded-cs-sm px-2 py-1 text-xs text-cs-ink-2"
+                      >
+                        <option value="">Set…</option>
+                        {ACTIONS.map((a) => (
+                          <option key={a.value} value={a.value}>
+                            {a.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="text-[11px] text-cs-ink-3 mt-1.5">
+          <strong>AI Response</strong> is recorded, never blocked — by the time a reply exists the prompt
+          has already been sent, and the answer streams in with no single moment to intercept.
+        </p>
+      </div>
+
+      {/* Threshold */}
+      <div>
+        <label className="text-sm font-semibold text-cs-ink mb-2 block">Act on content classified</label>
+        <select
+          value={config.minLevel || ''}
+          onChange={(e) => onChange({ ...config, minLevel: e.target.value || undefined })}
+          className="bg-cs-panel border border-cs-hair rounded-cs-sm px-3 py-2 text-sm text-cs-ink w-full sm:w-auto"
+        >
+          {LEVELS.map((l) => (
+            <option key={l} value={l}>
+              {l ? `${l} and above` : 'Any content (no threshold)'}
+            </option>
+          ))}
+        </select>
+        <p className="text-[11px] text-cs-ink-3 mt-1">
+          With no threshold, a ruled activity is acted on regardless of what it contains — which is how
+          &ldquo;no Generative AI at all&rdquo; is written. With one, ordinary work passes and only
+          sensitive content is stopped.
+        </p>
+      </div>
+
+      {/* Per-app exceptions */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-sm font-semibold text-cs-ink">Per-app exceptions</label>
+          <button
+            type="button"
+            onClick={addOverride}
+            className="flex items-center gap-1 text-xs text-cs-indigo hover:underline"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add exception
+          </button>
+        </div>
+
+        {catalogError && <p className="text-xs text-cs-med mb-2">{catalogError}</p>}
+
+        {overrides.length === 0 ? (
+          <p className="text-xs text-cs-ink-3">
+            None. Exceptions beat the matrix row, so this is where &ldquo;Generative AI is blocked,
+            except the Copilot we pay for&rdquo; goes.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {overrides.map((o, i) => (
+              <div
+                key={i}
+                className="flex flex-wrap items-center gap-2 rounded-cs-sm border border-cs-hair bg-cs-panel p-2"
+              >
+                <select
+                  value={o.app_id || ''}
+                  onChange={(e) => updateOverride(i, { app_id: e.target.value })}
+                  className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm px-2 py-1 text-xs text-cs-ink"
+                >
+                  <option value="">Any app in…</option>
+                  {apps.map((a) => (
+                    <option key={a.app_id} value={a.app_id}>
+                      {a.app_name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={o.category || ''}
+                  onChange={(e) =>
+                    updateOverride(i, { category: (e.target.value || undefined) as WebActivityCategory })
+                  }
+                  className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm px-2 py-1 text-xs text-cs-ink"
+                >
+                  <option value="">any category</option>
+                  {CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={o.activity || ''}
+                  onChange={(e) =>
+                    updateOverride(i, { activity: (e.target.value || undefined) as WebActivity })
+                  }
+                  className="bg-cs-panel-2 border border-cs-hair rounded-cs-sm px-2 py-1 text-xs text-cs-ink"
+                >
+                  <option value="">any activity</option>
+                  {ACTIVITIES.map((a) => (
+                    <option key={a.value} value={a.value}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+
+                <span className="text-xs text-cs-ink-2">→</span>
+
+                <select
+                  value={o.action}
+                  onChange={(e) => updateOverride(i, { action: e.target.value as WebActivityAction })}
+                  className={`bg-cs-panel-2 border border-cs-hair rounded-cs-sm px-2 py-1 text-xs font-medium ${
+                    ACTIONS.find((a) => a.value === o.action)?.cls || ''
+                  }`}
+                >
+                  {ACTIONS.map((a) => (
+                    <option key={a.value} value={a.value}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => removeOverride(i)}
+                  className="ml-auto text-cs-ink-3 hover:text-cs-crit"
+                  title="Remove"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Uninspectable */}
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={blockUninspectable}
+          onChange={(e) => onChange({ ...config, blockUninspectable: e.target.checked })}
+          className="mt-0.5"
+        />
+        <span className="text-sm text-cs-ink">
+          Treat content that cannot be inspected as meeting the threshold
+          <span className="block text-[11px] text-cs-ink-3">
+            Password-protected archives and unreadable documents classify as Public, so without this the
+            simplest way past a threshold rule is to zip the file with a password.
+          </span>
+        </span>
+      </label>
+
+      {/* Mode */}
+      <div>
+        <label className="text-sm font-semibold text-cs-ink mb-2 block">Enforcement mode</label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => onChange({ ...config, mode: 'enforce' })}
+            className={`text-left rounded-cs-card border p-4 transition ${
+              mode === 'enforce'
+                ? 'border-[color-mix(in_srgb,var(--cs-indigo)_45%,var(--cs-panel))] bg-cs-indigo-faint'
+                : 'border-cs-hair bg-cs-panel hover:border-cs-hair-2'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold text-cs-ink">
+              <ShieldCheck className="h-4 w-4 text-cs-emerald" /> Enforce
+            </div>
+            <p className="text-xs text-cs-ink-2 mt-1">
+              Stop the activities set to Block. The user sees an on-page notice explaining why.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onChange({ ...config, mode: 'audit' })}
+            className={`text-left rounded-cs-card border p-4 transition ${
+              mode === 'audit'
+                ? 'border-[color-mix(in_srgb,var(--cs-indigo)_45%,var(--cs-panel))] bg-cs-indigo-faint'
+                : 'border-cs-hair bg-cs-panel hover:border-cs-hair-2'
+            }`}
+          >
+            <div className="flex items-center gap-2 font-semibold text-cs-ink">
+              <ShieldAlert className="h-4 w-4 text-cs-med" /> Audit
+            </div>
+            <p className="text-xs text-cs-ink-2 mt-1">
+              Record what <em>would</em> have been blocked without stopping anyone. Use this first — a
+              matrix that is too aggressive is much better discovered from a report.
+            </p>
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

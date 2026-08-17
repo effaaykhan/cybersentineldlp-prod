@@ -19,6 +19,7 @@ from app.services.classification_engine import ClassificationEngine
 from app.policies.agent_policy_transformer import AgentPolicyTransformer
 from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 from app.core.cache import get_cache, CacheService
+from app.core import web_activity as _WA
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -1102,6 +1103,32 @@ class PolicyEvaluationRequest(BaseModel):
     destination_ip: Optional[str] = Field(None, description="Remote IP address")
     destination_port: Optional[int] = Field(None, description="Remote port")
     direction: Optional[str] = Field(None, description="Traffic direction: outbound|inbound")
+    # ── Web activity context ─────────────────────────────────────────────────
+    # Sent by the browser extension when it intercepts an activity in a
+    # catalogued web app. These are the two dimensions the product had no
+    # representation for: WHAT KIND of app the destination is, and WHAT THE USER
+    # IS DOING. Without them every interception was "a file upload", so a
+    # requirement written as "block Attach & Send on webmail but allow Download"
+    # could not be expressed at all.
+    #
+    # All optional: an agent that knows nothing about web activity sends none of
+    # them and evaluates exactly as before.
+    activity: Optional[str] = Field(
+        None, description="upload | download | attach | send | post | ai_response"
+    )
+    app_category: Optional[str] = Field(
+        None, description="webmail | cloud_storage | collaboration | genai"
+    )
+    app_id: Optional[str] = Field(None, description="Catalog app id, e.g. 'chatgpt'")
+    app_name: Optional[str] = Field(None, description="Human app name, e.g. 'ChatGPT'")
+    # The typed/pasted prose itself — a GenAI prompt, an email body, a chat
+    # message. Distinct from file_content, which is an *attachment's* text: a
+    # single Send can carry both, and a policy that blocks the prompt must not
+    # be confused by an innocent attachment (or vice versa). Classified together
+    # but reported separately.
+    text_content: Optional[str] = Field(
+        None, description="Typed/pasted body text (prompt, email body, chat message)"
+    )
 
 
 class ClassificationDetails(BaseModel):
@@ -1807,6 +1834,126 @@ async def wireless_policy(
     )
 
 
+class WebActivityPolicyResponse(BaseModel):
+    """The category x activity matrix the browser extension enforces.
+
+    Pulled once at browser start and refreshed periodically. It serves three
+    purposes, and only the first is obvious:
+
+      1. It tells the extension WHICH activities to intercept at all. Holding
+         every submit gesture on every catalogued app while a server round-trip
+         completes would make the browser feel broken; an activity whose cell is
+         "allow" is never held.
+      2. It is the OFFLINE FALLBACK. Decisions are server-authoritative, so when
+         the server is unreachable the extension has no verdict — without a
+         cached matrix its only options are "block everything" or "allow
+         everything", and both are wrong. With it, the last known policy is
+         applied to whatever the bundled local scanner detected.
+      3. It carries ``mode``, so an operator can roll a matrix out in audit and
+         watch what it would have stopped before it starts stopping anything.
+    """
+    enforced: bool
+    mode: str                                  # enforce | audit | off
+    matrix: Dict[str, Dict[str, Any]]
+    app_overrides: List[Dict[str, Any]]
+    min_level: Optional[str]
+    block_uninspectable: bool
+    policy_names: List[str]
+    generated_at: datetime
+
+
+@router.get("/{agent_id}/web-activity-policy", response_model=WebActivityPolicyResponse)
+async def web_activity_policy(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Effective web-activity matrix for this endpoint.
+
+    Several active policies are merged cell by cell, strongest action wins —
+    the same precedence _match_web_activity applies at decision time, so what
+    the extension caches and what the server would decide cannot disagree.
+    Requires X-Agent-Key (backward-compatible: no key -> allowed).
+    """
+    await verify_agent_key(http_request)
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    rows = (await db.execute(
+        _select(Policy).where(
+            Policy.type == _WEB_ACTIVITY_TYPE,
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().all()
+
+    applicable = [
+        p for p in rows
+        if not (getattr(p, "agent_ids", None) or []) or agent_id in (p.agent_ids or [])
+    ]
+
+    if not applicable:
+        return WebActivityPolicyResponse(
+            enforced=False, mode="off", matrix={}, app_overrides=[],
+            min_level=None, block_uninspectable=True, policy_names=[],
+            generated_at=datetime.now(timezone.utc),
+        )
+
+    matrix: Dict[str, Dict[str, Any]] = {}
+    overrides: List[Dict[str, Any]] = []
+    names: List[str] = []
+    # "enforce" unless EVERY contributing policy is audit — one enforcing policy
+    # means enforcement is on for the cells it defines.
+    modes = set()
+    min_level = None
+    block_uninspectable = False
+
+    for p in applicable:
+        cfg = getattr(p, "config", None) or {}
+        names.append(getattr(p, "name", "web activity control"))
+        modes.add(str(cfg.get("mode") or "enforce").strip().lower())
+        if cfg.get("blockUninspectable", True):
+            block_uninspectable = True
+        if cfg.get("minLevel") and min_level is None:
+            min_level = cfg.get("minLevel")
+
+        for category, row in (cfg.get("matrix") or {}).items():
+            cat = _WA.normalize_category(category)
+            if not cat or not isinstance(row, dict):
+                continue
+            for activity, cell in row.items():
+                act = _WA.normalize_activity(activity)
+                if not act or not _WA.is_valid_pair(cat, act):
+                    continue
+                if isinstance(cell, dict):
+                    action = _WA.normalize_action(cell.get("action"), default=_WA.ACTION_LOG)
+                    cell_min = cell.get("minLevel") or cfg.get("minLevel")
+                else:
+                    action = _WA.normalize_action(cell, default=_WA.ACTION_LOG)
+                    cell_min = cfg.get("minLevel")
+                existing = matrix.setdefault(cat, {}).get(act)
+                if existing and _WA.ACTION_RANK.get(existing.get("action"), 0) >= _WA.ACTION_RANK.get(action, 0):
+                    continue
+                matrix[cat][act] = {"action": action, "minLevel": cell_min}
+
+        for entry in (cfg.get("appOverrides") or []):
+            if isinstance(entry, dict):
+                overrides.append(entry)
+
+    mode = "audit" if modes == {"audit"} else "enforce"
+
+    return WebActivityPolicyResponse(
+        enforced=True,
+        mode=mode,
+        matrix=matrix,
+        app_overrides=overrides,
+        min_level=min_level,
+        block_uninspectable=block_uninspectable,
+        policy_names=names,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 def _file_extension(file_name: Optional[str]) -> Optional[str]:
     """Lowercase file extension incl. the dot (e.g. '.dwg'), or None."""
     if not file_name:
@@ -1878,6 +2025,208 @@ async def _match_file_identity(
         return (False, False, "")
     except Exception as e:  # never let matching break evaluation
         logger.warning("File-identity match failed (non-fatal)", error=str(e))
+        return (False, False, "")
+
+
+# Policy type carrying the category x activity matrix. See
+# app/core/web_activity.py for the vocabulary and the dashboard's
+# WebActivityMatrix editor for the shape of ``config``.
+_WEB_ACTIVITY_TYPE = "web_activity_control"
+
+_LEVEL_RANK = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
+
+
+def _level_rank(level: Optional[str]) -> int:
+    return _LEVEL_RANK.get(str(level or "").strip().lower(), 0)
+
+
+def _matrix_cell(config: Dict[str, Any], category: str, activity: str):
+    """The (action, min_level) a policy defines for one category/activity cell.
+
+    A cell may be written as a bare action string ("block") or as an object
+    ({"action": "block", "minLevel": "Restricted"}) when one activity needs a
+    different threshold from the rest of the policy. Returns (None, None) when
+    the policy says nothing about this cell — which is NOT the same as "allow":
+    a policy that doesn't mention GenAI must leave other policies free to.
+    """
+    matrix = config.get("matrix") or {}
+    row = matrix.get(category)
+    if not isinstance(row, dict):
+        return (None, None)
+    cell = row.get(activity)
+    if cell is None:
+        return (None, None)
+    if isinstance(cell, dict):
+        action = _WA.normalize_action(cell.get("action"), default=_WA.ACTION_LOG)
+        return (action, cell.get("minLevel") or config.get("minLevel"))
+    return (_WA.normalize_action(cell, default=_WA.ACTION_LOG), config.get("minLevel"))
+
+
+def _app_override(config: Dict[str, Any], category: str, activity: str, app_id: Optional[str]):
+    """Per-app exception, which beats the category row.
+
+    This is what makes "GenAI is blocked, except the Copilot we pay for"
+    expressible without splitting the estate across two policies. An entry may
+    scope itself by app_id, by category, by activity, or any combination; the
+    most specific match wins, so a broad rule can be carved out by a narrow one
+    regardless of the order they sit in the list.
+
+    SPECIFICITY IS WEIGHTED, not a count of populated fields. Naming an app
+    narrows the rule to ONE destination out of the whole catalog; naming a
+    category and an activity still covers dozens of apps. Counting fields made
+    "GenAI downloads are alerted" (two fields) beat "Copilot is allowed" (one
+    field) — so an operator who had explicitly exempted the AI vendor they pay
+    for still got alerts from it, which reads as the product ignoring them.
+    Weights: app 4, activity 2, category 1.
+    """
+    best = None
+    best_specificity = -1
+    for entry in (config.get("appOverrides") or []):
+        if not isinstance(entry, dict):
+            continue
+        e_app = (entry.get("app_id") or entry.get("appId") or "").strip().lower()
+        e_cat = _WA.normalize_category(entry.get("category"))
+        e_act = _WA.normalize_activity(entry.get("activity"))
+
+        app_pinned = bool(e_app) and e_app not in ("*", "any")
+        if app_pinned and e_app != (app_id or "").lower():
+            continue
+        if e_cat and e_cat != category:
+            continue
+        if e_act and e_act != activity:
+            continue
+
+        specificity = (4 if app_pinned else 0) + (2 if e_act else 0) + (1 if e_cat else 0)
+        if specificity > best_specificity:
+            best_specificity = specificity
+            best = entry
+    if not best:
+        return (None, None)
+    return (
+        _WA.normalize_action(best.get("action"), default=_WA.ACTION_LOG),
+        best.get("minLevel") or config.get("minLevel"),
+    )
+
+
+def _web_activity_decision(
+    cfg: Dict[str, Any],
+    category: str,
+    activity: str,
+    app_id: Optional[str],
+    app_name: Optional[str],
+    classification_level: Optional[str],
+    extraction_status: str,
+    policy_name: str = "web activity control",
+):
+    """One policy's verdict for one activity: (action, reason).
+
+    Pure — no database, no request. Split out from _match_web_activity so the
+    decision can be tested directly against the browser extension's JavaScript
+    mirror of it (src/policy.js). Those two implementations decide the same
+    question on opposite sides of the wire, and the only way to know they agree
+    is to run both over the same table; that is impossible while the logic is
+    welded to a DB query.
+    """
+    action, min_level = _app_override(cfg, category, activity, app_id)
+    source = "app rule"
+    if action is None:
+        action, min_level = _matrix_cell(cfg, category, activity)
+        source = "matrix"
+    if action is None or action == _WA.ACTION_ALLOW:
+        return (_WA.ACTION_ALLOW, "")
+
+    # Threshold. An action fires only once the content is at least this
+    # sensitive; below it the activity is ordinary work. Absent threshold means
+    # "any content", which is how a blanket "no GenAI at all" rule is written.
+    threshold = str(min_level or "").strip()
+    if threshold:
+        meets = _level_rank(classification_level) >= _level_rank(threshold)
+        # Uninspectable content is NOT clean. A password-protected archive or an
+        # OCR-proof scan classifies as Public, so without this the documented way
+        # to bypass a threshold rule is to zip the file with a password.
+        if not meets and cfg.get("blockUninspectable", True) and extraction_status in (
+            "unreadable", "too_large"
+        ):
+            meets = True
+            threshold = f"{threshold} (content could not be inspected)"
+        if not meets:
+            return (_WA.ACTION_ALLOW, "")
+
+    # Audit mode never blocks — it reports what enforcement WOULD have done, so a
+    # matrix can be rolled out and observed before it starts stopping work.
+    mode = str(cfg.get("mode") or "enforce").strip().lower()
+    if mode == "audit" and action == _WA.ACTION_BLOCK:
+        action = _WA.ACTION_ALERT
+
+    where = app_name or app_id or category
+    reason = (
+        f"{_WA.ACTIVITY_LABELS.get(activity, activity)} to {where} "
+        f"({_WA.CATEGORY_LABELS.get(category, category)}) is set to {action} "
+        f"by {source} in policy '{policy_name}'"
+    )
+    if threshold:
+        reason += f" for {threshold} content"
+    return (action, reason)
+
+
+async def _match_web_activity(
+    db: AsyncSession,
+    agent_id: str,
+    category: Optional[str],
+    activity: Optional[str],
+    app_id: Optional[str],
+    app_name: Optional[str],
+    classification_level: Optional[str],
+    extraction_status: str,
+):
+    """Apply every active ``web_activity_control`` policy to one web activity.
+
+    Evaluated here rather than through DatabasePolicyEvaluator for the same
+    reason the USB/print denylists are: the generic policy shape carries ONE
+    actions dict per policy, and a category x activity matrix needs a different
+    action per cell. Expressing this as conditions would take 24 separate
+    policies to say what one matrix row says.
+
+    Returns (should_block, should_alert, reason). Says nothing — (False, False,
+    "") — when no policy addresses this cell, which is the deliberate default:
+    an activity nobody wrote a rule for is allowed, so deploying the extension
+    does not silently start blocking work.
+    """
+    try:
+        cat = _WA.normalize_category(category)
+        act = _WA.normalize_activity(activity)
+        if not cat or not act:
+            return (False, False, "")
+        if not _WA.is_valid_pair(cat, act):
+            # e.g. "ai_response on webmail" — a caller confusion, not a policy
+            # decision. Matching it would let a nonsense pair inherit whatever
+            # the operator set for a real one.
+            return (False, False, "")
+
+        policies = await PolicyService(db).get_all_policies(skip=0, limit=1000, enabled_only=True)
+
+        strongest = _WA.ACTION_ALLOW
+        reason = ""
+        for p in policies:
+            if getattr(p, "type", None) != _WEB_ACTIVITY_TYPE:
+                continue
+            scope = getattr(p, "agent_ids", None) or []
+            if scope and agent_id not in scope:
+                continue
+            cfg = getattr(p, "config", None) or {}
+
+            action, why = _web_activity_decision(
+                cfg, cat, act, app_id, app_name,
+                classification_level, extraction_status,
+                getattr(p, "name", "web activity control"),
+            )
+            if _WA.ACTION_RANK.get(action, 0) > _WA.ACTION_RANK.get(strongest, 0):
+                strongest = action
+                reason = why
+
+        return (strongest == _WA.ACTION_BLOCK, strongest == _WA.ACTION_ALERT, reason)
+    except Exception as e:  # never let matching break evaluation
+        logger.warning("Web-activity match failed (non-fatal)", error=str(e))
         return (False, False, "")
 
 
@@ -1999,6 +2348,46 @@ async def evaluate_policy_realtime(
                     scanned_chars=len(extracted.text),
                 )
 
+        # 0a2. Text the CALLER extracted and we could not.
+        #
+        # The browser extension carries an OCR engine and a PDF rasteriser; the
+        # server does not. So for a photographed Aadhaar card the extension has
+        # real text and ``extract_text`` here has nothing — and because the b64
+        # branch above *replaces* content_to_classify, that text was being
+        # thrown away and the card classified Public.
+        #
+        # Appending rather than replacing is deliberate: whichever side could
+        # read the file contributes, and neither can hide the other's findings.
+        # The status upgrade matters just as much — left at no_text_content, an
+        # operator's "block uninspectable content" rule would fire on every
+        # holiday photo the extension successfully OCR'd and found clean.
+        if request.file_content_b64 and request.file_content:
+            caller_text = request.file_content.strip()
+            if caller_text and caller_text not in content_to_classify:
+                content_to_classify = (
+                    f"{content_to_classify}\n{caller_text}" if content_to_classify else caller_text
+                )
+                if extraction_status in ("no_text_content", "unreadable"):
+                    extraction_status = "readable"
+                    extract_kind = f"{extract_kind}+caller_extracted"
+                    logger.info(
+                        "Caller supplied text the server could not extract",
+                        agent_id=agent_id, file_name=request.file_name,
+                        chars=len(caller_text),
+                    )
+
+        # 0b. Web-activity body text — a GenAI prompt, an email body, a chat
+        # message. Classified ALONGSIDE any attachment text, never instead of
+        # it: one Send gesture routinely carries both, and whichever half is
+        # sensitive has to convict the activity. They stay separately reported
+        # on the event so an analyst can tell "he pasted the Aadhaar number into
+        # the prompt" from "he attached a photo of the card".
+        text_content = (request.text_content or "").strip()
+        if text_content:
+            content_to_classify = (
+                f"{text_content}\n{content_to_classify}" if content_to_classify else text_content
+            )
+
         # 1. Classify the file content using ClassificationEngine
         classification_engine = ClassificationEngine(db)
         classification_result = await classification_engine.classify_content(
@@ -2058,6 +2447,29 @@ async def evaluate_policy_realtime(
             "document_type": document_types[0]["type"] if document_types else None,
             "document_type_label": document_types[0]["label"] if document_types else None,
         }
+
+        # Web-activity context — present only when a browser extension (or any
+        # caller that understands the vocabulary) intercepted an activity in a
+        # catalogued web app. Written flat AND under a "web" object so the
+        # evaluator's dotted field mappings resolve either shape, exactly like
+        # the network block below. Unrecognised values are dropped rather than
+        # passed through, so a typo becomes "no match" instead of a rule that
+        # matches an empty string.
+        _activity = _WA.normalize_activity(request.activity)
+        _app_category = _WA.normalize_category(request.app_category)
+        web_fields = {
+            "activity": _activity,
+            "app_category": _app_category,
+            "app_id": (request.app_id or "").strip() or None,
+            "app_name": (request.app_name or "").strip() or None,
+            # Lets a rule distinguish "posted a prompt" from "attached a file"
+            # without having to reason about which content field was populated.
+            "has_text_content": True if text_content else None,
+        }
+        web_fields = {k: v for k, v in web_fields.items() if v not in (None, "")}
+        if web_fields:
+            event_data.update(web_fields)
+            event_data["web"] = dict(web_fields)
 
         # Network exfiltration context — only present for network_exfil events.
         # Written both flat and under a "network"/"process" object so the
@@ -2128,6 +2540,24 @@ async def evaluate_policy_realtime(
         elif _id_alert:
             should_alert = True
 
+        # 4c. Web activity matrix (webmail / cloud / collaboration / GenAI x
+        # upload / download / attach / send / post / ai_response). Independent
+        # of the generic evaluator because a matrix needs a different action per
+        # cell; see _match_web_activity.
+        _wa_block, _wa_alert, _wa_reason = await _match_web_activity(
+            db, agent_id, request.app_category, request.activity,
+            request.app_id, request.app_name,
+            classification_result.classification, extraction_status,
+        )
+        if _wa_block:
+            should_block = True
+        elif _wa_alert:
+            should_alert = True
+            if alert_severity is None:
+                alert_severity = "high" if _level_rank(
+                    classification_result.classification
+                ) >= _LEVEL_RANK["confidential"] else "medium"
+
         # 5. Build response
         action = "block" if should_block else "allow"
 
@@ -2147,6 +2577,13 @@ async def evaluate_policy_realtime(
         # A file-identity match is the operator-relevant reason — surface it.
         if _id_reason:
             reason = (f"BLOCKED - {_id_reason}" if _id_block else _id_reason)
+
+        # A web-activity match is more specific still: "Send to Gmail is set to
+        # block for Confidential content" is what the operator actually
+        # configured, and what the end user needs to read on the block banner —
+        # far more actionable than a classification summary.
+        if _wa_reason:
+            reason = (f"BLOCKED - {_wa_reason}" if _wa_block else _wa_reason)
 
         logger.info(
             "Policy evaluation complete",

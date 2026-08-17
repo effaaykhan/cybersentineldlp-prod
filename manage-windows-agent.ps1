@@ -839,23 +839,131 @@ objShell.Run """$exePath""", 0, False
   # running both shows up ONCE on the dashboard with USB, print and browser
   # activity on the same agent.
 
-  $CHROME_POLICY = 'HKLM:\SOFTWARE\Policies\Google\Chrome'
-  $EDGE_POLICY   = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+  # ── Browsers ──────────────────────────────────────────────────────────
+  #
+  # One table, one place. Everything else — force-install, managed config,
+  # private browsing, removal — reads from here, so a browser can never be
+  # half-handled by one function and missed by another.
+  #
+  # THE VALUE NAMES ARE NOT INTERCHANGEABLE. Chrome reads
+  # IncognitoModeAvailability; Edge reads InPrivateModeAvailability. Writing
+  # Chrome's name into Edge's key does nothing whatsoever, and reads back looking
+  # exactly like success — which is how Edge stayed open while the screen said it
+  # was closed.
+  $BROWSERS = @(
+    [PSCustomObject]@{
+      Name         = 'Chrome'
+      Root         = 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+      Process      = 'chrome'
+      Exe          = 'chrome.exe'
+      PrivateValue = 'IncognitoModeAvailability'
+      PrivateLabel = 'Incognito'
+    },
+    [PSCustomObject]@{
+      Name         = 'Edge'
+      Root         = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+      Process      = 'msedge'
+      Exe          = 'msedge.exe'
+      PrivateValue = 'InPrivateModeAvailability'
+      PrivateLabel = 'InPrivate'
+    }
+  )
 
-  function Get-BrowserPolicyRoots {
-    # Both are written unconditionally. Writing the key for a browser that is not
-    # installed is harmless, and it means the control is already in place if that
-    # browser is installed later — which is exactly the gap a user would drive
-    # through otherwise.
-    # PrivateValue differs per browser and is NOT interchangeable: Chrome reads
-    # IncognitoModeAvailability, Edge reads InPrivateModeAvailability. Writing
-    # Chrome's name into Edge's key does nothing at all — Edge ignores it — while
-    # looking exactly like it worked.
-    @(
-      [PSCustomObject]@{ Name = 'Chrome'; Root = $CHROME_POLICY; PrivateValue = 'IncognitoModeAvailability'; PrivateLabel = 'Incognito' },
-      [PSCustomObject]@{ Name = 'Edge';   Root = $EDGE_POLICY;   PrivateValue = 'InPrivateModeAvailability';  PrivateLabel = 'InPrivate' }
-    )
+  # Is this browser actually on the box?
+  #
+  # Used for REPORTING, never to decide whether to write policy. Policy is always
+  # written for both: a machine with no Chrome today gets Chrome fully managed the
+  # moment someone installs it, extension and all, with nobody revisiting the
+  # endpoint. That pre-staging is the useful behaviour — claiming the browser is
+  # "configured" when it is not installed is the misleading part, and that is what
+  # this fixes.
+  function Test-BrowserInstalled {
+    param($Browser)
+    foreach ($view in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths',
+                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths')) {
+      $k = Join-Path $view $Browser.Exe
+      if (Test-Path $k) {
+        $p = (Get-ItemProperty -Path $k -ErrorAction SilentlyContinue).'(default)'
+        if ($p -and (Test-Path $p)) { return $p }
+      }
+    }
+    $candidates = @()
+    if ($Browser.Name -eq 'Chrome') {
+      $candidates += "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
+      $candidates += "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+      # Chrome installs per-user without admin rights, so a machine-wide check
+      # alone reports "not installed" for a browser somebody is using right now.
+      foreach ($u in (Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue)) {
+        $candidates += Join-Path $u.FullName 'AppData\Local\Google\Chrome\Application\chrome.exe'
+      }
+    } else {
+      $candidates += "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+      $candidates += "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+    }
+    foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return $c } }
+    return $null
   }
+
+  # The browsers plus everything currently true about them. One call, one answer,
+  # read back from the registry rather than assumed from what we tried to write.
+  function Get-Browsers {
+    foreach ($b in $BROWSERS) {
+      $path = Test-BrowserInstalled $b
+      $priv = $null
+      if (Test-Path $b.Root) {
+        $priv = (Get-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue).$($b.PrivateValue)
+      }
+      [PSCustomObject]@{
+        Name            = $b.Name
+        Root            = $b.Root
+        Process         = $b.Process
+        PrivateValue    = $b.PrivateValue
+        PrivateLabel    = $b.PrivateLabel
+        Installed       = [bool]$path
+        ExePath         = $path
+        Running         = [bool](Get-Process -Name $b.Process -ErrorAction SilentlyContinue)
+        PrivateDisabled = ($priv -eq 1)
+        PrivateRaw      = $priv
+      }
+    }
+  }
+
+  # Set private browsing and VERIFY it, per browser. Returns what is actually
+  # true afterwards, not what we intended.
+  function Set-PrivateBrowsing {
+    param([bool]$Disable)
+    $results = @()
+    foreach ($b in $BROWSERS) {
+      $err = $null
+      try {
+        if (-not (Test-Path $b.Root)) { New-Item -Path $b.Root -Force | Out-Null }
+        if ($Disable) {
+          # 1 = disabled, 0 = available (the default), 2 = forced.
+          Set-ItemProperty -Path $b.Root -Name $b.PrivateValue -Value 1 -Type DWord -ErrorAction Stop
+        } else {
+          Remove-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue
+        }
+        # An earlier build wrote Chrome's value name under BOTH roots. Inert
+        # under Edge, but it reads back as coverage that never existed.
+        if ($b.Name -eq 'Edge') {
+          Remove-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -ErrorAction SilentlyContinue
+        }
+      } catch { $err = $_.Exception.Message }
+
+      # Read it back. "I called Set-ItemProperty" is not evidence.
+      $now = $null
+      if (Test-Path $b.Root) {
+        $now = (Get-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue).$($b.PrivateValue)
+      }
+      $want = if ($Disable) { 1 } else { $null }
+      $results += [PSCustomObject]@{
+        Name = $b.Name; Label = $b.PrivateLabel
+        Applied = ($now -eq $want); Value = $now; Error = $err
+      }
+    }
+    $results
+  }
+
 
   # Normalise whatever we know about the server into the API base, e.g.
   # http://10.0.0.5:55100/api/v1
@@ -873,7 +981,7 @@ objShell.Run """$exePath""", 0, False
   function Get-ExtensionStatus {
     param([string]$ExtId)
     $out = [PSCustomObject]@{ Forced = @(); Managed = $null; AgentId = $null; ServerUrl = $null }
-    foreach ($b in Get-BrowserPolicyRoots) {
+    foreach ($b in $BROWSERS) {
       $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
       if (Test-Path $fl) {
         $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
@@ -948,44 +1056,10 @@ objShell.Run """$exePath""", 0, False
   # which is a supported policy and a normal posture on a managed endpoint. It is
   # a browser-wide change, not a DLP-only one, so it is asked rather than
   # assumed, and it is trivially reversible (delete the value).
-  function Set-InPrivateAvailability {
-    param([bool]$Disable)
-    foreach ($b in Get-BrowserPolicyRoots) {
-      if (-not (Test-Path $b.Root)) { New-Item -Path $b.Root -Force | Out-Null }
-      if ($Disable) {
-        # 1 = disabled. 0 = available (the default).
-        Set-ItemProperty -Path $b.Root -Name $b.PrivateValue -Value 1 -Type DWord
-      } else {
-        Remove-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue
-      }
-      # An earlier build wrote Chrome's value name under BOTH roots. It is inert
-      # under Edge, but leaving it there makes the registry read as though Edge
-      # were covered when it never was.
-      if ($b.Name -eq 'Edge') {
-        Remove-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -ErrorAction SilentlyContinue
-      }
-    }
-  }
 
   # Per browser, never collapsed to a single yes/no. Reporting "disabled" because
   # ONE browser is covered is how Edge stayed wide open while the screen said the
   # hole was closed.
-  function Get-InPrivateState {
-    $out = @()
-    foreach ($b in Get-BrowserPolicyRoots) {
-      # Test-Path first: -ErrorAction SilentlyContinue suppresses a missing KEY,
-      # but not a null -Path, and a parameter-binding error prints a red wall of
-      # text in the middle of the status screen.
-      $v = $null
-      if ($b.Root -and (Test-Path $b.Root)) {
-        $v = (Get-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue).$($b.PrivateValue)
-      }
-      $out += [PSCustomObject]@{
-        Browser = $b.Name; Label = $b.PrivateLabel; Disabled = ($v -eq 1)
-      }
-    }
-    $out
-  }
 
   # ── Making an update actually happen ──────────────────────────────────
   #
@@ -1168,29 +1242,51 @@ objShell.Run """$exePath""", 0, False
   function Invoke-PrivateBrowsingPrompt {
     Blank
     Info 'Private browsing:'
-    foreach ($st in (Get-InPrivateState)) {
-      if ($st.Disabled) { Ok "  $($st.Browser) $($st.Label): disabled" }
-      else { Warn "  $($st.Browser) $($st.Label): available - NOT inspected" }
+    foreach ($b in (Get-Browsers)) {
+      $where = ''
+      if (-not $b.Installed) { $where = '  (not installed)' }
+      if ($b.PrivateDisabled) { Ok "  $($b.Name) $($b.PrivateLabel): disabled$where" }
+      else { Warn "  $($b.Name) $($b.PrivateLabel): available - NOT inspected$where" }
     }
     Hint 'Extensions cannot run in a private window and no policy can change that,'
     Hint 'so disabling it is the only way to remove that blind spot.'
     Blank
     $want = Read-Host '   [d] disable everywhere   [a] allow everywhere   [Enter] leave as is'
     if ($want -eq 'd' -or $want -eq 'D') {
-      try {
-        Set-InPrivateAvailability $true
-        foreach ($st in (Get-InPrivateState)) {
-          if ($st.Disabled) { Ok "$($st.Browser) $($st.Label) disabled" }
-          else { Warn "$($st.Browser) $($st.Label) could NOT be disabled" }
+      Blank
+      # Report what the registry says AFTERWARDS. "I called Set-ItemProperty" is
+      # not evidence, and it was not evidence for Edge.
+      foreach ($r in (Set-PrivateBrowsing $true)) {
+        if ($r.Applied) {
+          Ok "$($r.Name) $($r.Label) disabled"
+        } else {
+          $why = ''
+          if ($r.Error) { $why = " - $($r.Error)" }
+          Err "$($r.Name) $($r.Label) NOT disabled$why"
         }
-        Hint 'Takes effect when the browser restarts.'
-      } catch { Err "Failed: $($_.Exception.Message)" }
+      }
+      $running = @(Get-Browsers | Where-Object { $_.Running })
+      if (@($running).Count -gt 0) {
+        Blank
+        Warn 'A browser is running and keeps allowing private windows until it'
+        Warn 'restarts - the policy is only read at startup.'
+        foreach ($r in $running) { Hint "  running: $($r.Name)" }
+        $c = Read-Host '   Close it now so this takes effect? (Y/n)'
+        if ($c -ne 'n' -and $c -ne 'N') { $null = Stop-Browsers }
+      } else {
+        Hint 'Takes effect the next time the browser starts.'
+      }
     } elseif ($want -eq 'a' -or $want -eq 'A') {
-      try {
-        Set-InPrivateAvailability $false
-        Ok 'Private browsing allowed again.'
-        Warn 'Anything done in a private window is not inspected.'
-      } catch { Err "Failed: $($_.Exception.Message)" }
+      foreach ($r in (Set-PrivateBrowsing $false)) {
+        if ($r.Applied) {
+          Ok "$($r.Name) $($r.Label) allowed again"
+        } else {
+          $why = ''
+          if ($r.Error) { $why = " - $($r.Error)" }
+          Err "$($r.Name): could not clear the policy$why"
+        }
+      }
+      Warn 'Anything done in a private window is not inspected.'
     } else {
       Info 'Left unchanged.'
     }
@@ -1198,7 +1294,7 @@ objShell.Run """$exePath""", 0, False
 
   function Remove-ExtensionPolicy {
     param([string]$ExtId)
-    foreach ($b in Get-BrowserPolicyRoots) {
+    foreach ($b in $BROWSERS) {
       $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
       if (Test-Path $fl) {
         $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
@@ -1297,12 +1393,22 @@ objShell.Run """$exePath""", 0, False
       Hint 'FIX: chrome://extensions -> find CyberSentinel DLP -> Remove.'
       Hint '     Then run [1] here again.'
     }
-    foreach ($ip in (Get-InPrivateState)) {
-      if ($ip.Disabled) {
-        Field "$($ip.Browser) $($ip.Label)" 'disabled - no uninspected browsing' 'Green'
-      } else {
-        Field "$($ip.Browser) $($ip.Label)" 'AVAILABLE - browsing there is NOT inspected' 'Yellow'
+    foreach ($b in (Get-Browsers)) {
+      if (-not $b.Installed) {
+        # Policy IS written for it, and that is deliberate: install Chrome
+        # tomorrow and it arrives already managed. Calling that "configured"
+        # would be a lie; saying nothing would hide that it is already handled.
+        Field $b.Name 'not installed - policy pre-staged, applies if installed' 'DarkGray'
+        continue
       }
+      $forced = (@($st.Forced) -contains $b.Name)
+      $bits = @()
+      if ($forced) { $bits += 'extension forced' } else { $bits += 'extension NOT forced' }
+      if ($b.PrivateDisabled) { $bits += "$($b.PrivateLabel) disabled" }
+      else { $bits += "$($b.PrivateLabel) AVAILABLE - not inspected" }
+      $col = 'Yellow'
+      if ($forced -and $b.PrivateDisabled) { $col = 'Green' }
+      Field $b.Name ($bits -join '; ') $col
     }
 
     # Which identity the extension should report under. Without one it enrols
@@ -1336,7 +1442,7 @@ objShell.Run """$exePath""", 0, False
           Invoke-PrivateBrowsingPrompt
 
           try {
-            foreach ($b in Get-BrowserPolicyRoots) {
+            foreach ($b in $BROWSERS) {
               $slot = Set-ForcelistEntry -Root $b.Root -ExtId $extId -UpdateUrl $updateUrl
               Set-ManagedConfig -Root $b.Root -ExtId $extId -ServerUrl $apiBase -AgentId $agentId
               Ok "$($b.Name): force-installed (slot $slot) + configured"

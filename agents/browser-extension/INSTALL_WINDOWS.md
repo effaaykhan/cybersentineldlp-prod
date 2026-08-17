@@ -1,13 +1,26 @@
-# Cloud Upload Guard — Windows install (complete steps)
+# CyberSentinel DLP browser extension — Windows install
 
-This sets up the browser extension + native-messaging host on a Windows
-endpoint so that Confidential/Restricted files are blocked from uploading to
-cloud apps, Internal files raise an alert, and Public files are allowed.
+> **The native-messaging host is now OPTIONAL.** The extension enrols with the
+> DLP server over HTTP by itself and asks it for every decision, so steps 3-5
+> below are no longer required for the extension to work. Install the host only
+> if you want browser events to attribute to the SAME dashboard agent row as the
+> endpoint agent on this machine — without it the browser appears as its own
+> agent, which works but shows one laptop as two rows. See README.md for the
+> short install.
+>
+> Keeping this document because the host manifest / registry steps are fiddly and
+> still correct.
+
+This sets up the browser extension + (optional) native-messaging host on a
+Windows endpoint so that web activity — uploads, downloads, attachments, sends
+and AI prompts — is controlled by the Web Activity Control policy on the
+dashboard.
 
 There are two pieces:
-1. **The browser extension** (loaded into Chrome/Edge) — intercepts uploads.
-2. **The native-messaging host** (`csdlp_host`) — asks the DLP server for the
-   allow/alert/block decision and records the events.
+1. **The browser extension** (loaded into Chrome/Edge) — intercepts activity and
+   asks the DLP server for the verdict.
+2. **The native-messaging host** (`csdlp_host`) — optional; supplies this
+   machine's agent identity so events attribute to the right dashboard row.
 
 ---
 

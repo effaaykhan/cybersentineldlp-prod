@@ -188,11 +188,29 @@ def main():
             break
         if msg is None:
             break
-        if msg.get("type") == "ping":
-            # Self-test from the extension: confirm the host is reachable.
-            log("ping received -> pong")
-            send_message({"type": "pong", "ok": True, "keyed": bool(CFG["agent_key"]),
-                          "server": CFG["server_url"]})
+        if msg.get("type") in ("ping", "identity"):
+            # Self-test AND identity handoff.
+            #
+            # The extension no longer routes decisions through this host — it
+            # calls the DLP API directly — so what it wants from us is the one
+            # thing it cannot work out for itself: which agent this machine
+            # already is, and which manager it reports to. Where the endpoint
+            # agent is installed, using its identity is what stops the same
+            # laptop appearing on the dashboard twice, once as the agent and
+            # once as "some browser".
+            #
+            # The agent KEY is deliberately not sent. The extension enrols and
+            # gets its own, which is properly scoped to it; handing over the
+            # endpoint agent's credential would widen its blast radius for no
+            # gain.
+            log("%s received -> identity" % msg.get("type"))
+            send_message({
+                "type": "pong",
+                "ok": True,
+                "keyed": bool(CFG["agent_key"]),
+                "server": CFG["server_url"],
+                "agent_id": CFG["agent_id"],
+            })
             continue
         if msg.get("type") != "classify":
             continue

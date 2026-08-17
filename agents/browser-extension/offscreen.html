@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CyberSentinel DLP - attachment inspection host</title>
+</head>
+<body>
+  <!--
+    Never visible to the user. This page exists purely to give the OCR and
+    PDF engines a chrome-extension:// origin to run in.
+
+    Two separate problems put them here, and it is worth keeping both
+    written down because fixing only the first looks like it should work:
+
+    1. ORIGIN. Tesseract starts its worker from a blob: URL, and a blob:
+       worker inherits the origin of the document that created it. Created
+       from the page, the worker's origin was that site's and its
+       importScripts() of a chrome-extension:// URL was a blocked
+       cross-origin request. Tesseract swallowed that and rejected with
+       `undefined` -- the "OCR worker failed to initialize: undefined" in
+       the console.
+
+    2. CSP. Loading it here fixes the origin but NOT the Content Security
+       Policy: `script-src 'self' 'wasm-unsafe-eval'` also governs workers
+       (worker-src falls back through child-src to script-src), and `blob:`
+       is not 'self'. Chrome refused the worker here too -- silently, from
+       the caller's point of view. offscreen.js therefore passes
+       `workerBlobURL: false` so tesseract.js constructs the worker straight
+       from its chrome-extension:// workerPath, which is both same-origin
+       and allowed by 'self'. See offscreen.js's header.
+  -->
+  <script src="ocr/tesseract.min.js"></script>
+  <script src="src/scanner.js"></script>
+
+  <!--
+    pdf.js ships as an ES module, so it can't be a plain <script src>. This
+    shim publishes it on window for offscreen.js (a classic script) to use.
+    Its worker is pointed at a real chrome-extension:// URL rather than a
+    blob: for exactly the CSP reason described above.
+  -->
+  <script type="module">
+    import * as pdfjsLib from "./pdf/pdf.min.mjs";
+    pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("pdf/pdf.worker.min.mjs");
+    window.pdfjsLib = pdfjsLib;
+    console.info("[CyberSentinel] offscreen: pdf.js ready");
+  </script>
+
+  <script src="src/offscreen.js"></script>
+</body>
+</html>

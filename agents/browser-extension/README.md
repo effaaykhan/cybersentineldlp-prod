@@ -1,76 +1,178 @@
-# CyberSentinel DLP — Cloud Upload Guard (browser extension)
+# CyberSentinel DLP — browser extension
 
-Prevents uploading **Confidential / Restricted** files from a managed Windows
-endpoint to cloud apps (Google Drive, Gmail, Dropbox, OneDrive, Box, …), while
-**allowing** Public files (logged) and **alerting** on Internal files.
+Granular **web activity control** on a managed endpoint. Not "which sites can
+users reach", but **what they may do** in them:
 
-Enforcement decision matrix (server-driven — see the `cloud_upload_prevention`
-policies):
+| Category | Upload | Download | Attach | Send | Post / Generate | AI Response |
+|---|---|---|---|---|---|---|
+| Webmail (Gmail, Outlook Web, …) | ✅ | ✅ | ✅ | ✅ | — | — |
+| File sharing / Cloud storage | ✅ | ✅ | — | — | ✅ | — |
+| Collaboration (Slack, Teams, …) | ✅ | ✅ | — | — | ✅ | — |
+| Generative AI (ChatGPT, Claude, Gemini, …) | ✅ | ✅ | ✅ | — | ✅ | 🔍 audit only |
 
-| Classification | Upload | Events |
-|---|---|---|
-| Public | ✅ allowed | normal log |
-| Internal | ✅ allowed | alert |
-| Confidential / Restricted | ⛔ **blocked** | attempt + prevention alerts |
+Each cell is set independently in a **Web Activity Control** policy on the
+dashboard, to `allow` / `log` / `alert` / `block`, with a sensitivity threshold
+and per-app exceptions.
+
+> This extension replaces the two that came before it — the *Cloud Upload Guard*
+> and the *Email Protection* extension. One extension, one enrolment, one agent
+> row on the dashboard, one answer to "is this content sensitive". Everything the
+> email extension did (Gmail/Outlook send interception, OCR of attached images,
+> PDF/Office text extraction, Aadhaar/PAN/passport/bank detection) is here.
+
+## Two rules worth knowing before you install it
+
+**1. Nothing is enforced until a policy says so.** An activity with no policy
+covering it is not intercepted at all — no listeners, no latency, no behaviour
+change. Install the extension on a fleet and nothing happens until you create a
+policy. The Options popup shows exactly what is and isn't covered.
+
+**2. The server decides.** Verdicts come from
+`POST /agents/{id}/policy/evaluate`, so the platform's classification engine, ML
+model, EDM index and document fingerprints all apply. The bundled scanner is the
+fallback for when that call cannot be made, and it says so in the reason it
+reports.
 
 ## How it works
+
 ```
-page upload (fetch/XHR with a File to a cloud host)
-  └─ inject.js (MAIN world)  ─ pauses the request, extracts the file
-       └─ content.js (ISOLATED world)  ─ relays via chrome.runtime
-            └─ background.js (service worker)  ─ Native Messaging
-                 └─ csdlp_host.py  ─ POST /agents/{id}/policy/evaluate
-                      └─ DLP server: classify → allow/alert/block
-                 ◀── decision ── emits attempt/prevention events to /events
-       ◀── block ⇒ abort upload + on-page banner ;  allow/alert ⇒ proceed
+catalogued page (from the app_catalog table, synced every 5 min)
+  ├─ inject.js  (MAIN world)     patches fetch/XHR — pauses uploads carrying files
+  ├─ content.js (ISOLATED)       arms inject.js with this app's identity + policy
+  └─ activity-guard.js           holds the Send/Enter gesture on a ruled activity
+       ├─ scanner.js             local detection (fallback only)
+       └─ attachment-inspector   ships attachments to the offscreen document
+            └─ offscreen.js      Tesseract OCR + pdf.js + OOXML text extraction
+  ▼
+background.js (service worker)
+  ├─ POST /agents/{id}/policy/evaluate   ← the verdict, per body text and per attachment
+  ├─ POST /events/                        ← the event, with the full prompt/body text
+  ├─ GET  /app-catalog/sync               ← which hosts are which kind of app
+  ├─ GET  /agents/{id}/web-activity-policy ← the matrix (also the offline fallback)
+  └─ chrome.downloads.onCreated           ← the Download verb
+  ▼
+block ⇒ gesture cancelled + on-page notice   |   allow ⇒ gesture replayed
 ```
-Fail-open at every hop: if the agent/host/server is unavailable or slow, the
-upload proceeds (a DLP outage must never brick the browser). Blocks are only
-asserted on an explicit `block` decision.
+
+**Failure behaviour is per-activity, not global.** An activity set to `block`
+fails **closed** on timeout or error — "the DLP server was slow" is not a reason
+to permit an exfiltration the policy forbids. An activity set to `log` or `alert`
+fails open. The previous build failed open unconditionally, in three places.
+
+## Adding a GenAI vendor
+
+Insert a row — no extension release:
+
+```
+Dashboard → (API) POST /api/v1/app-catalog/
+  { "host_pattern": "newai.example", "app_name": "New AI", "category": "genai" }
+```
+
+Endpoints pick it up on the next sync (≤5 min) and the guard registers itself
+there. Apps with no bundled DOM profile fall back to a structural resolver that
+finds the composer and submit control generically, so a brand-new vendor is
+guarded from the moment it is catalogued.
+
+Self-hosted LLM UIs (Ollama, open-webui, LM Studio) are deliberately **not**
+seeded — a browser match pattern cannot carry a port, so seeding `localhost:3000`
+would inject the guard into every developer's dev server. Add your actual host.
 
 ## Components
-- `manifest.json`, `src/` — the MV3 extension (Chrome / Edge).
-- `native-host/csdlp_host.py` — the native-messaging host (reference impl).
-- `native-host/com.cybersentineldlp.dlp.json` — the host manifest template.
 
-## Install (Windows, per managed machine)
-1. **Load the extension**
-   - Dev: `chrome://extensions` → Developer mode → *Load unpacked* → this folder.
-   - Managed: pack/publish and force-install via the `ExtensionInstallForcelist`
-     group policy (Chrome) / equivalent (Edge).
-   - Note the **extension ID** it gets assigned.
-2. **Install the native host**
-   - Copy `native-host/csdlp_host.py` (or a PyInstaller `.exe`) to
-     `C:\Program Files\CyberSentinelDLP\`.
-   - Edit `com.cybersentineldlp.dlp.json`: set `path` to the host executable and
-     `allowed_origins` to `chrome-extension://<EXTENSION_ID>/`.
-   - Register it (Chrome): create registry key
-     `HKLM\Software\Google\Chrome\NativeMessagingHosts\com.cybersentineldlp.dlp`
-     with the default value = full path to the manifest json. For Edge use
-     `HKLM\Software\Microsoft\Edge\NativeMessagingHosts\com.cybersentineldlp.dlp`.
-3. **Point the host at the DLP server + agent key**
-   - Create `C:\ProgramData\CyberSentinelDLP\dlp-host.json`:
-     ```json
-     { "server_url": "https://<dlp-host>/api/v1",
-       "agent_id": "<this machine's agent id>",
-       "agent_key": "<the agent's X-Agent-Key>" }
-     ```
-   - (or set `CSDLP_SERVER_URL` / `CSDLP_AGENT_ID` / `CSDLP_AGENT_KEY`.)
-4. **Restart the browser** and test.
+- `manifest.json`, `src/` — the MV3 extension (Chrome / Edge 116+).
+- `ocr/`, `pdf/` — bundled Tesseract and pdf.js; no network fetches, CSP-safe.
+- `offscreen.html` — the one context with both a DOM and the extension's origin,
+  which is what OCR needs. See the comments in it and in `src/offscreen.js`.
+- `native-host/` — optional. Only supplies "which agent is this machine?" so
+  browser events attribute to the same dashboard row as the endpoint agent.
+  Everything works without it.
+
+## Deploying it
+
+**One script on the endpoint, one command on the server.**
+
+### On the DLP server, once per release
+
+```bash
+python3 scripts/pack-extension.py
+```
+
+Packs and signs the extension and publishes it at `/api/v1/extension/`. The
+signing key is generated on first run at
+`/etc/cybersentineldlp/extension-signing.pem` — **back it up**: it is the
+extension's identity, and losing it means every endpoint sees a different
+extension on the next release. Bump `version` in `manifest.json` before packing
+a new build; browsers only upgrade when the version increases.
+
+The update feed is generated per request from the host the endpoint reached, so
+one packed artifact works on every deployment without re-packing.
+
+### On each endpoint
+
+```
+manage-windows-agent.ps1  →  [5] Extension  →  [1] Deploy / update
+```
+
+That is the whole thing. The script asks the server for the extension id, writes
+the `ExtensionInstallForcelist` policy for **both Chrome and Edge**, and hands
+the extension this machine's configuration. Restart the browser and it installs
+itself.
+
+A force-installed extension **cannot be disabled or removed by the user** and
+updates itself — which is the difference between a DLP control and a suggestion.
+It shows as *"Installed by enterprise policy"* at `chrome://extensions`.
+
+### One agent per device
+
+The same policy hands over the endpoint agent's identity, so a machine running
+**both** the agent and the extension appears **once** on the dashboard — USB
+copies, print jobs and ChatGPT prompts all on the same agent. When attached this
+way the extension deliberately never registers and never heartbeats: the agent
+owns that row and that liveness signal, and a browser beating on its behalf would
+show a machine as active with the agent dead.
+
+Install the agent first ([1] on the menu) so the identity exists. With no agent
+on the box the extension enrols on its own — that deployment still works, it just
+appears as its own row.
+
+Nothing else needs configuring on the endpoint. The Options popup shows what it
+resolved and greys out the fields policy owns.
+
+### Then create a policy
+
+Dashboard → Policies → *Web Activity Control*. Start in **Audit**: it records
+what would have been blocked without stopping anyone.
+
+### Testing on one machine
+
+`chrome://extensions` → Developer mode → *Load unpacked* → this folder. The
+packed and unpacked builds share an id (the public key is pinned in
+`manifest.json`), so you debug the same extension you deploy. Configure it by
+hand in the popup.
 
 ## Test
-- Upload a **plain text** file to Drive/Gmail → allowed (a `cloud_upload_allowed`
-  log appears in the dashboard).
-- Upload a file containing **PII / secrets** (e.g., credit-card numbers) →
-  **blocked**, an on-page red banner shows, and `cloud_upload_attempt` +
-  `cloud_upload_prevented` events appear.
-- Host activity/errors log to `C:\ProgramData\CyberSentinelDLP\dlp-host.log`.
 
-## Current scope / limitations (MVP, Phase A)
-- Covers **browser** uploads (fetch/XHR carrying a File/Blob/FormData) on the
-  cloud hosts in `inject.js`. Native **desktop sync clients** (Google Drive,
-  Dropbox, OneDrive apps) are **out of scope** here — that's the Phase B WFP
-  driver.
-- Content sent for classification is capped at 10 MB per file.
-- Blocks **all** cloud destinations for sensitive data (no sanctioned-domain
-  allowlist yet — by design for the first cut).
+- With no policy: paste an Aadhaar number into ChatGPT → allowed, and an event
+  appears with the full prompt. That is correct — nothing is ruled yet.
+- Create a policy with GenAI → Post = **Block**, threshold Confidential. Repeat →
+  blocked, with a red on-page notice naming the policy.
+- Attach a **photo** of an ID card to a Gmail compose and Send → held while OCR
+  runs, then blocked. The server has no OCR engine; the text the extension
+  recovered is what convicts it.
+- Set GenAI → Post = **Allow** and reload nothing — the next prompt goes through.
+- Diagnose any miss with `CyberSentinelDebug()` in the page console: it reports
+  whether the composer and submit control resolved, what the guard read, and
+  which policy cell decided to engage.
+
+## Known limitations
+
+- Uploads that run inside a **Web Worker** are not visible to the page hook.
+- **Desktop apps** (the ChatGPT/Claude/Slack native clients) are out of scope for
+  a browser extension — that is the endpoint agent's job.
+- Content sent for classification is capped at 10 MB per file; body text at
+  200 000 characters, flagged as truncated when it is cut.
+- **AI Response is audit-only, by design.** By the time a reply exists the prompt
+  has already been sent, it streams in with no single moment to intercept, and
+  tearing text out mid-render breaks the app for no security gain.
+- App DOM selectors will rot. The structural fallback keeps coverage when they
+  do — precision degrades, not detection.

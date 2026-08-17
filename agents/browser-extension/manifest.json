@@ -1,28 +1,45 @@
 {
   "manifest_version": 3,
-  "name": "CyberSentinel DLP — Cloud Upload Guard",
-  "version": "1.0.0",
-  "description": "Prevents uploading Confidential/Restricted files from this managed endpoint to cloud apps. Managed by CyberSentinel DLP.",
+  "name": "CyberSentinel DLP",
+  "version": "2.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz5VM6b6f5EK/tEB/tkDeJ6FXcRcIYiEhpyiYeKjlsQWbXJeQ8d4ny5kpua0O05Ej1GY8vAPTahAQqzxTj2BcxXgM8IMvRlUd5tDnX7AIgO7ebQmA1zkfK8BDbaeI4i2OtS/8AM4EUp5lCx6FsmEZRUG/bRBaYNkCFq3++fMIxCgqBSQ3jBWaqa5edNHq9bO9g833zG+FbK2XdFqM9MP5W5/BN8r8Zdf0eYq4r61ZlqKoDvxBOystdrPyZrRiRTENOohrMde23uCm+ZX28YdECdH4ZOh3Jdq6TG6c8sQXaKilsGfHH+ISCl/sC0W/LHtcITSJeZVjD6cGnuLBrRMtywIDAQAB",
+  "description": "Granular web activity control for managed endpoints: inspects and enforces uploads, downloads, attachments, sends and AI prompts across webmail, cloud storage, collaboration and generative-AI apps. Managed by CyberSentinel DLP.",
   "minimum_chrome_version": "116",
-  "permissions": ["nativeMessaging", "storage", "scripting"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "scripting",
+    "offscreen",
+    "downloads",
+    "nativeMessaging"
+  ],
+  "storage": {
+    "managed_schema": "managed-schema.json"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "src/background.js"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["src/content.js"],
-      "run_at": "document_start",
-      "all_frames": true,
-      "world": "ISOLATED"
-    },
-    {
-      "matches": ["<all_urls>"],
-      "js": ["src/inject.js"],
-      "run_at": "document_start",
-      "all_frames": true,
-      "world": "MAIN"
-    }
-  ]
+  "_comment_content_scripts": [
+    "Deliberately EMPTY. Everything is registered at runtime by the service",
+    "worker against the hosts in the app catalog (see registerGuardScripts in",
+    "src/background.js).",
+    "",
+    "A static <all_urls> entry would run the bridge on every page anyone opens,",
+    "which on MV3 means waking the service worker on every navigation \u2014 a real",
+    "cost paid overwhelmingly on pages where the extension has nothing to do.",
+    "It would also freeze the host list into the manifest, and the whole point",
+    "of the catalog being a server-side table is that adding a GenAI vendor",
+    "takes effect on the next sync rather than on the next extension release."
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "action": {
+    "default_popup": "options.html",
+    "default_title": "CyberSentinel DLP settings"
+  },
+  "options_page": "options.html"
 }

@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CyberSentinel DLP</title>
+  <style>
+    /*
+      Kept deliberately compact. This page is the toolbar POPUP as well as
+      the options page, and Chrome caps a popup at 600px tall — anything
+      past that silently scrolls out of sight. A previous version pushed the
+      checkboxes and the Save button below that line, so they simply looked
+      absent. Hints are one line each for the same reason.
+    */
+    body {
+      font-family: Arial, sans-serif;
+      width: 390px;
+      padding: 12px 14px;
+      margin: 0;
+      color: #222;
+    }
+    h3 { margin: 0 0 10px; font-size: 15px; }
+    label { display: block; margin-top: 10px; font-weight: 600; font-size: 12px; }
+    input, select {
+      width: 100%;
+      padding: 6px;
+      margin-top: 3px;
+      box-sizing: border-box;
+      font-size: 13px;
+    }
+    button {
+      margin-top: 14px;
+      padding: 8px 14px;
+      background: #1a73e8;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #1558b3; }
+    button.secondary { background: #5f6368; margin-left: 6px; }
+    button.secondary:hover { background: #494c50; }
+    #status { margin-top: 8px; font-size: 12px; min-height: 15px; line-height: 1.4; }
+    #resolved { margin-top: 4px; font-size: 10px; color: #1558b3; font-family: monospace; word-break: break-all; }
+    .hint { font-size: 10px; color: #666; margin-top: 3px; line-height: 1.35; }
+    label.checkbox {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      font-weight: 600;
+      font-size: 12px;
+      margin-top: 12px;
+    }
+    label.checkbox input { width: auto; margin: 1px 0 0; flex: none; }
+    .ver { float: right; font-size: 10px; color: #888; font-weight: 400; }
+    /*
+      The coverage box answers the question the old options page could not:
+      "is this thing actually doing anything?" An extension that is enrolled,
+      healthy and governed by no policy blocks nothing at all — which is
+      correct behaviour and looks identical to being broken.
+    */
+    #coverage {
+      margin-top: 12px;
+      padding: 8px 10px;
+      background: #f1f3f4;
+      border-radius: 4px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    #coverage b { font-size: 11px; }
+    .pill {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #fff;
+      background: #5f6368;
+    }
+    .pill.on { background: #188038; }
+    .pill.audit { background: #e37400; }
+    .pill.off { background: #b3261e; }
+  </style>
+</head>
+<body>
+  <h3>CyberSentinel DLP <span id="version" class="ver"></span></h3>
+
+  <label for="serverUrl">DLP Server URL</label>
+  <input id="serverUrl" placeholder="http://192.168.2.204:3023/api/v1" />
+  <div class="hint">Dashboard address. <code>/api/v1</code> is added if you leave it off.</div>
+  <div id="resolved"></div>
+
+  <label for="agentId">Agent ID</label>
+  <input id="agentId" placeholder="browser-shounak-01" />
+  <div class="hint">Name for this browser in the dashboard.</div>
+
+  <label for="mode">Mode</label>
+  <select id="mode">
+    <option value="protection">Protection (block + alert)</option>
+    <option value="monitor">Monitor (alert only, still sends)</option>
+  </select>
+  <div class="hint">Local override. Policy decides what is enforced; monitor never blocks.</div>
+
+  <label class="checkbox" for="blockUninspectable">
+    <input type="checkbox" id="blockUninspectable" checked />
+    Block attachments that can't be inspected
+  </label>
+  <div class="hint">Archives, unusual formats, files over 20&nbsp;MB, and anything the scan never saw.</div>
+
+  <label class="checkbox" for="diagnosticMode">
+    <input type="checkbox" id="diagnosticMode" />
+    Diagnostic mode
+  </label>
+  <div class="hint">Logs the text OCR read into this browser's console. Stays on this machine; never sent to the server.</div>
+
+  <div id="coverage">Loading coverage…</div>
+
+  <button id="save">Save</button>
+  <button id="test" class="secondary">Test connection</button>
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

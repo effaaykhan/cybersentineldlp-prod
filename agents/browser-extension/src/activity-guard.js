@@ -271,23 +271,26 @@
 
     var submitActivity = profile.activity || "post";
 
-    /* -- settings cached synchronously ------------------------------------- */
-    // Cached so the pointerdown handler never has to `await` chrome.storage
-    // before deciding whether to preventDefault(); by the time a user actually
-    // clicks Send this is long since populated.
-    var cachedMode = "protection";
-    // Defaults ON. An attachment this extension holds no verdict for is exactly
-    // the case it exists to prevent, so the safe behaviour has to be what you
-    // get without having found the toggle.
-    var blockUninspectable = true;
-    chrome.storage.local.get(["mode", "blockUninspectable"]).then(function (stored) {
-      cachedMode = stored.mode || "protection";
-      blockUninspectable = stored.blockUninspectable !== false;
-    });
+    /* -- everything below comes from policy --------------------------------
+     *
+     * There is no local enforcement mode and no local "block uninspectable"
+     * toggle. Both used to live in the extension's own settings, which meant a
+     * user could disagree with the server and then wonder why nothing happened.
+     * Audit-vs-enforce and the uninspectable rule are properties of the POLICY,
+     * so they are read from it and change when it does.
+     */
+    function auditMode() {
+      return String(currentPolicy.mode || "enforce").toLowerCase() === "audit";
+    }
+    function blockUninspectable() {
+      // Defaults ON. Content nobody could open is exactly the case this exists
+      // to catch — a password-protected archive classifies as Public — so the
+      // safe reading has to be what you get when a policy says nothing.
+      return currentPolicy.block_uninspectable !== false;
+    }
+
     chrome.storage.onChanged.addListener(function (changes, area) {
       if (area !== "local") return;
-      if (changes.mode) cachedMode = changes.mode.newValue || "protection";
-      if (changes.blockUninspectable) blockUninspectable = changes.blockUninspectable.newValue !== false;
       // A policy edit on the server reaches here through the worker's cache.
       // Re-deriving engagement matters as much as storing the new policy: an
       // operator who switches GenAI posts from Allow to Block expects the next
@@ -764,7 +767,7 @@
         console.warn(
           "[CyberSentinel] " + uninspected.length + " attachment(s) have NO inspection result:",
           uninspected,
-          blockUninspectable
+          blockUninspectable()
             ? "— reported as uninspectable (policy decides)"
             : '— reported but not enforced. Turn on "Block attachments that cannot be inspected" ' +
               "in the extension's Options to stop these."
@@ -817,7 +820,7 @@
         localReasons: info.localReasons,
         localLevel: classifyFromReasons(info.localReasons),
         uninspected: info.uninspected,
-        blockUninspectable: blockUninspectable
+        blockUninspectable: blockUninspectable()
       };
     }
 
@@ -987,18 +990,18 @@
             return;
           }
 
-          if (action === "block" && cachedMode === "protection") {
+          if (action === "block" && !auditMode()) {
             console.warn("[CyberSentinel] BLOCKED by " + (verdict.source || "server") + ":", verdict.reason);
             showBlockNotice(key, fresh.localReasons, verdict.reason);
             return;
           }
 
           if (action === "block") {
-            // Monitor mode never blocks — but this gesture was already
-            // suppressed, so simply not blocking would silently drop the message
-            // while the dashboard recorded it as allowed and the user believed
-            // it had gone. A held gesture must always be resumed.
-            console.warn("[CyberSentinel] Would have blocked (monitor mode) — resuming:", verdict.reason);
+            // Audit never blocks — but this gesture was already suppressed, so
+            // simply not blocking would silently drop the message while the
+            // dashboard recorded it as allowed and the user believed it had
+            // gone. A held gesture must always be resumed.
+            console.warn("[CyberSentinel] Would have blocked (audit mode) — resuming:", verdict.reason);
           }
 
           hideNotice(key);
@@ -1272,7 +1275,7 @@
       var out = {
         app: APP, appId: profile.appId, category: profile.category,
         version: chrome.runtime.getManifest().version,
-        mode: cachedMode, blockUninspectable: blockUninspectable,
+        auditMode: auditMode(), blockUninspectable: blockUninspectable(),
         policyEnforced: !!currentPolicy.enforced, policyMode: currentPolicy.mode,
         cells: {
           submit: cellAction(submitActivity), attach: cellAction("attach"),

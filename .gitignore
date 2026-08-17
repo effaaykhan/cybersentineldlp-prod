@@ -173,6 +173,11 @@ models/checkpoints/
 !tsconfig.json
 # Policy seed files (default = curated; exported = .204 mirror) must be tracked
 !server/data/default_policies.json
+# The browser extension's managed-storage schema. manifest.json DECLARES this
+# file, and Chrome refuses to load an extension whose managed_schema is missing —
+# so without this negation a fresh clone builds an extension that cannot start.
+# (manifest.json itself only survives the *.json rule because it predates it.)
+!agents/browser-extension/*.json
 !server/data/exported_policies.json
 *.parquet
 *.feather

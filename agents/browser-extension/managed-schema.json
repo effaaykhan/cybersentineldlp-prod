@@ -1,0 +1,38 @@
+{
+  "$comment": [
+    "Enterprise-managed configuration for the CyberSentinel DLP extension.",
+    "",
+    "Pushed by manage-windows-agent.ps1 into",
+    "  HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\3rdparty\\extensions\\<id>\\policy",
+    "and read by the extension through chrome.storage.managed.",
+    "",
+    "WHY THIS EXISTS: without it, every endpoint needs someone to open the",
+    "extension's Options and type a server URL \u2014 which is both a support burden",
+    "and a control the user can then get wrong. More importantly, agentId is what",
+    "makes a machine running BOTH the endpoint agent and this extension appear as",
+    "ONE agent on the dashboard instead of two: the installer already knows the",
+    "agent's identity, so it hands it over rather than letting the extension",
+    "enrol a second one.",
+    "",
+    "Only the values an ADMINISTRATOR owns live here. Enforcement mode and the",
+    "uninspectable rule belong to the Web Activity Control policy on the server, not to a per-browser setting."
+  ],
+  "type": "object",
+  "properties": {
+    "serverUrl": {
+      "title": "DLP server API base URL",
+      "description": "e.g. http://192.168.2.204:55100/api/v1",
+      "type": "string"
+    },
+    "agentId": {
+      "title": "Endpoint agent identity to report under",
+      "description": "The agent_id of the CyberSentinel agent already installed on this device. When set, the extension reports under it and does NOT enrol separately, so the device appears once on the dashboard. Leave unset on a machine with no endpoint agent and the extension enrols on its own.",
+      "type": "string"
+    },
+    "diagnosticMode": {
+      "title": "Log recovered attachment text to this endpoint's browser console",
+      "description": "Diagnostic aid for working out why OCR missed a document on one machine. The text stays on that machine and is never sent anywhere. Leave off.",
+      "type": "boolean"
+    }
+  }
+}

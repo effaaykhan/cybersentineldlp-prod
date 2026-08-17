@@ -161,7 +161,7 @@ async function getManagedConfig() {
   try {
     if (!chrome.storage.managed) return {};
     return (await chrome.storage.managed.get([
-      "serverUrl", "agentId", "mode", "blockUninspectable"
+      "serverUrl", "agentId", "diagnosticMode"
     ])) || {};
   } catch (e) {
     // No policy configured is the overwhelmingly common case on an unmanaged
@@ -193,7 +193,7 @@ async function getManagedConfig() {
  */
 async function getConfig() {
   const [stored, managed] = await Promise.all([
-    chrome.storage.local.get(["serverUrl", "agentId", "mode", "agentKey", "canonicalAgentId"]),
+    chrome.storage.local.get(["serverUrl", "agentId", "agentKey", "canonicalAgentId"]),
     getManagedConfig()
   ]);
 
@@ -220,7 +220,6 @@ async function getConfig() {
     // None with no header), which is how the endpoint agent itself talks to
     // them — so an attached extension needs no credential of its own.
     agentKey: attached ? null : (stored.agentKey || null),
-    mode: managed.mode || stored.mode || "protection",
     managed
   };
 }
@@ -747,7 +746,8 @@ async function evaluateActivity(payload) {
       // server does its own extraction, hashing and document-type detection from
       // these bytes instead.
       fileB64: file.b64 || null,
-      uninspectable: file.status === "unreadable" && payload.blockUninspectable !== false
+      // Policy decides whether content nobody could open counts as sensitive.
+      uninspectable: file.status === "unreadable" && cachedPolicy.block_uninspectable !== false
     });
   }
   // A submit with neither body text nor attachments is still an activity worth a

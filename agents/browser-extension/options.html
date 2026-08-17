@@ -5,118 +5,97 @@
   <title>CyberSentinel DLP</title>
   <style>
     /*
-      Kept deliberately compact. This page is the toolbar POPUP as well as
-      the options page, and Chrome caps a popup at 600px tall — anything
-      past that silently scrolls out of sight. A previous version pushed the
-      checkboxes and the Save button below that line, so they simply looked
-      absent. Hints are one line each for the same reason.
+      This page is the toolbar POPUP as well as the options page, and Chrome caps
+      a popup at 600px tall — anything past that silently scrolls out of sight.
+      Keep it short.
     */
     body {
       font-family: Arial, sans-serif;
-      width: 390px;
+      width: 400px;
       padding: 12px 14px;
       margin: 0;
       color: #222;
     }
-    h3 { margin: 0 0 10px; font-size: 15px; }
-    label { display: block; margin-top: 10px; font-weight: 600; font-size: 12px; }
-    input, select {
-      width: 100%;
-      padding: 6px;
-      margin-top: 3px;
-      box-sizing: border-box;
-      font-size: 13px;
+    h3 { margin: 0 0 4px; font-size: 15px; }
+    .ver { float: right; font-size: 10px; color: #888; font-weight: 400; }
+    .lead { font-size: 11px; color: #666; margin: 0 0 12px; line-height: 1.45; }
+
+    .card {
+      margin-bottom: 10px;
+      padding: 9px 11px;
+      background: #f1f3f4;
+      border-radius: 5px;
+      font-size: 11px;
+      line-height: 1.55;
     }
+    .card b { font-size: 11px; }
+    .k { color: #5f6368; display: inline-block; min-width: 72px; }
+    .v { font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+
+    table.matrix { border-collapse: collapse; width: 100%; margin-top: 5px; font-size: 10px; }
+    table.matrix th, table.matrix td { padding: 2px 4px; text-align: center; }
+    table.matrix th { color: #5f6368; font-weight: 600; }
+    table.matrix td.cat { text-align: left; color: #202124; font-weight: 600; white-space: nowrap; }
+    .a-allow { color: #9aa0a6; }
+    .a-log   { color: #1a73e8; }
+    .a-alert { color: #e37400; font-weight: 700; }
+    .a-block { color: #c5221f; font-weight: 700; }
+
+    .pill {
+      display: inline-block; padding: 1px 6px; border-radius: 8px;
+      font-size: 10px; font-weight: 700; color: #fff; background: #5f6368;
+    }
+    .pill.on    { background: #188038; }
+    .pill.audit { background: #e37400; }
+    .pill.off   { background: #b3261e; }
+
     button {
-      margin-top: 14px;
-      padding: 8px 14px;
-      background: #1a73e8;
-      color: #fff;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 13px;
+      margin-top: 4px; padding: 7px 13px; background: #1a73e8; color: #fff;
+      border: none; border-radius: 4px; cursor: pointer; font-size: 12px;
     }
     button:hover { background: #1558b3; }
-    button.secondary { background: #5f6368; margin-left: 6px; }
-    button.secondary:hover { background: #494c50; }
-    #status { margin-top: 8px; font-size: 12px; min-height: 15px; line-height: 1.4; }
-    #resolved { margin-top: 4px; font-size: 10px; color: #1558b3; font-family: monospace; word-break: break-all; }
-    .hint { font-size: 10px; color: #666; margin-top: 3px; line-height: 1.35; }
-    label.checkbox {
-      display: flex;
-      align-items: flex-start;
-      gap: 7px;
-      font-weight: 600;
-      font-size: 12px;
-      margin-top: 12px;
+    #status { margin-top: 8px; font-size: 11px; min-height: 14px; line-height: 1.4; }
+
+    /* Shown only when NO administrator policy is present — i.e. an extension
+       installed without the endpoint agent, which has to be told where to
+       report. On a managed endpoint this whole block stays hidden. */
+    #manual { display: none; }
+    #manual label { display: block; margin-top: 9px; font-weight: 600; font-size: 11px; }
+    #manual input {
+      width: 100%; padding: 6px; margin-top: 3px; box-sizing: border-box; font-size: 12px;
     }
-    label.checkbox input { width: auto; margin: 1px 0 0; flex: none; }
-    .ver { float: right; font-size: 10px; color: #888; font-weight: 400; }
-    /*
-      The coverage box answers the question the old options page could not:
-      "is this thing actually doing anything?" An extension that is enrolled,
-      healthy and governed by no policy blocks nothing at all — which is
-      correct behaviour and looks identical to being broken.
-    */
-    #coverage {
-      margin-top: 12px;
-      padding: 8px 10px;
-      background: #f1f3f4;
-      border-radius: 4px;
-      font-size: 11px;
-      line-height: 1.5;
-    }
-    #coverage b { font-size: 11px; }
-    .pill {
-      display: inline-block;
-      padding: 1px 6px;
-      border-radius: 8px;
-      font-size: 10px;
-      font-weight: 700;
-      color: #fff;
-      background: #5f6368;
-    }
-    .pill.on { background: #188038; }
-    .pill.audit { background: #e37400; }
-    .pill.off { background: #b3261e; }
+    #manual .hint { font-size: 10px; color: #666; margin-top: 3px; line-height: 1.35; }
   </style>
 </head>
 <body>
   <h3>CyberSentinel DLP <span id="version" class="ver"></span></h3>
+  <p class="lead">
+    Managed by your organisation. What this extension inspects and blocks is set
+    by policy on the DLP server — there is nothing to configure here.
+  </p>
 
-  <label for="serverUrl">DLP Server URL</label>
-  <input id="serverUrl" placeholder="http://192.168.2.204:3023/api/v1" />
-  <div class="hint">Dashboard address. <code>/api/v1</code> is added if you leave it off.</div>
-  <div id="resolved"></div>
+  <div class="card" id="identity">Loading…</div>
+  <div class="card" id="coverage">Loading…</div>
 
-  <label for="agentId">Agent ID</label>
-  <input id="agentId" placeholder="browser-shounak-01" />
-  <div class="hint">Name for this browser in the dashboard.</div>
+  <!-- Unmanaged fallback only. See #manual in the stylesheet. -->
+  <div id="manual">
+    <div class="card" style="background:#fef7e0">
+      <b>Not managed by an agent.</b><br>
+      No endpoint agent on this device is supplying the server address, so it has
+      to be set here. Installing the CyberSentinel agent configures this
+      automatically and keeps the device to a single agent on the dashboard.
+    </div>
+    <label for="serverUrl">DLP Server URL</label>
+    <input id="serverUrl" placeholder="http://192.168.2.204:55100/api/v1" />
+    <div class="hint"><code>/api/v1</code> is added if you leave it off.</div>
 
-  <label for="mode">Mode</label>
-  <select id="mode">
-    <option value="protection">Protection (block + alert)</option>
-    <option value="monitor">Monitor (alert only, still sends)</option>
-  </select>
-  <div class="hint">Local override. Policy decides what is enforced; monitor never blocks.</div>
+    <label for="agentId">Name for this browser</label>
+    <input id="agentId" placeholder="browser-reception-01" />
 
-  <label class="checkbox" for="blockUninspectable">
-    <input type="checkbox" id="blockUninspectable" checked />
-    Block attachments that can't be inspected
-  </label>
-  <div class="hint">Archives, unusual formats, files over 20&nbsp;MB, and anything the scan never saw.</div>
+    <button id="save">Save</button>
+  </div>
 
-  <label class="checkbox" for="diagnosticMode">
-    <input type="checkbox" id="diagnosticMode" />
-    Diagnostic mode
-  </label>
-  <div class="hint">Logs the text OCR read into this browser's console. Stays on this machine; never sent to the server.</div>
-
-  <div id="coverage">Loading coverage…</div>
-
-  <button id="save">Save</button>
-  <button id="test" class="secondary">Test connection</button>
+  <button id="test">Check connection</button>
   <div id="status"></div>
 
   <script src="options.js"></script>

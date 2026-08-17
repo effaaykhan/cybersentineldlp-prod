@@ -367,16 +367,25 @@
    * machine, in their own console, only when they deliberately turn it on.
    * It is never sent to the DLP server.
    */
+  //
+  // Now driven by ADMINISTRATOR POLICY rather than a checkbox in the extension's
+  // settings. It was a user-facing toggle, which is the wrong shape twice over:
+  // an end user has no reason to turn it on, and the person who does need it —
+  // someone diagnosing why a particular endpoint's OCR is missing a document —
+  // is not standing at that endpoint. It is now a managed value, so it can be
+  // switched on for one machine from the server and switched off again after.
   let diagnosticMode = false;
-  // Guarded because this runs at load: a throw here would take down the
-  // whole inspection host, and "OCR stopped working" is a far worse outcome
-  // than "the diagnostic toggle is stuck off".
+  // Guarded because this runs at load: a throw here would take down the whole
+  // inspection host, and "OCR stopped working" is a far worse outcome than "the
+  // diagnostic flag is stuck off".
   try {
-    chrome.storage.local.get(["diagnosticMode"]).then((stored) => {
-      diagnosticMode = !!stored.diagnosticMode;
-    });
+    if (chrome.storage.managed) {
+      chrome.storage.managed.get(["diagnosticMode"]).then((m) => {
+        diagnosticMode = !!(m && m.diagnosticMode);
+      }).catch(() => {});
+    }
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === "local" && changes.diagnosticMode) {
+      if (area === "managed" && changes.diagnosticMode) {
         diagnosticMode = !!changes.diagnosticMode.newValue;
       }
     });

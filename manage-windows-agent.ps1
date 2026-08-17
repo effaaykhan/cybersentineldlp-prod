@@ -847,9 +847,13 @@ objShell.Run """$exePath""", 0, False
     # installed is harmless, and it means the control is already in place if that
     # browser is installed later — which is exactly the gap a user would drive
     # through otherwise.
+    # PrivateValue differs per browser and is NOT interchangeable: Chrome reads
+    # IncognitoModeAvailability, Edge reads InPrivateModeAvailability. Writing
+    # Chrome's name into Edge's key does nothing at all — Edge ignores it — while
+    # looking exactly like it worked.
     @(
-      [PSCustomObject]@{ Name = 'Chrome'; Root = $CHROME_POLICY },
-      [PSCustomObject]@{ Name = 'Edge';   Root = $EDGE_POLICY }
+      [PSCustomObject]@{ Name = 'Chrome'; Root = $CHROME_POLICY; PrivateValue = 'IncognitoModeAvailability'; PrivateLabel = 'Incognito' },
+      [PSCustomObject]@{ Name = 'Edge';   Root = $EDGE_POLICY;   PrivateValue = 'InPrivateModeAvailability';  PrivateLabel = 'InPrivate' }
     )
   }
 
@@ -949,20 +953,38 @@ objShell.Run """$exePath""", 0, False
     foreach ($b in Get-BrowserPolicyRoots) {
       if (-not (Test-Path $b.Root)) { New-Item -Path $b.Root -Force | Out-Null }
       if ($Disable) {
-        # 1 = InPrivate/Incognito disabled. 0 = available (the default).
-        Set-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -Value 1 -Type DWord
+        # 1 = disabled. 0 = available (the default).
+        Set-ItemProperty -Path $b.Root -Name $b.PrivateValue -Value 1 -Type DWord
       } else {
+        Remove-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue
+      }
+      # An earlier build wrote Chrome's value name under BOTH roots. It is inert
+      # under Edge, but leaving it there makes the registry read as though Edge
+      # were covered when it never was.
+      if ($b.Name -eq 'Edge') {
         Remove-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -ErrorAction SilentlyContinue
       }
     }
   }
 
-  function Get-InPrivateDisabled {
+  # Per browser, never collapsed to a single yes/no. Reporting "disabled" because
+  # ONE browser is covered is how Edge stayed wide open while the screen said the
+  # hole was closed.
+  function Get-InPrivateState {
+    $out = @()
     foreach ($b in Get-BrowserPolicyRoots) {
-      $v = (Get-ItemProperty -Path $b.Root -Name 'IncognitoModeAvailability' -ErrorAction SilentlyContinue).IncognitoModeAvailability
-      if ($v -eq 1) { return $true }
+      # Test-Path first: -ErrorAction SilentlyContinue suppresses a missing KEY,
+      # but not a null -Path, and a parameter-binding error prints a red wall of
+      # text in the middle of the status screen.
+      $v = $null
+      if ($b.Root -and (Test-Path $b.Root)) {
+        $v = (Get-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue).$($b.PrivateValue)
+      }
+      $out += [PSCustomObject]@{
+        Browser = $b.Name; Label = $b.PrivateLabel; Disabled = ($v -eq 1)
+      }
     }
-    return $false
+    $out
   }
 
   # ── Making an update actually happen ──────────────────────────────────
@@ -1049,13 +1071,16 @@ objShell.Run """$exePath""", 0, False
           $entry = $json.extensions.settings.$ExtId
           if (-not $entry) { continue }
           $loc = $entry.location
-          $label = switch ($loc) {
-            1  { 'packaged .crx' }
-            4  { 'LOADED UNPACKED' }
-            5  { 'component' }
-            10 { 'enterprise policy' }
-            default { "location $loc" }
-          }
+          $label = if ($null -eq $loc -or "$loc" -eq '') { 'recorded, origin unknown' }
+                   else {
+                     switch ($loc) {
+                       1  { 'packaged .crx' }
+                       4  { 'LOADED UNPACKED' }
+                       5  { 'component' }
+                       10 { 'enterprise policy' }
+                       default { "location $loc" }
+                     }
+                   }
           $out += [PSCustomObject]@{
             Browser = $p.Browser; User = $p.User; Profile = $p.Name
             Location = $loc; Label = $label
@@ -1234,10 +1259,12 @@ objShell.Run """$exePath""", 0, False
       Hint 'FIX: chrome://extensions -> find CyberSentinel DLP -> Remove.'
       Hint '     Then run [1] here again.'
     }
-    if (Get-InPrivateDisabled) {
-      Field 'InPrivate' 'disabled - no uninspected browsing' 'Green'
-    } else {
-      Field 'InPrivate' 'available - browsing there is NOT inspected' 'Yellow'
+    foreach ($ip in (Get-InPrivateState)) {
+      if ($ip.Disabled) {
+        Field "$($ip.Browser) $($ip.Label)" 'disabled - no uninspected browsing' 'Green'
+      } else {
+        Field "$($ip.Browser) $($ip.Label)" 'AVAILABLE - browsing there is NOT inspected' 'Yellow'
+      }
     }
 
     # Which identity the extension should report under. Without one it enrols
@@ -1270,17 +1297,25 @@ objShell.Run """$exePath""", 0, False
           # No policy can enable an extension in InPrivate, so the only way to
           # avoid an uninspected window is to not have one. Asked, not assumed:
           # it affects all browsing, not just DLP.
-          if (-not (Get-InPrivateDisabled)) {
+          $ipOpen = @(Get-InPrivateState | Where-Object { -not $_.Disabled })
+          if (@($ipOpen).Count -gt 0) {
             Blank
             Warn 'Extensions do not run in InPrivate/Incognito windows, and no'
             Warn 'policy can change that - so anything done there is invisible to'
-            Warn 'DLP. Disabling InPrivate is the only way to close that hole.'
-            $ip = Read-Host '   Disable InPrivate browsing on this device? (Y/n)'
+            Warn 'DLP. Disabling it is the only way to close that hole.'
+            foreach ($o in $ipOpen) { Hint "  still open: $($o.Browser) $($o.Label)" }
+            $ip = Read-Host '   Disable private browsing on this device? (Y/n)'
             if ($ip -ne 'n' -and $ip -ne 'N') {
-              try { Set-InPrivateAvailability $true; Ok 'InPrivate browsing disabled' }
-              catch { Err "Could not disable InPrivate: $($_.Exception.Message)" }
+              try {
+                Set-InPrivateAvailability $true
+                foreach ($st in (Get-InPrivateState)) {
+                  if ($st.Disabled) { Ok "$($st.Browser) $($st.Label) disabled" }
+                  else { Warn "$($st.Browser) $($st.Label) could NOT be disabled" }
+                }
+                Hint 'Takes effect when the browser restarts.'
+              } catch { Err "Could not disable private browsing: $($_.Exception.Message)" }
             } else {
-              Warn 'Left enabled - InPrivate browsing stays uninspected.'
+              Warn 'Left enabled - private browsing stays uninspected.'
             }
           }
 

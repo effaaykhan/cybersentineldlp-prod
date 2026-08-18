@@ -212,6 +212,21 @@ export type Event = {
   matched_policies?: any[]
   metadata?: Record<string, any>
   details?: Record<string, any>
+  // ── Web activity (browser extension) ───────────────────────────────────
+  activity?: string
+  app_category?: string
+  app_id?: string
+  app_name?: string
+  page_url?: string
+  page_host?: string
+  text_content?: string
+  text_truncated?: boolean
+  attachment_names?: string[]
+  recipients?: string
+  policy_reason?: string
+  matched_rules?: string[]
+  mask_summary?: Array<{ type: string; count: number }>
+  masked_text?: string
 }
 
 export const api = {

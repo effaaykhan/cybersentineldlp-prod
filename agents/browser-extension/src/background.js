@@ -692,6 +692,13 @@ async function evaluateOne(cfg, item, ctx) {
     // the substitution and no way for the two sides to disagree.
     maskedText: typeof data.masked_text === "string" ? data.masked_text : null,
     maskSummary: data.mask_summary || [],
+    // The rules the SERVER matched, by name. The event otherwise carried only
+    // what the bundled scanner spotted locally, so an event the server
+    // classified Restricted arrived with an empty rule list and nothing to say
+    // why — which is the first question anyone asks of it.
+    matchedRules: ((data.classification || {}).matched_rules || [])
+      .map((r) => r && (r.rule_name || r.name))
+      .filter(Boolean),
     level,
     reason: data.reason || "",
     severity: data.alert_severity || null,
@@ -969,7 +976,14 @@ async function reportActivity(payload, verdict) {
     recipients: payload.recipients || null,
     destination: payload.pageHost,
     destination_type: "web",
-    file_path: (payload.attachmentNames || [])[0] || null
+    file_path: (payload.attachmentNames || [])[0] || null,
+    // Why this happened, and — when something was redacted — what came out the
+    // other side. Without these an investigator has the verdict and none of the
+    // reasoning, which is the difference between a record and a log line.
+    policy_reason: verdict.reason || null,
+    matched_rules: verdict.matchedRules || null,
+    mask_summary: verdict.action === "mask" ? (verdict.maskSummary || []) : null,
+    masked_text: verdict.action === "mask" ? (verdict.maskedText || null) : null
   };
 
   const res = await postEventWithRetry(eventBody);

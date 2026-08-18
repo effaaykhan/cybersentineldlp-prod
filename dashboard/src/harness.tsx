@@ -53,6 +53,15 @@ const AGENTS = [
 ]
 
 const EVENTS = [
+  { id: 'e0', event_id: 'e0', timestamp: new Date(Date.now() - 60_000).toISOString(), event_type: 'genai', event_subtype: 'genai_post', severity: 'critical', action_taken: 'masked', action: 'masked', blocked: false, user: 'CORP\\a.mehta', user_email: 'a.mehta@corp.example', agent_id: 'win-crypton-8f21a4c0', hostname: 'CRYPTON', classification_level: 'Restricted', description: 'Content submitted to ChatGPT — sent with sensitive values replaced',
+    activity: 'post', app_category: 'genai', app_id: 'chatgpt', app_name: 'ChatGPT',
+    page_host: 'chatgpt.com', page_url: 'https://chatgpt.com/uc/6a843f95-22ec-83ea-8fa2-94569c95dd13',
+    text_content: 'what do you think of the aadhaar number 1235 6789 1234 ? can this be true? also check card 4111 1111 1111 1111 for r.menon@corp.example',
+    content: 'what do you think of the aadhaar number 1235 6789 1234 ? can this be true? also check card 4111 1111 1111 1111 for r.menon@corp.example',
+    masked_text: 'what do you think of the aadhaar number [AADHAAR_1] ? can this be true? also check card [CREDIT_CARD_1] for [EMAIL_1]',
+    mask_summary: [{ type: 'AADHAAR', count: 1 }, { type: 'CREDIT_CARD', count: 1 }, { type: 'EMAIL', count: 1 }],
+    matched_rules: ['Indian Aadhaar Number', 'Credit Card Number', 'Email Address'],
+    policy_reason: 'Post to Generative AI is set to Redact for Confidential content and above (GenAI and Web Activity)' },
   { id: 'e1', event_id: 'e1', timestamp: new Date(Date.now() - 120_000).toISOString(), event_type: 'usb_file_transfer', event_subtype: 'file_copied', severity: 'critical', action_taken: 'blocked', user: 'CORP\\a.mehta', agent_id: 'win-crypton-8f21a4c0', hostname: 'CRYPTON', file_name: 'Q3-forecast-CONFIDENTIAL.xlsx', file_path: 'C:\\Users\\a.mehta\\Documents\\Finance\\Q3-forecast-CONFIDENTIAL.xlsx', destination_path: 'E:\\', file_size: 2_411_520, classification_level: 'Confidential', description: 'Confidential spreadsheet copied to removable drive', file_hash: 'a3f1c9e0b7d24f5a8c1e6b0d9f3a2c7e' },
   { id: 'e2', event_id: 'e2', timestamp: new Date(Date.now() - 900_000).toISOString(), event_type: 'clipboard', severity: 'high', action_taken: 'alerted', user: 'CORP\\r.okonkwo', agent_id: 'lin-buildbox-2b77e910', hostname: 'buildbox-01', description: 'Card number pattern copied to clipboard', classification_level: 'Restricted' },
   { id: 'e3', event_id: 'e3', timestamp: new Date(Date.now() - 3_600_000).toISOString(), event_type: 'print', severity: 'medium', action_taken: 'logged', user: 'CORP\\j.silva', agent_id: 'win-reception-77c2', hostname: 'RECEPTION-01', file_name: 'onboarding-pack.pdf', description: 'Internal document printed', classification_level: 'Internal' },

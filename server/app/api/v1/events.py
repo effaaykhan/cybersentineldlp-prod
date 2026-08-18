@@ -236,6 +236,16 @@ class EventCreate(BaseModel):
     text_truncated: Optional[bool] = Field(None, description="True when text_content was capped")
     attachment_names: Optional[List[str]] = Field(None, description="Attachment filenames on this activity")
     recipients: Optional[str] = Field(None, description="Recipients / destination of a send")
+    # Why the decision went the way it did, and what it did. An event that says
+    # "masked" and nothing else is a verdict with the reasoning thrown away.
+    policy_reason: Optional[str] = Field(None, description="The rule/policy sentence behind the verdict")
+    matched_rules: Optional[List[str]] = Field(None, description="Names of the classification rules that fired")
+    # Redaction evidence. TYPES AND COUNTS ONLY — the values are the thing that
+    # was removed, and writing them into the event would put them back.
+    mask_summary: Optional[List[Dict[str, Any]]] = Field(
+        None, description="What was replaced, as [{type, count}] — never the values"
+    )
+    masked_text: Optional[str] = Field(None, description="What actually left the machine after redaction")
 
 
 class DLPEvent(BaseModel):
@@ -646,6 +656,18 @@ async def create_event(
         event_doc["web"] = {**event_doc.get("web", {}), **web_event_fields}
     if event.attachment_names:
         event_doc["attachment_names"] = event.attachment_names
+    if event.policy_reason:
+        event_doc["policy_reason"] = event.policy_reason
+    if event.matched_rules:
+        event_doc["matched_rules"] = event.matched_rules
+        # The dashboard and the incident view already read this shape.
+        event_doc.setdefault(
+            "classification_rules_matched", [{"rule_name": r} for r in event.matched_rules]
+        )
+    if event.mask_summary:
+        event_doc["mask_summary"] = event.mask_summary
+    if event.masked_text:
+        event_doc["masked_text"] = event.masked_text
     # The prompt / body text. Written to `content` as well when the agent did
     # not populate it, so every existing consumer that renders captured content
     # (event detail, incident view, SIEM payload) shows it without changes.

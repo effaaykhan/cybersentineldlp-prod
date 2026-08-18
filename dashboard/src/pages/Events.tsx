@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen, Printer } from 'lucide-react'
+import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen, Printer , Globe} from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { searchEvents, getAllAgents, clearAllEvents, type Event } from '@/lib/api'
@@ -233,10 +233,44 @@ function EventDetailModal({
     )
   }
 
+/* Vocabulary for browser-extension events. Mirrors
+   app/core/web_activity.ACTIVITY_LABELS so a report and the dashboard call the
+   same thing by the same name. */
+const WEB_ACTIVITY_LABEL: Record<string, string> = {
+  upload: 'Upload',
+  download: 'Download',
+  attach: 'Attach',
+  send: 'Send',
+  post: 'Post / Generate',
+  ai_response: 'AI response',
+}
+
+const WEB_CATEGORY_LABEL: Record<string, string> = {
+  webmail: 'Webmail',
+  cloud_storage: 'Cloud storage',
+  collaboration: 'Collaboration',
+  genai: 'Generative AI',
+}
+
+function Fact({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-cs-sm border border-cs-hair bg-cs-panel px-3 py-2">
+      <div className="eyebrow">{label}</div>
+      <div className="mt-0.5 truncate text-sm font-medium text-cs-ink" title={String(value)}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
   // Enhanced display for different event types
   const eventType = event.event_type?.toLowerCase() || 'file'
   const isClipboard = eventType === 'clipboard'
   const isFile = eventType === 'file' && !isBlockedTransfer
+  // Anything the browser extension reported: a prompt, an upload, a send.
+  // These had no branch at all, so a redacted GenAI prompt — the event with the
+  // most to say — rendered as a severity chip and a one-line description.
+  const isWeb = !!(event.activity || event.app_category || event.app_name)
   
   // Get content to display
   const displayContent = isClipboard 
@@ -401,6 +435,120 @@ function EventDetailModal({
                   {displayContent}
                 </p>
               </div>
+            </div>
+          )}
+
+          {/* Web activity — where it went, what was in it, and what left */}
+          {isWeb && (
+            <div className="rounded-cs-card border border-cs-hair bg-cs-panel-2 p-6">
+              <div className="mb-4 flex items-center gap-2">
+                <Globe className="h-5 w-5 text-cs-indigo" />
+                <label className="text-sm font-medium uppercase text-cs-ink-2">
+                  {WEB_ACTIVITY_LABEL[event.activity || ''] || 'Web activity'}
+                  {event.app_name ? ` — ${event.app_name}` : ''}
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Fact label="Destination" value={event.app_name || event.page_host || '—'} />
+                <Fact label="Category" value={WEB_CATEGORY_LABEL[event.app_category || ''] || event.app_category || '—'} />
+                <Fact label="Activity" value={WEB_ACTIVITY_LABEL[event.activity || ''] || event.activity || '—'} />
+              </div>
+
+              {event.page_url && (
+                <div className="mt-3">
+                  <div className="eyebrow mb-1">Page</div>
+                  <p className="break-all font-mono text-xs text-cs-ink-2">{event.page_url}</p>
+                </div>
+              )}
+
+              {(event.matched_rules?.length || event.policy_reason) && (
+                <div className="mt-4 border-t border-cs-hair pt-4">
+                  <div className="eyebrow mb-1.5">Why</div>
+                  {event.matched_rules?.length ? (
+                    <div className="mb-1.5 flex flex-wrap gap-1.5">
+                      {event.matched_rules.map((r: string) => (
+                        <span key={r} className="badge badge-info">{r}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {event.policy_reason && (
+                    <p className="text-sm leading-relaxed text-cs-ink-2">{event.policy_reason}</p>
+                  )}
+                </div>
+              )}
+
+              {/*
+                The before and after.
+
+                This is the whole point of a redaction event and the only place
+                in the product where both halves exist: what the person typed,
+                and what actually reached the vendor. Showing one without the
+                other leaves the reader to take the verdict on trust.
+              */}
+              {event.masked_text ? (
+                <div className="mt-4 border-t border-cs-hair pt-4">
+                  {!!event.mask_summary?.length && (
+                    <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                      <span className="eyebrow">Replaced</span>
+                      {event.mask_summary.map((m: { type: string; count: number }) => (
+                        <span key={m.type} className="badge badge-warning">
+                          {m.count} × {m.type.toLowerCase().replace(/_/g, ' ')}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div>
+                      <div className="eyebrow mb-1">What was typed</div>
+                      <div className="rounded-cs-sm border border-cs-crit/25 bg-cs-crit/[0.05] p-3">
+                        <p className="whitespace-pre-wrap break-words font-mono text-[12.5px] text-cs-ink">
+                          {event.text_content || event.content}
+                        </p>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="eyebrow mb-1">
+                        What reached {event.app_name || 'the site'}
+                      </div>
+                      <div className="rounded-cs-sm border border-cs-ok/25 bg-cs-ok/[0.06] p-3">
+                        <p className="whitespace-pre-wrap break-words font-mono text-[12.5px] text-cs-ink">
+                          {event.masked_text}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                (event.text_content || event.content) && (
+                  <div className="mt-4 border-t border-cs-hair pt-4">
+                    <div className="eyebrow mb-1">
+                      {event.blocked ? 'What was stopped' : 'What was submitted'}
+                    </div>
+                    <div className="rounded-cs-sm border border-cs-hair bg-cs-panel p-3">
+                      <p className="whitespace-pre-wrap break-words font-mono text-[12.5px] text-cs-ink">
+                        {event.text_content || event.content}
+                      </p>
+                    </div>
+                    {event.text_truncated && (
+                      <p className="mt-1 text-[11.5px] text-cs-muted">
+                        Capped at the inspection limit — the message was longer than this.
+                      </p>
+                    )}
+                  </div>
+                )
+              )}
+
+              {!!event.attachment_names?.length && (
+                <div className="mt-4 border-t border-cs-hair pt-4">
+                  <div className="eyebrow mb-1.5">Attachments</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {event.attachment_names.map((n: string) => (
+                      <span key={n} className="badge badge-info font-mono">{n}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

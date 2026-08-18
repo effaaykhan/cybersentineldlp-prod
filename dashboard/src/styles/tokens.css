@@ -34,6 +34,23 @@
   --cs-panel-2:   #fafbfc;   /* inset fill: table headers, quiet rows */
   --cs-scrim:     rgba(21, 23, 28, 0.42);   /* modal backdrop */
 
+  /* Elevation. The app is a hairline design — surfaces are separated by a 1px
+     border, not by shadow. The ONE exception is an overlay, which must read as
+     lifted off the page rather than pasted onto it, so it gets the only real
+     shadow in the system. Two steps, no more. */
+  --cs-shadow-pop:   0 4px 12px -2px rgba(21, 23, 28, 0.10), 0 2px 4px -2px rgba(21, 23, 28, 0.06);
+  --cs-shadow-modal: 0 24px 64px -16px rgba(21, 23, 28, 0.28), 0 8px 20px -8px rgba(21, 23, 28, 0.14);
+
+  /* Motion.
+     An operations console gets exactly one animated gesture — opening and
+     closing an overlay — and nothing else. Everything is fast, and OUT is
+     faster than IN, which is what makes an interface feel answerable rather
+     than sluggish. The easing is a decisive decelerate: the panel arrives
+     quickly and settles, it does not float. */
+  --cs-ease:      cubic-bezier(0.16, 1, 0.3, 1);
+  --cs-dur-in:    200ms;
+  --cs-dur-out:   130ms;
+
   /* Action semantics for policy authoring.
      Deliberately NO new hues: a policy action IS a severity statement, so these
      alias the severity ramp rather than widening the palette. allow is absence

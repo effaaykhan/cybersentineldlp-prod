@@ -166,7 +166,8 @@
   .btn,
   .btn-primary,
   .btn-secondary,
-  .btn-danger {
+  .btn-danger,
+  .btn-ghost {
     @apply px-4 py-2 text-sm font-semibold inline-flex items-center justify-center gap-2;
     position: relative;
     border-radius: 9999px;                 /* curved / pill ends */
@@ -238,6 +239,34 @@
       0 2px 6px rgba(15, 23, 42, 0.07);
   }
 
+  /* The quiet weight.
+     The family had three variants and all of them are loud — every one carries
+     a gradient, a ledge shadow and a press travel. So a dialog footer with
+     "Back", "Cancel" and "Continue" rendered three competing pills and the eye
+     had nowhere to land. Ghost is the same shape and the same press behaviour
+     with none of the depth: it belongs to the family, it just is not asking
+     for the click. */
+  .btn-ghost {
+    color: var(--cs-ink-2);
+    border: 1px solid transparent;
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+  .btn-ghost:hover {
+    background: var(--cs-panel-2);
+    border-color: var(--cs-hair);
+    color: var(--cs-ink);
+  }
+  .btn-ghost:active {
+    background: var(--cs-hair-2);
+  }
+  .btn-ghost:focus-visible {
+    outline: 2px solid var(--cs-indigo);
+    outline-offset: 2px;
+  }
+
   /* Crimson glass */
   .btn-danger {
     color: #fff;
@@ -266,6 +295,31 @@
       inset 0 -4px 10px rgba(127, 20, 20, 0.48),
       0 1px 0 #a41c1c,
       0 3px 8px rgba(220, 38, 38, 0.30);
+  }
+
+  /* Disabled: the depth is what says "press me", so a disabled control has to
+     lose it. Without this a greyed-out Continue still sat proud of the page
+     with its ledge shadow and invited the click it was going to refuse. */
+  .btn:disabled,
+  .btn-primary:disabled,
+  .btn-secondary:disabled,
+  .btn-danger:disabled,
+  .btn-ghost:disabled {
+    cursor: not-allowed;
+    color: var(--cs-muted-2);
+    background: var(--cs-hair-2);
+    border-color: var(--cs-hair);
+    box-shadow: none;
+    transform: none;
+    filter: none;
+  }
+  .btn:disabled:hover,
+  .btn-primary:disabled:hover,
+  .btn-secondary:disabled:hover,
+  .btn-danger:disabled:hover,
+  .btn-ghost:disabled:hover {
+    transform: none;
+    box-shadow: none;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -360,6 +414,27 @@
     background-image: linear-gradient(135deg, #373754 0%, #8f8fb0 55%, #e6e6f2 100%);
   }
 }
+
+  /* ── Overlay motion ───────────────────────────────────────────────
+     The entrance lives in tailwind.config (animate-cs-scrim-in /
+     animate-cs-panel-in). The exit lives here because it is played by
+     Modal.tsx while the dialog is being unmounted, and it is deliberately
+     shorter than the entrance: an interface that dismisses slower than it
+     opens feels like it is arguing with you. */
+  .cs-scrim-out {
+    animation: cs-scrim-out var(--cs-dur-out) var(--cs-ease) both;
+  }
+  .cs-panel-out {
+    animation: cs-panel-out var(--cs-dur-out) var(--cs-ease) both;
+  }
+  @keyframes cs-scrim-out {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+  }
+  @keyframes cs-panel-out {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: translateY(6px) scale(0.99); }
+  }
 
 @layer utilities {
   /* Animations for login page */

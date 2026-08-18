@@ -84,6 +84,23 @@ module.exports = {
         card: '0 1px 2px rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.06)',
         'card-hover': '0 2px 8px rgba(15,23,42,0.06), 0 8px 24px rgba(15,23,42,0.08)',
         focus: 'var(--cs-focus)',
+        // Overlays are the only surface in this design that casts a shadow.
+        pop: 'var(--cs-shadow-pop)',
+        modal: 'var(--cs-shadow-modal)',
+      },
+      transitionTimingFunction: {
+        cs: 'var(--cs-ease)',
+      },
+      keyframes: {
+        'cs-scrim-in': { from: { opacity: '0' }, to: { opacity: '1' } },
+        'cs-panel-in': {
+          from: { opacity: '0', transform: 'translateY(10px) scale(0.985)' },
+          to: { opacity: '1', transform: 'none' },
+        },
+      },
+      animation: {
+        'cs-scrim-in': 'cs-scrim-in var(--cs-dur-in) var(--cs-ease) both',
+        'cs-panel-in': 'cs-panel-in var(--cs-dur-in) var(--cs-ease) both',
       },
       borderRadius: {
         'cs-card': 'var(--cs-r-card)',

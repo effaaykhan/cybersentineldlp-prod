@@ -36,6 +36,31 @@ const ACTIVITIES: Array<{ value: WebActivity; label: string; short: string }> = 
   { value: 'ai_response', label: 'AI Response', short: 'AI reply' },
 ]
 
+/*
+  Send and Post are the same gesture.
+
+  Both are "the user submitted what they composed" — the guard reads one field,
+  `profile.activity`, and webmail profiles set it to send while every other
+  profile sets it to post. No category offers both, so as two columns the matrix
+  showed one that was empty for every row but Webmail, beside one that was empty
+  for Webmail alone.
+
+  The two names are kept in the data because they are worth having in an event
+  and a SIEM record — "sent an email" and "submitted a prompt" are not the same
+  sentence to read at 3am — but they are one decision to make, so they are one
+  column here. The column writes whichever name that category actually uses.
+*/
+const SUBMIT_ACTIVITIES: WebActivity[] = ['send', 'post']
+
+/** The columns actually drawn: the submit pair collapsed into one. */
+const COLUMNS: Array<{ key: string; label: string; short: string; activities: WebActivity[] }> = [
+  { key: 'upload', label: 'Upload', short: 'Upload', activities: ['upload'] },
+  { key: 'download', label: 'Download', short: 'Download', activities: ['download'] },
+  { key: 'attach', label: 'Attach', short: 'Attach', activities: ['attach'] },
+  { key: 'submit', label: 'Send / Post', short: 'Send / Post', activities: SUBMIT_ACTIVITIES },
+  { key: 'ai_response', label: 'AI Response', short: 'AI reply', activities: ['ai_response'] },
+]
+
 // Which activities are meaningful for which category. Mirrors
 // server/app/core/web_activity.py CATEGORY_ACTIVITIES — a cell outside this map
 // is ignored server-side, so offering it would be offering a control that
@@ -245,9 +270,9 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
             <thead>
               <tr className="bg-cs-panel-2 border-b border-cs-hair">
                 <th className="text-left px-3 py-2 font-semibold text-cs-ink w-[168px]">Category</th>
-                {ACTIVITIES.map((a) => (
-                  <th key={a.value} className="px-2 py-2 font-semibold text-cs-ink text-center whitespace-nowrap">
-                    {a.short}
+                {COLUMNS.map((c) => (
+                  <th key={c.key} className="px-2 py-2 font-semibold text-cs-ink text-center whitespace-nowrap">
+                    {c.short}
                   </th>
                 ))}
                 <th className="px-2 py-2 font-semibold text-cs-ink text-center">All</th>
@@ -268,22 +293,27 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
                       </div>
                     </td>
 
-                    {ACTIVITIES.map((act) => {
-                      const applicable = CATEGORY_ACTIVITIES[cat.value].includes(act.value)
-                      if (!applicable) {
+                    {COLUMNS.map((col) => {
+                      // A column can stand for more than one activity name
+                      // (Send / Post); only one of them is ever meaningful for
+                      // a given category, and that is the one this cell edits.
+                      const act = col.activities.find((a) =>
+                        CATEGORY_ACTIVITIES[cat.value].includes(a),
+                      )
+                      if (!act) {
                         return (
-                          <td key={act.value} className="px-2 py-2 text-center text-cs-ink-3">
-                            <span title={`${act.label} does not apply to ${cat.label}`}>—</span>
+                          <td key={col.key} className="px-2 py-2 text-center text-cs-muted-2">
+                            <span title={`${col.label} does not apply to ${cat.label}`}>—</span>
                           </td>
                         )
                       }
-                      const current = cellAction(row[act.value])
+                      const current = cellAction(row[act])
                       return (
-                        <td key={act.value} className="px-2 py-2 text-center">
+                        <td key={col.key} className="px-2 py-2 text-center">
                           <select
                             value={current}
-                            aria-label={`${cat.label}: ${act.label}`}
-                            onChange={(e) => setCell(cat.value, act.value, e.target.value as WebActivityAction)}
+                            aria-label={`${cat.label}: ${ACTIVITIES.find((a) => a.value === act)?.label || act}`}
+                            onChange={(e) => setCell(cat.value, act, e.target.value as WebActivityAction)}
                             className={`appearance-none cursor-pointer rounded-cs-sm border border-cs-hair bg-cs-panel
                               bg-[url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5'%3E%3Cpath fill='%239aa0aa' d='M0 0h8L4 5z'/%3E%3C/svg%3E")]
                               bg-[length:7px] bg-[right_6px_center] bg-no-repeat py-1 pl-2 pr-5 text-[11.5px] font-semibold
@@ -291,7 +321,7 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
                               ACTIONS.find((a) => a.value === current)?.cls || ''
                             }`}
                           >
-                            {actionsFor(act.value).map((a) => (
+                            {actionsFor(act).map((a) => (
                               <option key={a.value} value={a.value}>
                                 {a.label}
                               </option>

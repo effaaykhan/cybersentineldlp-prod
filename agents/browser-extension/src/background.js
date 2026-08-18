@@ -1353,6 +1353,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       testConnection().then(sendResponse);
       return true;
 
+    case "CSDLP_SYNC_NOW":
+      // The popup asks for this the moment it opens. Without it the coverage
+      // grid shows whatever the last five-minute alarm happened to fetch, so a
+      // policy changed on the dashboard a minute ago is simply not there — and
+      // the operator, checking whether their change landed, is told it did not.
+      syncAll()
+        .then(() => sendResponse({ ok: true }))
+        .catch((err) => sendResponse({ ok: false, error: String(err && err.message) }));
+      return true;
+
     case "CYBERSENTINEL_STATE":
       loadCaches()
         .then(getConfig)

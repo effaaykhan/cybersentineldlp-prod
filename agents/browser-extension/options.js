@@ -173,6 +173,27 @@ document.addEventListener("DOMContentLoaded", async () => {
     setStatusText(`${stored.lastStatus.message} (${when})`, stored.lastStatus.ok ? "ok" : "error");
   }
   await refresh();
+
+  /*
+    Keep it live.
+
+    The coverage grid is the answer to "is my policy actually in force here",
+    and it used to be a snapshot taken when the popup opened — of a cache that
+    can be up to five minutes old. So an operator who changed a policy on the
+    dashboard and immediately opened this saw the previous one, with nothing to
+    say it was stale.
+
+    Two halves. Ask the worker to sync the moment the popup opens, and re-render
+    whenever the cached policy or catalog changes — which covers that sync, the
+    five-minute alarm, and a managed-config push, without this having to know
+    which of them happened.
+  */
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    if (changes.webActivityPolicy || changes.appCatalog) refresh();
+  });
+
+  ask({ type: "CSDLP_SYNC_NOW" }).catch(() => {});
 });
 
 document.getElementById("save").addEventListener("click", async () => {

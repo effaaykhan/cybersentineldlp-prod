@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Globe, ShieldCheck, ShieldAlert, Plus, X, Sparkles } from 'lucide-react'
+import { Globe, ShieldCheck, ShieldAlert, Plus, X, Sparkles, AlertTriangle } from 'lucide-react'
 import {
   WebActivityControlConfig,
   WebActivityCategory,
@@ -55,6 +55,37 @@ const ACTIONS: Array<{ value: WebActivityAction; label: string; cls: string }> =
   { value: 'block', label: 'Block', cls: 'text-cs-crit' },
 ]
 
+/*
+  Which actions each activity can actually PERFORM. Mirrors
+  app/core/web_activity.ACTIVITY_ACTIONS and the extension's policy.js.
+
+  Redact is offered on Post alone, because Post is the only activity that is a
+  single box of prose the endpoint can rewrite. A file cannot be redacted on its
+  way out (Upload, Attach); a download never passes through the extension at all
+  — the browser writes it straight to disk; webmail's Send splits its text
+  across a subject and a body, which one redacted string cannot be put back
+  into; and an AI reply can be withheld but rewriting the model's answer in the
+  page is a different feature.
+
+  Offering an action that cannot be carried out is worse than not offering it:
+  the operator believes it is armed and the endpoint quietly does something
+  else. The server clamps anything that slips through anyway — upward, so an
+  un-redactable Redact becomes a Block.
+*/
+const ACTIVITY_ACTIONS: Record<WebActivity, WebActivityAction[]> = {
+  upload: ['allow', 'log', 'alert', 'block'],
+  download: ['allow', 'log', 'alert', 'block'],
+  attach: ['allow', 'log', 'alert', 'block'],
+  send: ['allow', 'log', 'alert', 'block'],
+  post: ['allow', 'log', 'alert', 'mask', 'block'],
+  ai_response: ['allow', 'log', 'alert', 'block'],
+}
+
+/** Activities whose content the endpoint never sees, so a threshold cannot apply. */
+const ACTIVITIES_WITHOUT_CONTENT: WebActivity[] = ['download']
+
+const actionsFor = (a: WebActivity) => ACTIONS.filter((x) => ACTIVITY_ACTIONS[a].includes(x.value))
+
 const LEVELS = ['', 'Internal', 'Confidential', 'Restricted']
 
 function cellAction(cell: WebActivityAction | WebActivityCell | undefined): WebActivityAction {
@@ -99,6 +130,16 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
 
   const mode = config.mode || 'enforce'
   const matrix = config.matrix || {}
+
+  // Is any activity ruled whose content the endpoint can never see? Only then
+  // is the threshold caveat worth showing — an unused warning is noise.
+  const ruledWithoutContent = ACTIVITIES_WITHOUT_CONTENT.some((act) =>
+    Object.values(matrix).some((row: any) => {
+      const cell = row?.[act]
+      const a = typeof cell === 'object' ? cell?.action : cell
+      return a && a !== 'allow'
+    }),
+  )
   const overrides = config.appOverrides || []
   const blockUninspectable = config.blockUninspectable !== false
 
@@ -250,7 +291,7 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
                               ACTIONS.find((a) => a.value === current)?.cls || ''
                             }`}
                           >
-                            {ACTIONS.map((a) => (
+                            {actionsFor(act.value).map((a) => (
                               <option key={a.value} value={a.value}>
                                 {a.label}
                               </option>
@@ -272,7 +313,14 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
                                    focus:outline-none focus:ring-[3px] focus:ring-cs-indigo-faint"
                       >
                         <option value="">Set…</option>
-                        {ACTIONS.map((a) => (
+                        {/* Only actions every activity in this row can perform —
+                            otherwise "set the whole row to Redact" would quietly
+                            mean something different in each column. */}
+                        {ACTIONS.filter((a) =>
+                          CATEGORY_ACTIVITIES[cat.value].every((act) =>
+                            ACTIVITY_ACTIONS[act].includes(a.value),
+                          ),
+                        ).map((a) => (
                           <option key={a.value} value={a.value}>
                             {a.label}
                           </option>
@@ -290,13 +338,20 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
           <p>
             <strong className="text-cs-ink-2">Post</strong> and{' '}
             <strong className="text-cs-ink-2">Attach</strong> are what stop data reaching an AI
-            vendor. On <span className="text-cs-act-block font-semibold">Block</span> the prompt is
+            vendor. On <span className="font-semibold text-cs-act-block">Block</span> the prompt is
             held in the browser, inspected, and only released if it is clean — it never leaves the
             machine.
           </p>
           <p>
+            <span className="font-semibold text-cs-act-mask">Redact</span> is offered on Post alone,
+            because Post is the only activity that is a single box of prose the endpoint can rewrite.
+            Sensitive values are replaced with placeholders — <code className="rounded bg-cs-panel-2 px-1">[AADHAAR_1]</code> —
+            and the person is told what was replaced. If a value cannot be located, or the message
+            carries an attachment, it is blocked instead.
+          </p>
+          <p>
             <strong className="text-cs-ink-2">AI Response</strong> is the reply coming back. On{' '}
-            <span className="text-cs-act-block font-semibold">Block</span> it is masked while it
+            <span className="font-semibold text-cs-act-block">Block</span> it is masked while it
             streams and shown only once it has been checked, so a reply that carries sensitive data
             is never read. It cannot un-send the prompt — that is what Post and Attach are for — and
             it costs a short pause before each answer appears.
@@ -318,11 +373,22 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
             </option>
           ))}
         </select>
-        <p className="text-[11px] text-cs-ink-3 mt-1">
+        <p className="text-[11px] text-cs-muted mt-1 leading-relaxed">
           With no threshold, a ruled activity is acted on regardless of what it contains — which is how
           &ldquo;no Generative AI at all&rdquo; is written. With one, ordinary work passes and only
           sensitive content is stopped.
         </p>
+        {config.minLevel && ruledWithoutContent && (
+          <p className="mt-1.5 flex items-start gap-1.5 text-[11.5px] leading-relaxed text-cs-med">
+            <AlertTriangle className="mt-[1px] h-3.5 w-3.5 shrink-0" />
+            <span>
+              This threshold does not apply to <strong>Download</strong>. The browser writes a
+              download straight to disk, so the extension never sees the bytes and has nothing to
+              classify — a ruled download is matched on the app alone. The endpoint agent inspects
+              the file afterwards, on the filesystem.
+            </span>
+          </p>
+        )}
       </div>
 
       {/* Per-app exceptions */}

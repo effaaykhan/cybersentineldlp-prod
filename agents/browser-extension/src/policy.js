@@ -28,6 +28,49 @@
   // the work continue, so a cell that says block and a cell that says mask
   // must resolve to block.
   var ACTION_RANK = { allow: 0, log: 1, alert: 2, mask: 3, block: 4 };
+
+  // Mirrors app/core/web_activity.ACTIVITY_ACTIONS. Which actions this endpoint
+  // can actually PERFORM for each activity — a file cannot be rewritten on its
+  // way out, a download never passes through the extension at all, and webmail
+  // splits its text across a subject and a body that one redacted string cannot
+  // be put back into.
+  var ACTIVITY_ACTIONS = {
+    upload:      ["allow", "log", "alert", "block"],
+    download:    ["allow", "log", "alert", "block"],
+    attach:      ["allow", "log", "alert", "block"],
+    send:        ["allow", "log", "alert", "block"],
+    post:        ["allow", "log", "alert", "mask", "block"],
+    ai_response: ["allow", "log", "alert", "block"]
+  };
+
+  // Activities whose content the endpoint never sees, so a threshold cannot be
+  // evaluated for them.
+  var ACTIVITIES_WITHOUT_CONTENT = { download: true };
+
+  /**
+   * The nearest action this activity can carry out, never weaker than asked.
+   *
+   * Resolves UPWARD on purpose: an operator who asked for redaction wanted the
+   * data not to leave un-redacted, so where it cannot be redacted, stopping it
+   * honours the intent and logging it does not. Mirrors clamp_action() on the
+   * server, which is the authority; this exists for the cached-policy path,
+   * where there is no server to ask.
+   */
+  function clampAction(activity, action) {
+    var allowed = ACTIVITY_ACTIONS[activity] || Object.keys(ACTION_RANK);
+    if (allowed.indexOf(action) >= 0) return action;
+    var want = ACTION_RANK[action] || 0;
+    var best = null;
+    for (var i = 0; i < allowed.length; i++) {
+      var a = allowed[i];
+      if ((ACTION_RANK[a] || 0) >= want && (best === null || ACTION_RANK[a] < ACTION_RANK[best])) best = a;
+    }
+    if (best) return best;
+    for (var j = 0; j < allowed.length; j++) {
+      if (best === null || ACTION_RANK[allowed[j]] > ACTION_RANK[best]) best = allowed[j];
+    }
+    return best || "allow";
+  }
   var LEVEL_RANK = { public: 0, internal: 1, confidential: 2, restricted: 3 };
 
   function normAction(value, fallback) {
@@ -118,7 +161,7 @@
   function actionFor(policy, category, activity, appId) {
     var hit = lookup(policy, category, activity, appId);
     if (!hit) return "allow";
-    var action = hit.action;
+    var action = clampAction(activity, hit.action);
     if (String(policy.mode || "enforce").toLowerCase() === "audit" && action === "block") {
       action = "alert";
     }
@@ -143,7 +186,7 @@
     var hit = lookup(policy, category, activity, appId);
     if (!hit) return { action: "allow", reason: "no policy covers this activity" };
 
-    var action = hit.action;
+    var action = clampAction(activity, hit.action);
     if (action === "allow") return { action: "allow", reason: "policy allows this activity" };
 
     var threshold = hit.minLevel;
@@ -180,6 +223,9 @@
 
   root.CSDLPPolicy = {
     ACTION_RANK: ACTION_RANK,
+    ACTIVITY_ACTIONS: ACTIVITY_ACTIONS,
+    ACTIVITIES_WITHOUT_CONTENT: ACTIVITIES_WITHOUT_CONTENT,
+    clampAction: clampAction,
     actionFor: actionFor,
     resolveFallback: resolveFallback,
     strongest: strongest,

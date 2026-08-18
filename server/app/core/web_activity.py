@@ -110,6 +110,73 @@ ACTIONS: Tuple[str, ...] = (
     ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_MASK, ACTION_BLOCK,
 )
 
+# ── What each activity can actually DO ───────────────────────────────────────
+# An action is only worth offering where the endpoint can carry it out. Every
+# entry below is a statement about mechanism, not policy:
+#
+#   upload / attach   a file leaves the machine. There is no way to rewrite a
+#                     PDF or a spreadsheet on its way out, so it can be stopped
+#                     or watched, never redacted.
+#   download          the bytes never pass through the extension — the browser
+#                     owns the transfer and writes straight to disk. It can be
+#                     cancelled (chrome.downloads.cancel), which is why block
+#                     works, but nothing can be read or rewritten.
+#   send              webmail, which splits its text across a subject line and a
+#                     body. One redacted string cannot be put back into two
+#                     fields without guessing where to cut it.
+#   post              prose in a single composer — a prompt, a message, a
+#                     comment. The only place a redaction can actually be
+#                     applied, and the place it is wanted.
+#   ai_response       inbound. It can be withheld until it has been inspected,
+#                     but "redacting" it would mean rewriting the model's answer
+#                     in the page, which is a different feature.
+#
+# Offering an action that cannot be performed is worse than not offering it: the
+# operator believes it is armed, and the endpoint quietly does something else.
+ACTIVITY_ACTIONS: Dict[str, Tuple[str, ...]] = {
+    ACTIVITY_UPLOAD:      (ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_BLOCK),
+    ACTIVITY_DOWNLOAD:    (ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_BLOCK),
+    ACTIVITY_ATTACH:      (ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_BLOCK),
+    ACTIVITY_SEND:        (ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_BLOCK),
+    ACTIVITY_POST:        (ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_MASK, ACTION_BLOCK),
+    ACTIVITY_AI_RESPONSE: (ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_BLOCK),
+}
+
+# Activities where the endpoint never sees the content. A sensitivity threshold
+# cannot be evaluated for these — there is nothing to classify — so a cell that
+# carries one is matched on app and activity alone.
+ACTIVITIES_WITHOUT_CONTENT: frozenset = frozenset({ACTIVITY_DOWNLOAD})
+
+
+def supports_action(activity: Optional[str], action: Optional[str]) -> bool:
+    """Can this activity actually carry out this action?"""
+    a = normalize_activity(activity)
+    if not a:
+        return False
+    return str(action or "").strip().lower() in ACTIVITY_ACTIONS.get(a, ())
+
+
+def clamp_action(activity: Optional[str], action: str) -> str:
+    """The nearest action this activity CAN perform, never weaker than asked.
+
+    A stored policy can still carry an action the activity cannot do — it was
+    written before this table existed, or imported from another deployment. It
+    resolves upward rather than downward: an operator who asked for redaction
+    wanted the data not to leave un-redacted, and if it cannot be redacted then
+    stopping it honours that, while logging it would not.
+    """
+    a = normalize_activity(activity)
+    act = str(action or "").strip().lower()
+    allowed = ACTIVITY_ACTIONS.get(a or "", ACTIONS)
+    if act in allowed:
+        return act
+    rank = ACTION_RANK.get(act, 0)
+    stronger = [x for x in allowed if ACTION_RANK.get(x, 0) >= rank]
+    if stronger:
+        return min(stronger, key=lambda x: ACTION_RANK.get(x, 0))
+    return max(allowed, key=lambda x: ACTION_RANK.get(x, 0)) if allowed else ACTION_ALLOW
+
+
 # Rank for collapsing several matching rules into one effective action. Mirrors
 # ``policy_transformer._ACTION_RANK`` so the endpoint and the dashboard never
 # disagree about what a policy does.

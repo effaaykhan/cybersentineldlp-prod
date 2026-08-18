@@ -2148,10 +2148,30 @@ def _web_activity_decision(
     if action is None or action == _WA.ACTION_ALLOW:
         return (_WA.ACTION_ALLOW, "")
 
+    # A stored policy can still carry an action this activity cannot perform —
+    # written before the capability table existed, or imported from another
+    # deployment. Resolve it to the nearest action that CAN be performed, never
+    # to a weaker one: whoever asked for redaction wanted the data not to leave
+    # un-redacted, so blocking honours that where logging would not.
+    clamped = _WA.clamp_action(activity, action)
+    if clamped != action:
+        logger.info(
+            "Web-activity action clamped to what the endpoint can do",
+            activity=activity, asked=action, using=clamped,
+        )
+        action = clamped
+
     # Threshold. An action fires only once the content is at least this
     # sensitive; below it the activity is ordinary work. Absent threshold means
     # "any content", which is how a blanket "no GenAI at all" rule is written.
     threshold = str(min_level or "").strip()
+    if threshold and activity in _WA.ACTIVITIES_WITHOUT_CONTENT:
+        # The browser hands a download straight to disk; the extension never
+        # sees the bytes, so there is nothing to classify and no threshold to
+        # meet. Applying one silently would mean a cell reading "block
+        # Confidential and above" blocked everything instead — which is what it
+        # used to do.
+        threshold = ""
     if threshold:
         meets = _level_rank(classification_level) >= _level_rank(threshold)
         # Uninspectable content is NOT clean. A password-protected archive or an

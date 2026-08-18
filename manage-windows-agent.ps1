@@ -317,6 +317,57 @@
   # ============================================================
   #  INSTALL  (fully inline - no external script)
   # ============================================================
+  # The scheduled task, defined in ONE place.
+  #
+  # It used to be written only by Install. Update replaced the binary and never
+  # looked at the task, so a machine whose task was wrong - pointing at the old
+  # .vbs launcher, say - had no way to be corrected short of uninstalling. A
+  # correct binary with a broken launcher is not an updated agent.
+  #
+  # Returns $true when the task is registered.
+  function Register-AgentTask {
+    param([string]$ExePath)
+    try {
+      if (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
+      }
+      $action = New-ScheduledTaskAction -Execute $ExePath -Argument '--background' -WorkingDirectory $INSTALL_DIR
+      $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+      $tBoot  = New-ScheduledTaskTrigger -AtStartup
+      $tBoot.Delay = 'PT30S'
+      $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+      $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -ExecutionTimeLimit (New-TimeSpan -Days 9999) -MultipleInstances IgnoreNew
+      Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger @($tLogon,$tBoot) `
+        -Principal $principal -Settings $settings -Description 'CyberSentinel DLP Agent - endpoint monitoring' -Force | Out-Null
+      Ok "Scheduled task '$TASK_NAME' registered (logon + startup)"
+      return $true
+    } catch {
+      Err "Could not create scheduled task: $($_.Exception.Message)"
+      return $false
+    }
+  }
+
+  # Is the registered task the one we would write today?
+  #
+  # The check that matters is that it launches the binary directly. A task still
+  # calling wscript.exe against launch_agent.vbs is the state that produced
+  # "An Application Control policy has blocked this file" at every logon.
+  function Test-AgentTaskCurrent {
+    param([string]$ExePath)
+    $task = Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
+    if (-not $task) { return $false }
+    foreach ($a in @($task.Actions)) {
+      $exe = "$($a.Execute)"
+      $arg = "$($a.Arguments)"
+      if ($exe -match '(?i)wscript|cscript|powershell|cmd\.exe') { return $false }
+      if ($arg -match '(?i)\.vbs') { return $false }
+      if ($exe -notmatch '(?i)cybersentineldlp_agent\.exe') { return $false }
+    }
+    return $true
+  }
+
   function Invoke-Install {
     param($Status)
     $TOTAL = 8
@@ -547,23 +598,7 @@
       Info 'Removed the old launch_agent.vbs launcher.'
     }
 
-    try {
-      if (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
-      }
-      $action = New-ScheduledTaskAction -Execute $exePath -Argument '--background' -WorkingDirectory $INSTALL_DIR
-      $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-      $tBoot  = New-ScheduledTaskTrigger -AtStartup
-      $tBoot.Delay = 'PT30S'
-      $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-      $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit (New-TimeSpan -Days 9999) -MultipleInstances IgnoreNew
-      Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger @($tLogon,$tBoot) `
-        -Principal $principal -Settings $settings -Description 'CyberSentinel DLP Agent - endpoint monitoring' -Force | Out-Null
-      Ok "Scheduled task '$TASK_NAME' registered (logon + startup)"
-    } catch {
-      Err "Could not create scheduled task: $($_.Exception.Message)"
+    if (-not (Register-AgentTask -ExePath $exePath)) {
       Hint "You can start it manually: `"$exePath`" --background"
     }
 
@@ -618,13 +653,27 @@
     $sizeMB = [math]::Round((Get-Item $tmpExe).Length / 1MB, 1)
     Ok "Downloaded + verified ($sizeMB MB, sha $($actual.Substring(0,12))...)"
 
+    $binaryCurrent = $false
     if (Test-Path $exePath) {
       $current = (Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToUpper()
-      if ($current -eq $actual) {
-        Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
-        Ok 'Already up to date - nothing to do.'
-        return
-      }
+      if ($current -eq $actual) { $binaryCurrent = $true }
+    }
+
+    if ($binaryCurrent) {
+      # NOT a reason to stop.
+      #
+      # This used to say "already up to date - nothing to do" and return, which
+      # made Update a synonym for "replace the exe". An installation is a
+      # binary, a config, a scheduled task and a set of browser policies, and
+      # any of them can be wrong while the exe is perfectly current - which is
+      # exactly the state a machine was left in when the task still pointed at
+      # the blocked .vbs launcher. There was then no menu item that could fix
+      # it: Install refuses because the agent is installed, and Update refused
+      # because the binary matched.
+      Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+      Ok 'Binary is already the published build.'
+      Invoke-AgentReconcile -ExePath $exePath
+      return
     }
 
     Info 'Stopping the agent...'
@@ -640,6 +689,7 @@
     if (-not $replaced) { Err "Could not replace $exePath (file locked). Agent is stopped - retry or reboot."; return }
     Ok "Binary replaced (previous kept as $EXE_NAME.bak)"
 
+    Invoke-AgentReconcile -ExePath $exePath -SkipStart
     Info 'Restarting the agent...'
     Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3
@@ -647,6 +697,51 @@
     Blank
     if ($proc) { Ok "Update complete - agent running (PID $($proc.Id))." }
     else { Warn "Agent not detected yet - start it with: Start-ScheduledTask -TaskName '$TASK_NAME'" }
+  }
+
+  # Everything an installation is, apart from the binary.
+  #
+  # Run on every Update so a machine converges on a correct install rather than
+  # only ever having its exe swapped. Each check states what it found, because
+  # "nothing needed fixing" and "I did not look" are the same output otherwise -
+  # and that ambiguity is what let a broken launcher survive.
+  function Invoke-AgentReconcile {
+    param([string]$ExePath, [switch]$SkipStart)
+    Blank
+    Info 'Checking the rest of the installation...'
+
+    # A launcher from an older build. Windows blocks it under Application
+    # Control, so leaving it costs an error dialog at every logon.
+    $legacyVbs = Join-Path $INSTALL_DIR $VBS_NAME
+    if (Test-Path $legacyVbs) {
+      Remove-Item $legacyVbs -Force -ErrorAction SilentlyContinue
+      Ok 'Removed the old launch_agent.vbs launcher.'
+    }
+
+    if (Test-AgentTaskCurrent -ExePath $ExePath) {
+      Ok 'Scheduled task is correct.'
+    } else {
+      Warn 'Scheduled task is missing or launches the agent the old way - rewriting it.'
+      $null = Register-AgentTask -ExePath $ExePath
+    }
+
+    $configPath = Join-Path $INSTALL_DIR $CONFIG_NAME
+    if (Test-Path $configPath) { Ok 'Configuration present.' }
+    else { Warn "No $CONFIG_NAME - run [1] Install to write one." }
+
+    if (-not $SkipStart) {
+      $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($proc) {
+        Ok "Agent is running (PID $($proc.Id))."
+      } else {
+        Info 'Agent is not running - starting it.'
+        Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+        $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($proc) { Ok "Agent started (PID $($proc.Id))." }
+        else { Warn "Agent did not start - check [4] Logs." }
+      }
+    }
   }
 
   # ============================================================
@@ -696,11 +791,59 @@
     # Left behind, its force-install policy would keep reinstalling an extension
     # configured to report to a manager this machine no longer talks to.
     try {
-      $extId = $null
+      # The id comes from the FORCELIST first, and the agent's file second.
+      #
+      # extension-id.txt is only written once the agent has run, so an endpoint
+      # where the extension was deployed from [5] but the agent never started
+      # had no file — and the force-install policy survived the uninstall,
+      # quietly reinstalling an extension pointed at a manager this machine no
+      # longer talks to. The registry entry is the thing actually doing that, so
+      # it is the honest place to read it from.
+      $extIds = @()
+      foreach ($b in $BROWSERS) {
+        $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+        if (-not (Test-Path $fl)) { continue }
+        $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+        foreach ($pr in $props.PSObject.Properties) {
+          if ($pr.Name -like 'PS*') { continue }
+          $id = ("$($pr.Value)" -split ';')[0]
+          if ($id -match '^[a-p]{32}$') { $extIds += $id }
+        }
+      }
       $idFile = Join-Path $DATA_DIR 'extension-id.txt'
-      if (Test-Path $idFile) { $extId = (Get-Content $idFile -Raw -ErrorAction SilentlyContinue).Trim() }
-      if ($extId) { Remove-ExtensionPolicy $extId; Info 'Removed the browser extension policy'; $removed = $true }
+      if (Test-Path $idFile) {
+        $fromFile = (Get-Content $idFile -Raw -ErrorAction SilentlyContinue).Trim()
+        if ($fromFile) { $extIds += $fromFile }
+      }
+      foreach ($id in ($extIds | Select-Object -Unique)) {
+        Remove-ExtensionPolicy $id
+        Info "Removed the browser extension policy ($id)"
+        $removed = $true
+      }
+      if (@($extIds).Count -eq 0) { Info 'No browser extension policy was present.' }
     } catch { Warn "Could not remove the browser extension policy: $($_.Exception.Message)" }
+
+    # Private browsing was disabled BY this agent's deployment, so it goes with
+    # it. Leaving it behind means a machine with no DLP on it still cannot open
+    # an Incognito or InPrivate window, with nothing installed to explain why
+    # and no menu item left that could undo it.
+    try {
+      $restored = @()
+      foreach ($b in $BROWSERS) {
+        if (-not (Test-Path $b.Root)) { continue }
+        $cur = (Get-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue).$($b.PrivateValue)
+        if ($null -ne $cur) {
+          Remove-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue
+          $restored += "$($b.Name) $($b.PrivateLabel)"
+          $removed = $true
+        }
+      }
+      if (@($restored).Count -gt 0) {
+        Info "Re-allowed private browsing: $($restored -join ', ')"
+      } else {
+        Info 'Private browsing was not restricted by this agent.'
+      }
+    } catch { Warn "Could not restore private browsing: $($_.Exception.Message)" }
 
     foreach ($d in @($INSTALL_DIR, $DATA_DIR, $LEGACY_DIR, $LEGACY_DATA)) {
       if (Test-Path $d) {
@@ -1793,7 +1936,7 @@
 
     Blank
     Write-Host '   [1] Install    ' -ForegroundColor Green  -NoNewline; Write-Host '- set up the agent on this device'
-    Write-Host '   [2] Update     ' -ForegroundColor Cyan   -NoNewline; Write-Host '- replace the binary with the latest build'
+    Write-Host '   [2] Update     ' -ForegroundColor Cyan   -NoNewline; Write-Host '- fetch the latest build and repair the install'
     Write-Host '   [3] Uninstall  ' -ForegroundColor Red    -NoNewline; Write-Host '- stop and completely remove the agent'
     Write-Host '   [4] Logs       ' -ForegroundColor Yellow -NoNewline; Write-Host '- view / follow the agent log file'
     Write-Host '   [5] Extension  ' -ForegroundColor Magenta -NoNewline; Write-Host '- force-install the browser extension (web + AI control)'
@@ -1831,6 +1974,8 @@
           Warn 'This STOPS and COMPLETELY REMOVES the agent:'
           Hint '  - kills the running process'
           Hint '  - removes the scheduled task / any legacy service'
+          Hint '  - removes the browser extension policy'
+          Hint '  - re-allows Incognito / InPrivate browsing'
           Hint '  - deletes the install and data directories (current + legacy)'
           Blank
           $confirm = Read-Host "   Type 'y' to confirm uninstall (anything else cancels)"

@@ -1190,8 +1190,36 @@ objShell.Run """$exePath""", 0, False
       Start-Sleep -Seconds 2
       Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
-    Start-Sleep -Seconds 2
-    return $true
+
+    # Verify, rather than assume.
+    #
+    # This used to sleep two seconds and return $true no matter what happened.
+    # The caller takes that as permission to delete the extension's files, so a
+    # browser that did not actually exit - a hung renderer, a process an updater
+    # restarted, a profile still being flushed - meant deleting a directory
+    # Chrome still had open. Windows then removes what it can and fails on the
+    # rest, which leaves a HALF an extension on disk: no icon, no popup, and a
+    # manifest still there for Chrome to load. That is the "the logo is gone and
+    # clicking it says file not found" state, and nothing in the script noticed.
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+      $still = @()
+      foreach ($n in $names) {
+        if (Get-Process -Name $n -ErrorAction SilentlyContinue) { $still += $n }
+      }
+      if ($still.Count -eq 0) {
+        # File handles can outlive the process by a moment.
+        Start-Sleep -Milliseconds 800
+        return $true
+      }
+      Start-Sleep -Milliseconds 500
+    }
+
+    Err "$($still -join ' and ') is still running after 15s - not touching the extension."
+    Hint 'Close every window (including any background instance from the tray),'
+    Hint 'then run this again. Refusing here is deliberate: deleting files from'
+    Hint 'under a running browser is what leaves the extension half-installed.'
+    return $false
   }
 
   # Delete the cached copy so the next launch re-downloads the published build.
@@ -1232,19 +1260,148 @@ objShell.Run """$exePath""", 0, False
 
     if (-not (Stop-Browsers)) { return }
 
+    # Rename first, delete second.
+    #
+    # Remove-Item -Recurse on a locked directory is not all-or-nothing: it
+    # deletes what it can and throws on the rest, and a PARTIALLY deleted
+    # extension is far worse than an out-of-date one - Chrome loads the
+    # remains, so the icon and the popup are gone while the extension still
+    # appears installed. A rename either succeeds completely or fails
+    # completely, so nothing is ever left in pieces.
+    $stamp = Get-Date -Format 'yyyyMMddHHmmss'
     $removed = 0
+    $locked = @()
+    $seen = @{}
+
     foreach ($s in $before) {
       $extDir = Split-Path $s.Path -Parent
+      if ($seen.ContainsKey($extDir)) { continue }
+      $seen[$extDir] = $true
+
+      $parked = "$extDir.csdlp-old-$stamp"
       try {
-        Remove-Item $extDir -Recurse -Force -ErrorAction Stop
-        $removed++
+        Move-Item -LiteralPath $extDir -Destination $parked -Force -ErrorAction Stop
       } catch {
-        Warn "Could not remove $extDir : $($_.Exception.Message)"
+        $locked += "$($s.Browser) / $($s.User) / $($s.Profile)"
+        continue
       }
+      # The directory is already out of the browser's way; if this cannot be
+      # cleaned up now it is inert and the next run will not trip over it.
+      Remove-Item -LiteralPath $parked -Recurse -Force -ErrorAction SilentlyContinue
+      $removed++
     }
+
+    if ($locked.Count -gt 0) {
+      Blank
+      Err "Could not replace the extension in $($locked.Count) profile(s) - files were locked:"
+      foreach ($l in $locked) { Hint "  $l" }
+      Hint 'Nothing was deleted in those profiles, so the extension there is'
+      Hint 'still intact and simply out of date. Close every browser window'
+      Hint 'and run this again.'
+    }
+
+    if ($removed -eq 0) {
+      Warn 'No profile was refreshed.'
+      return
+    }
+
     Ok "Cleared the cached extension from $removed profile(s)."
     Hint "Start Chrome/Edge - it re-downloads v$WantVersion from the server within a"
     Hint 'few seconds and re-applies the policy. Nothing else to do.'
+  }
+
+  # Put a broken install back, using the browser's OWN uninstall path.
+  #
+  # WHEN THIS IS THE ANSWER: the extension shows with no icon, clicking it says
+  # the file was not found, or it is stuck on an old version no matter how many
+  # times Deploy is run. All three mean the copy on disk and what the browser
+  # believes about it have come apart, and deleting more files cannot fix that -
+  # the browser's own record of the extension is the half that is wrong.
+  #
+  # HOW: drop the forcelist entry, let the browser start and process the policy,
+  # which uninstalls the extension properly and cleans that record. Then put the
+  # entry back and start again for a clean install. It is exactly what doing it
+  # by hand from chrome://extensions achieves, which is why doing it by hand has
+  # been the thing that worked.
+  function Invoke-ExtensionRepair {
+    param(
+      [string]$ExtId, [string]$UpdateUrl, [string]$ApiBase,
+      [string]$AgentId, [string]$WantVersion
+    )
+
+    Blank
+    Info 'Repair reinstalls the extension through the browser rather than by'
+    Info 'deleting its files, which is the only way to fix a browser that still'
+    Info 'believes it has an extension that is no longer really there.'
+    Blank
+    Warn 'It takes two browser starts and about a minute.'
+    Blank
+    $go = Read-Host '   Repair now? (y/N)'
+    if ($go -ne 'y' -and $go -ne 'Y') { Warn 'Cancelled - nothing changed.'; return }
+
+    if (-not (Stop-Browsers)) { return }
+
+    # Step 1 - stop forcing it, and clear whatever is left on disk.
+    try {
+      Remove-ExtensionPolicy $ExtId
+      Ok 'Force-install policy removed.'
+    } catch {
+      Err "Could not remove the policy: $($_.Exception.Message)"
+      Hint 'This needs an ELEVATED PowerShell (Run as administrator).'
+      return
+    }
+
+    $stamp = Get-Date -Format 'yyyyMMddHHmmss'
+    $cleared = 0
+    foreach ($s in (Get-InstalledExtensionVersions $ExtId)) {
+      $extDir = Split-Path $s.Path -Parent
+      $parked = "$extDir.csdlp-broken-$stamp"
+      try {
+        Move-Item -LiteralPath $extDir -Destination $parked -Force -ErrorAction Stop
+        Remove-Item -LiteralPath $parked -Recurse -Force -ErrorAction SilentlyContinue
+        $cleared++
+      } catch {
+        Warn "Left in place (locked): $extDir"
+      }
+    }
+    if ($cleared -gt 0) { Ok "Cleared $cleared leftover folder(s)." }
+
+    Blank
+    Hr '-' 'DarkCyan'
+    Warn 'NOW: start Chrome (and Edge, if it is used here), wait until the'
+    Warn 'window has fully opened, then CLOSE it again.'
+    Blank
+    Hint 'That start is what makes the browser notice the extension is no longer'
+    Hint 'required and forget it properly. Skipping it is why a plain re-deploy'
+    Hint 'does not fix this state.'
+    Hr '-' 'DarkCyan'
+    Blank
+    Read-Host '   Press Enter once the browser has been opened and closed again' | Out-Null
+
+    if (-not (Stop-Browsers)) {
+      Warn 'Repair stopped half-way: the policy is removed but not yet restored.'
+      Hint 'Close every browser window and run [1] Deploy to put it back.'
+      return
+    }
+
+    # Step 2 - force it again, for a clean install on the next start.
+    try {
+      foreach ($b in $BROWSERS) {
+        $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
+        Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId
+        Ok "$($b.Name): force-install restored + configured"
+      }
+    } catch {
+      Err "Could not restore the policy: $($_.Exception.Message)"
+      Hint 'Run [1] Deploy to put it back.'
+      return
+    }
+
+    Blank
+    Ok 'Repair complete.'
+    Hint "Start the browser. It installs v$WantVersion fresh within a few seconds."
+    Hint 'Check chrome://extensions shows that version, an icon, and'
+    Hint '"Installed by enterprise policy".'
   }
 
   # Asked on EVERY deploy, whatever the current state.
@@ -1435,10 +1592,11 @@ objShell.Run """$exePath""", 0, False
       Blank
       Write-Host '   [1] ' -ForegroundColor Green   -NoNewline; Write-Host 'Deploy / update  - force-install into Chrome and Edge'
       Write-Host '   [2] ' -ForegroundColor Magenta -NoNewline; Write-Host 'Private browsing - disable it, or allow it again'
-      Write-Host '   [3] ' -ForegroundColor Red     -NoNewline; Write-Host 'Remove           - drop the policy (user can then uninstall it)'
-      Write-Host '   [4] ' -ForegroundColor Gray    -NoNewline; Write-Host 'Back to main menu'
+      Write-Host '   [3] ' -ForegroundColor Yellow  -NoNewline; Write-Host 'Repair           - no icon / "file not found" / stuck on an old build'
+      Write-Host '   [4] ' -ForegroundColor Red     -NoNewline; Write-Host 'Remove           - drop the policy (user can then uninstall it)'
+      Write-Host '   [5] ' -ForegroundColor Gray    -NoNewline; Write-Host 'Back to main menu'
       Blank
-      $c = Read-Host '   Choose (1-4)'
+      $c = Read-Host '   Choose (1-5)'
       switch ($c.Trim()) {
         '1' {
           Blank
@@ -1476,7 +1634,7 @@ objShell.Run """$exePath""", 0, False
             Hint "    Version  $($info.version)"
             Hint '    "Installed by enterprise policy"'
             Hint 'A different ID means the policy points at an extension this'
-            Hint 'server does not publish, and it will NEVER update: use [2]'
+            Hint 'server does not publish, and it will NEVER update: use [4]'
             Hint 'Remove here, then Deploy again.'
             if (-not $agentId) { Warn 'No agent id was set - this browser will enrol as its own agent.' }
           } catch {
@@ -1492,6 +1650,11 @@ objShell.Run """$exePath""", 0, False
           return
         }
         '3' {
+          Invoke-ExtensionRepair -ExtId $extId -UpdateUrl $updateUrl -ApiBase $apiBase -AgentId $agentId -WantVersion $info.version
+          Blank; Read-Host '   Press Enter to continue' | Out-Null
+          return
+        }
+        '4' {
           Blank
           Warn 'This removes the enterprise policy. The extension stops being'
           Warn 'force-installed and the user can then disable or remove it.'
@@ -1510,8 +1673,8 @@ objShell.Run """$exePath""", 0, False
           Blank; Read-Host '   Press Enter to continue' | Out-Null
           return
         }
-        '4' { return }
-        default { Warn 'Enter 1, 2, 3, or 4.' }
+        '5' { return }
+        default { Warn 'Enter 1, 2, 3, 4 or 5.' }
       }
     }
   }

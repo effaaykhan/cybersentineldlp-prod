@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Share2, Trash2, Plus, Radio, CheckCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useConfirm } from '@/components/ui/Modal'
 import {
   getSiemConnectors,
   registerSyslogConnector,
@@ -25,6 +26,7 @@ const DEFAULT_FORM = {
 }
 
 export default function SiemForwardingSection() {
+  const { confirm, dialog } = useConfirm()
   const [connectors, setConnectors] = useState<SiemConnector[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({ ...DEFAULT_FORM })
@@ -74,7 +76,17 @@ export default function SiemForwardingSection() {
   }
 
   const handleDelete = async (name: string) => {
-    if (!window.confirm(`Remove SIEM connector "${name}"?`)) return
+    const yes = await confirm({
+      title: 'Remove this connector?',
+      confirmLabel: 'Remove connector',
+      children: (
+        <p>
+          Events stop being forwarded to <span className="font-semibold text-cs-ink">{name}</span>{' '}
+          immediately. Nothing already sent is affected.
+        </p>
+      ),
+    })
+    if (!yes) return
     try {
       await deleteSiemConnector(name)
       toast.success(`Removed "${name}"`)
@@ -219,6 +231,8 @@ export default function SiemForwardingSection() {
           {busy ? 'Adding…' : 'Add connector'}
         </button>
       </form>
+    
+      {dialog}
     </div>
   )
 }

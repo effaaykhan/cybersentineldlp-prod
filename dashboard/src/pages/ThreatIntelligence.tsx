@@ -8,6 +8,7 @@ import {
   type IOC, type TaxiiFeed, type IocStats, type SharingConfig,
 } from '@/lib/api'
 import Pagination from '@/components/ui/Pagination'
+import { useConfirm } from '@/components/ui/Modal'
 
 const IOC_TYPES = ['ipv4', 'ipv6', 'domain', 'url', 'email', 'file_sha256', 'file_sha1', 'file_md5']
 const TLPS = ['white', 'green', 'amber', 'red']
@@ -20,6 +21,7 @@ const tlpClass: Record<string, string> = {
 }
 
 export default function ThreatIntelligence() {
+  const { confirm, dialog } = useConfirm()
   const [stats, setStats] = useState<IocStats | null>(null)
   const [iocs, setIocs] = useState<IOC[]>([])
   const [feeds, setFeeds] = useState<TaxiiFeed[]>([])
@@ -122,7 +124,17 @@ export default function ThreatIntelligence() {
   }
 
   const handleDeleteIoc = async (i: IOC) => {
-    if (!window.confirm(`Delete indicator ${i.value}?`)) return
+    const yes = await confirm({
+      title: 'Delete this indicator?',
+      confirmLabel: 'Delete indicator',
+      children: (
+        <p>
+          <span className="num font-semibold text-cs-ink">{i.value}</span> stops being matched
+          against traffic and content.
+        </p>
+      ),
+    })
+    if (!yes) return
     try {
       await deleteIoc(i.id); toast.success('Deleted'); await load()
     } catch (err: any) {
@@ -162,7 +174,17 @@ export default function ThreatIntelligence() {
   }
 
   const handleDeleteFeed = async (f: TaxiiFeed) => {
-    if (!window.confirm(`Remove feed "${f.name}"?`)) return
+    const yes = await confirm({
+      title: 'Remove this feed?',
+      confirmLabel: 'Remove feed',
+      children: (
+        <p>
+          <span className="font-semibold text-cs-ink">{f.name}</span> stops being polled. Indicators
+          already imported from it stay.
+        </p>
+      ),
+    })
+    if (!yes) return
     try {
       await deleteTaxiiFeed(f.id); toast.success('Removed'); await load()
     } catch (err: any) {
@@ -459,6 +481,8 @@ export default function ThreatIntelligence() {
           <button type="submit" className="btn-primary inline-flex items-center gap-2 justify-center"><Plus className="h-4 w-4" />Add feed</button>
         </form>
       </div>
+    
+      {dialog}
     </div>
   )
 }

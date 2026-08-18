@@ -11,6 +11,7 @@ import { Dot } from '@/components/ui/Dot'
 import { ActionPill } from '@/components/ui/ActionPill'
 import Pagination from '@/components/ui/Pagination'
 import toast from 'react-hot-toast'
+import Dialog, { ConfirmDialog } from '@/components/ui/Modal'
 
 // Event Detail Modal Component
 function EventDetailModal({
@@ -57,7 +58,7 @@ function EventDetailModal({
     if (normalized.includes('modified') || normalized.includes('updated')) return 'text-cs-indigo bg-cs-indigo-faint border-[color-mix(in_srgb,var(--cs-indigo)_30%,var(--cs-panel))]'
     if (normalized.includes('deleted')) return 'text-cs-crit bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-crit)_30%,var(--cs-panel))]'
     if (normalized.includes('moved') || normalized.includes('renamed')) return 'text-cs-high bg-[color-mix(in_srgb,var(--cs-high)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-high)_30%,var(--cs-panel))]'
-    if (normalized.includes('copied')) return 'text-purple-600 bg-purple-50 border-purple-200'
+    if (normalized.includes('copied')) return 'text-cs-indigo bg-cs-indigo-faint border-cs-indigo/25'
     return 'text-cs-ink-2 bg-cs-hair-2 border-cs-hair'
   }
 
@@ -86,10 +87,13 @@ function EventDetailModal({
     const driveLetter = getDriveLetter(destPath)
 
     return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50" onClick={onClose}>
-        <div className="bg-cs-panel rounded-cs-card shadow-card max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-          {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-cs-hair">
+      <Dialog
+        open
+        onClose={onClose}
+        size="xl"
+        bodyClassName="px-6 py-6"
+        header={
+          <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className={`p-3 rounded-cs-card border ${blocked ? 'bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-crit)_30%,var(--cs-panel))]' : 'bg-[color-mix(in_srgb,var(--cs-high)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-high)_30%,var(--cs-panel))]'}`}>
                 <Shield className={`w-8 h-8 ${blocked ? 'text-cs-crit' : 'text-cs-high'}`} />
@@ -101,12 +105,18 @@ function EventDetailModal({
                 <p className="text-cs-muted text-sm mt-1 font-mono tabular-nums">{formatDateTimeIST(event.timestamp)}</p>
               </div>
             </div>
-            <button onClick={onClose} className="text-cs-muted-2 hover:text-cs-ink-2 transition-colors">
-              <X className="w-6 h-6" />
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="shrink-0 self-start rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                         focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+            >
+              <X className="h-[18px] w-[18px]" />
             </button>
           </div>
-
-          <div className="p-6 space-y-6">
+        }
+      >
+          <div className="space-y-6">
             {/* Status Badge */}
             <div className="flex items-center gap-3">
               <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-cs-sm border text-sm font-medium ${
@@ -219,8 +229,7 @@ function EventDetailModal({
               )}
             </div>
           </div>
-        </div>
-      </div>
+      </Dialog>
     )
   }
 
@@ -247,10 +256,13 @@ function EventDetailModal({
   const fileExtension = fileName.includes('.') ? fileName.split('.').pop()?.toUpperCase() : null
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50" onClick={onClose}>
-      <div className="bg-cs-panel rounded-cs-card shadow-card max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-cs-hair">
+    <Dialog
+      open
+      onClose={onClose}
+      size="2xl"
+      bodyClassName="px-6 py-6"
+      header={
+        <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className={`p-3 rounded-cs-card border ${
               event.severity === 'critical' ? 'bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-crit)_30%,var(--cs-panel))]' :
@@ -280,17 +292,23 @@ function EventDetailModal({
               <p className="text-cs-muted text-sm mt-1 font-mono tabular-nums">{formatDateTimeIST(event.timestamp)}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-cs-muted-2 hover:text-cs-ink-2 transition-colors">
-            <X className="w-6 h-6" />
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 self-start rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                       focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+          >
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
-
-        <div className="p-6 space-y-6">
+      }
+    >
+        <div className="space-y-6">
           {/* Severity, Action, and Quarantine Badges */}
           <div className="flex items-center gap-3 flex-wrap">
             {/* Prominent Action Type Badge for OneDrive/Google Drive */}
             {event.event_subtype && (event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && (
-              <span className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border text-base font-semibold ${getEventSubtypeColor(event.event_subtype)}`}>
+              <span className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-cs-sm border text-base font-semibold ${getEventSubtypeColor(event.event_subtype)}`}>
                 {getEventSubtypeIcon(event.event_subtype)}
                 {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
               </span>
@@ -739,8 +757,7 @@ function EventDetailModal({
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }
 
@@ -885,7 +902,7 @@ export default function Events() {
     if (normalized.includes('modified') || normalized.includes('updated')) return 'text-cs-indigo bg-cs-indigo-faint border-[color-mix(in_srgb,var(--cs-indigo)_30%,var(--cs-panel))]'
     if (normalized.includes('deleted')) return 'text-cs-crit bg-[color-mix(in_srgb,var(--cs-crit)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-crit)_30%,var(--cs-panel))]'
     if (normalized.includes('moved') || normalized.includes('renamed')) return 'text-cs-high bg-[color-mix(in_srgb,var(--cs-high)_12%,var(--cs-panel))] border-[color-mix(in_srgb,var(--cs-high)_30%,var(--cs-panel))]'
-    if (normalized.includes('copied')) return 'text-purple-600 bg-purple-50 border-purple-200'
+    if (normalized.includes('copied')) return 'text-cs-indigo bg-cs-indigo-faint border-cs-indigo/25'
     return 'text-cs-ink-2 bg-cs-hair-2 border-cs-hair'
   }
 
@@ -953,17 +970,27 @@ export default function Events() {
     }
   }
 
-  const handleClearLogs = async () => {
-    if (!confirm('Are you sure you want to clear all events? This action cannot be undone.')) {
-      return
-    }
+  /*
+    Deleting every event is the most destructive thing this console can do, and
+    it used to be guarded by window.confirm() — a browser dialog that looks
+    like it belongs to a different application, cannot say how many records are
+    about to go, and is styled identically whether it is asking about a typo or
+    about the entire audit trail.
+  */
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
+  const handleClearLogs = async () => {
+    setClearing(true)
     try {
       const result = await clearAllEvents()
-      toast.success(`Successfully cleared ${result.deleted_count} events`)
+      toast.success(`Deleted ${result.deleted_count} events`)
       refetch()
+      setConfirmClear(false)
     } catch (error: any) {
-      toast.error(extractErrorDetail(error, 'Failed to clear events'))
+      toast.error(extractErrorDetail(error, 'Failed to delete events'))
+    } finally {
+      setClearing(false)
     }
   }
 
@@ -1104,26 +1131,32 @@ export default function Events() {
               )}
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          {/*
+            Both of these are utilities, not the point of the page — the point
+            is the results underneath. They used to be a solid indigo pill and a
+            solid red one, which made "delete every event" the brightest object
+            on the screen and gave it exactly the same weight as "refresh".
+          */}
+          <div className="flex items-center gap-1">
             <button
               onClick={handleManualRefresh}
-              className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn btn-ghost"
               disabled={isRefreshing}
             >
               {isRefreshing ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <RefreshCcw className="w-4 h-4" />
+                <RefreshCcw className="h-4 w-4" />
               )}
-              Manual Refresh
+              Refresh
             </button>
             <button
-              onClick={handleClearLogs}
-              className="btn-danger disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => setConfirmClear(true)}
+              className="btn btn-ghost text-cs-crit hover:bg-cs-crit/[0.07] hover:text-cs-crit"
               disabled={events.length === 0}
             >
-              <Trash2 className="w-4 h-4" />
-              Clear Logs
+              <Trash2 className="h-4 w-4" />
+              Delete all events
             </button>
           </div>
         </div>
@@ -1314,6 +1347,23 @@ export default function Events() {
       </div>
 
       {/* Event Detail Modal */}
+      <ConfirmDialog
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        onConfirm={handleClearLogs}
+        title="Delete all events?"
+        confirmLabel="Delete all events"
+        busy={clearing}
+      >
+        <p>
+          This permanently removes{' '}
+          <span className="num font-semibold text-cs-ink">{total.toLocaleString()}</span> event
+          {total === 1 ? '' : 's'} from the database, including the evidence behind any incidents
+          that reference them.
+        </p>
+        <p className="mt-2 text-cs-muted">There is no undo.</p>
+      </ConfirmDialog>
+
       {selectedEvent && (
         <EventDetailModal
           event={selectedEvent}

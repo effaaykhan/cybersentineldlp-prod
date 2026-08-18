@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Network, Trash2, Plus } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useConfirm } from '@/components/ui/Modal'
 import {
   getIpAllowlist,
   addIpAllowlist,
@@ -10,6 +11,7 @@ import {
 } from '@/lib/api'
 
 export default function IpAllowlistSection() {
+  const { confirm, dialog } = useConfirm()
   const [entries, setEntries] = useState<IPAllowlistEntry[]>([])
   const [yourIp, setYourIp] = useState('')
   const [enabled, setEnabled] = useState(true)   // master switch (on by default)
@@ -75,7 +77,17 @@ export default function IpAllowlistSection() {
   }
 
   const handleDelete = async (entry: IPAllowlistEntry) => {
-    if (!window.confirm(`Remove ${entry.cidr} from the allowlist?`)) return
+    const yes = await confirm({
+      title: 'Remove this address?',
+      confirmLabel: 'Remove address',
+      children: (
+        <p>
+          Requests from <span className="num font-semibold text-cs-ink">{entry.cidr}</span> will no
+          longer be allowed to reach the console.
+        </p>
+      ),
+    })
+    if (!yes) return
     try {
       await deleteIpAllowlist(entry.id)
       toast.success(`Removed ${entry.cidr}`)
@@ -228,6 +240,8 @@ export default function IpAllowlistSection() {
           Your current IP: <span className="num text-cs-ink-2">{yourIp}</span>
         </p>
       )}
+    
+      {dialog}
     </div>
   )
 }

@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
+import { useConfirm } from '@/components/ui/Modal'
 import {
   listPrinters, seenPrinters, approvePrinter, updatePrinter, revokePrinter,
   type SanctionedPrinter, type SeenPrinter,
@@ -127,6 +128,7 @@ function Empty({ text }: { text: string }) {
 }
 
 function SanctionedRow({ p, onChange }: { p: SanctionedPrinter; onChange: () => void }) {
+  const { confirm, dialog } = useConfirm()
   const toggle = useMutation({
     mutationFn: () => updatePrinter(p.id, { is_enabled: !p.is_enabled }),
     onSuccess: () => { onChange(); toast.success(p.is_enabled ? 'Printer suspended' : 'Printer re-enabled') },
@@ -172,10 +174,18 @@ function SanctionedRow({ p, onChange }: { p: SanctionedPrinter; onChange: () => 
         <button className="text-xs text-cs-rose hover:underline mr-3 inline-flex items-center gap-1"
           disabled={revoke.isPending}
           title="Delete this rule entirely — the printer falls back to whatever the policy scope says"
-          onClick={() => {
-            if (confirm(`Delete the rule for "${p.printer_name}"?\n\nThe printer is no longer allowed or blocked by name — it falls back to whatever the policy scope decides.`)) {
-              revoke.mutate()
-            }
+          onClick={async () => {
+            const yes = await confirm({
+              title: 'Delete this rule?',
+              confirmLabel: 'Delete rule',
+              children: (
+                <p>
+                  <span className="font-semibold text-cs-ink">{p.printer_name}</span> stops being
+                  allowed or blocked by name. It falls back to whatever the policy scope decides.
+                </p>
+              ),
+            })
+            if (yes) revoke.mutate()
           }}>
           <Trash2 className="h-3.5 w-3.5" />Delete
         </button>
@@ -183,6 +193,7 @@ function SanctionedRow({ p, onChange }: { p: SanctionedPrinter; onChange: () => 
           disabled={toggle.isPending} onClick={() => toggle.mutate()}>
           {p.is_enabled ? 'Suspend' : 'Resume'}
         </button>
+        {dialog}
       </td>
     </tr>
   )

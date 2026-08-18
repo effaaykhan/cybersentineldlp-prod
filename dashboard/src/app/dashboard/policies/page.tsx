@@ -23,6 +23,7 @@ import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { formatDistanceToNow } from 'date-fns'
+import { useConfirm } from '@/components/ui/Modal'
 
 type PolicyStats = {
   total: number
@@ -32,6 +33,7 @@ type PolicyStats = {
 }
 
 export default function PoliciesPage() {
+  const { confirm, dialog } = useConfirm()
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null)
@@ -197,10 +199,18 @@ export default function PoliciesPage() {
     toggleStatusMutation.mutate({ id: policy.id, enabled: !policy.enabled })
   }
 
-  const handleDelete = (policy: Policy) => {
-    if (!confirm(`Are you sure you want to delete "${policy.name}"? This action cannot be undone.`)) {
-      return
-    }
+  const handleDelete = async (policy: Policy) => {
+    const yes = await confirm({
+      title: 'Delete this policy?',
+      confirmLabel: 'Delete policy',
+      children: (
+        <p>
+          <span className="font-semibold text-cs-ink">{policy.name}</span> stops being enforced on
+          every agent as soon as they next check in. There is no undo.
+        </p>
+      ),
+    })
+    if (!yes) return
     if (!policy.id) return
     deleteMutation.mutate(policy.id)
   }
@@ -416,6 +426,8 @@ export default function PoliciesPage() {
           }}
         />
       )}
+    
+      {dialog}
     </div>
   )
 }

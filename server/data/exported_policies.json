@@ -1476,6 +1476,82 @@
     }
   },
   {
+    "name": "GenAI and Web Activity",
+    "description": "Stops GenAI and all browsers.",
+    "enabled": true,
+    "priority": 100,
+    "type": "web_activity_control",
+    "severity": "high",
+    "config": {
+      "mode": "enforce",
+      "minLevel": "Confidential",
+      "matrix": {
+        "genai": {
+          "post": "mask",
+          "attach": "block",
+          "download": "block",
+          "upload": "block"
+        },
+        "webmail": {
+          "upload": "block",
+          "download": "block",
+          "attach": "block",
+          "send": "block"
+        },
+        "cloud_storage": {
+          "upload": "block",
+          "download": "block",
+          "post": "block"
+        },
+        "collaboration": {
+          "upload": "block",
+          "download": "block",
+          "post": "block"
+        }
+      },
+      "appOverrides": [],
+      "blockUninspectable": true,
+      "action": "block"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "cloud_upload",
+            "collaboration",
+            "email",
+            "genai"
+          ]
+        },
+        {
+          "field": "activity",
+          "operator": "in",
+          "value": [
+            "attach",
+            "download",
+            "post",
+            "send",
+            "upload"
+          ]
+        },
+        {
+          "field": "classification_level",
+          "operator": "in",
+          "value": [
+            "Confidential",
+            "Restricted"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "log": {}
+    }
+  },
+  {
     "name": "Log All Clipboard Activity",
     "description": "Log all clipboard activity for audit purposes",
     "enabled": false,

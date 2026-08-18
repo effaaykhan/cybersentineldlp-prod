@@ -177,6 +177,55 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
  // server at registration/heartbeat and shown on the Agents page.
  static const char* AGENT_VERSION = "1.0.0";
 
+/**
+ * Run a command line without ever showing a window.
+ *
+ * WHY NOT system(): on Windows system() launches `cmd.exe /c ...`, and cmd is a
+ * console program. In a console-subsystem build the child inherited this
+ * process's console — which the agent had hidden — so nothing appeared. This
+ * binary links -mwindows and has no console at all, so there is nothing to
+ * inherit and Windows creates a NEW, visible one for every call. The result was
+ * a cmd window flashing onto the user's desktop each time OCR ran.
+ *
+ * CreateProcess with CREATE_NO_WINDOW spawns the program directly, with no
+ * shell in between and no console ever created. lpApplicationName is left NULL
+ * so the executable is still resolved against PATH exactly as before.
+ *
+ * Shell redirections do not survive the loss of the shell — there is no `2>nul`
+ * here — but they are not needed: with no console attached, a child's stderr
+ * goes nowhere by itself.
+ *
+ * Returns the child's exit code, or -1 if it could not be started.
+ */
+int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
+    std::vector<char> cmd(commandLine.begin(), commandLine.end());
+    cmd.push_back('\0');
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi = {};
+
+    BOOL started = CreateProcessA(
+        NULL, cmd.data(), NULL, NULL, FALSE,
+        CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+
+    if (!started) return -1;
+
+    DWORD exitCode = (DWORD)-1;
+    if (WaitForSingleObject(pi.hProcess, timeoutMs) == WAIT_OBJECT_0) {
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    } else {
+        // A hung child must not hold a monitoring thread for ever.
+        TerminateProcess(pi.hProcess, 1);
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)exitCode;
+}
+
  std::string GetHostname() {
      char buffer[256];
      DWORD size = sizeof(buffer);
@@ -4589,8 +4638,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                              SelectObject(hMemDC, old);
                              DeleteObject(hBmp); DeleteDC(hMemDC); ReleaseDC(NULL, hScreenDC);
 
-                             std::string tessCmd = "tesseract \"" + tempBmp + "\" \"" + tempTxt + "\" --psm 6 -l eng 2>nul";
-                             int tessResult = system(tessCmd.c_str());
+                             // No `2>nul`: there is no shell to interpret it, and none
+                             // is needed — see RunHidden.
+                             std::string tessCmd = "tesseract \"" + tempBmp + "\" \"" + tempTxt + "\" --psm 6 -l eng";
+                             int tessResult = RunHidden(tessCmd);
 
                              std::string ocrText;
                              std::string ocrFile = tempTxt + ".txt";

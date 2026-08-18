@@ -33,6 +33,8 @@
   $EXE_NAME    = 'cybersentineldlp_agent.exe'
   $CONFIG_NAME = 'agent_config.json'
   $LOG_NAME    = 'cybersentineldlp_agent.log'
+  # Kept only so an install left by an older build can be cleaned up. Nothing
+  # writes this any more - see Step 7.
   $VBS_NAME    = 'launch_agent.vbs'
   $TASK_NAME   = 'CyberSentinel DLP Agent'
   $PROC_NAME   = 'cybersentineldlp_agent'
@@ -317,7 +319,7 @@
   # ============================================================
   function Invoke-Install {
     param($Status)
-    $TOTAL = 9
+    $TOTAL = 8
     Blank
     Header 'INSTALL CyberSentinel DLP Agent' 'Green'
 
@@ -519,22 +521,37 @@
     $config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding ASCII -Force   # ASCII = no BOM
     Ok 'Configuration written'
 
-    # -- Step 7: launcher -----------------------------------------------------
-    Step 7 $TOTAL 'Creating hidden background launcher'
-    $vbsPath = Join-Path $INSTALL_DIR $VBS_NAME
-    @"
-Set objShell = CreateObject("Wscript.Shell")
-objShell.Run """$exePath""", 0, False
-"@ | Out-File -FilePath $vbsPath -Encoding ASCII -Force
-    Ok 'Launcher created (no console window on start)'
+    # -- Step 7: scheduled task ----------------------------------------------
+    #
+    # The task runs the agent DIRECTLY. It used to run
+    #   wscript.exe "C:\Program Files\CyberSentinelDLP\launch_agent.vbs"
+    # where the .vbs existed only to start the exe with a hidden window.
+    #
+    # That wrapper was never needed - the agent hides its own console when
+    # given --background - and it was actively harmful. Windows blocks script
+    # hosts under Application Control, Smart App Control and the ASR rules, so
+    # at every logon the machine showed
+    #   "An Application Control policy has blocked this file"  (0x800711C7)
+    # and the agent never started at all. VBScript is also on its way out of
+    # Windows entirely, so the wrapper was going to fail eventually regardless.
+    #
+    # Nothing in this chain is a script any more, so there is nothing left for
+    # a script policy to block.
+    Step 7 $TOTAL 'Registering auto-start scheduled task'
 
-    # -- Step 8: scheduled task ----------------------------------------------
-    Step 8 $TOTAL 'Registering auto-start scheduled task'
+    # Any launcher left by an older install is dead weight that Windows will
+    # keep complaining about. Take it with us.
+    $legacyVbs = Join-Path $INSTALL_DIR $VBS_NAME
+    if (Test-Path $legacyVbs) {
+      Remove-Item $legacyVbs -Force -ErrorAction SilentlyContinue
+      Info 'Removed the old launch_agent.vbs launcher.'
+    }
+
     try {
       if (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
       }
-      $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vbsPath`"" -WorkingDirectory $INSTALL_DIR
+      $action = New-ScheduledTaskAction -Execute $exePath -Argument '--background' -WorkingDirectory $INSTALL_DIR
       $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
       $tBoot  = New-ScheduledTaskTrigger -AtStartup
       $tBoot.Delay = 'PT30S'
@@ -547,11 +564,11 @@ objShell.Run """$exePath""", 0, False
       Ok "Scheduled task '$TASK_NAME' registered (logon + startup)"
     } catch {
       Err "Could not create scheduled task: $($_.Exception.Message)"
-      Hint "You can start it manually: wscript.exe `"$vbsPath`""
+      Hint "You can start it manually: `"$exePath`" --background"
     }
 
-    # -- Step 9: start --------------------------------------------------------
-    Step 9 $TOTAL 'Starting the agent'
+    # -- Step 8: start --------------------------------------------------------
+    Step 8 $TOTAL 'Starting the agent'
     try { Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue } catch {}
     $proc = $null
     for ($i = 0; $i -lt 6 -and -not $proc; $i++) {

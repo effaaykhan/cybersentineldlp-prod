@@ -316,12 +316,14 @@ The same script also handles **Update** and **Uninstall** from its menu. What th
 7. **Step 7 — Config file.** Writes
    `C:\Program Files\CyberSentinelDLP\agent_config.json` with the
    monitored paths, file extensions, and intervals from step 1.
-8. **Step 8 — Hidden launcher.** Drops `launch_agent.vbs` so the agent
-   runs without a CMD window.
-9. **Step 9 — Scheduled task.** Registers `CyberSentinel DLP Agent`
+8. **Step 8 — Scheduled task.** Registers `CyberSentinel DLP Agent`
    with both `AtLogon` and `AtStartup` triggers, `RunLevel Highest`,
-   `RestartCount 999` so it auto-recovers on crash.
-10. **Step 10 — Start.** Runs the task and prints the PID.
+   `RestartCount 999` so it auto-recovers on crash. The task runs the
+   `.exe` directly — there is no script wrapper, deliberately: a `.vbs`
+   launcher is blocked by Application Control and Smart App Control
+   (`0x800711C7`), which stopped the agent starting at all. The binary is
+   linked for the GUI subsystem, so no console window is ever created.
+9. **Step 9 — Start.** Runs the task and prints the PID.
 
 ### What gets installed
 
@@ -329,7 +331,6 @@ The same script also handles **Update** and **Uninstall** from its menu. What th
 C:\Program Files\CyberSentinelDLP\
 ├── cybersentineldlp_agent.exe          # the binary, hash-verified
 ├── agent_config.json                # server URL, intervals, monitored paths
-├── launch_agent.vbs                 # hidden-window launcher
 └── cybersentineldlp_agent.log          # written at runtime
 
 C:\ProgramData\CyberSentinelDLP\

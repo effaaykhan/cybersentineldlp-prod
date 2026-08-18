@@ -95,15 +95,13 @@ system startup with elevated privileges, and auto-restarts on crash.
 
 ```powershell
 $agentExe  = "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe"
-$launchVbs = "C:\Program Files\CyberSentinelDLP\launch_agent.vbs"
 
-# VBScript launcher hides the console window
-@'
-Set objShell = CreateObject("WScript.Shell")
-objShell.Run """C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe""", 0, False
-'@ | Out-File -FilePath $launchVbs -Encoding ASCII
-
-$action    = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$launchVbs`""
+# Run the exe directly. Do NOT wrap it in a .vbs to hide the window: script
+# hosts are blocked by Application Control and Smart App Control, which fails
+# with "An Application Control policy has blocked this file" (0x800711C7) at
+# every logon and leaves the agent never started. The binary is linked for the
+# GUI subsystem, so it has no console window to hide.
+$action    = New-ScheduledTaskAction -Execute $agentExe -Argument "--background"
 $trigger1  = New-ScheduledTaskTrigger -AtLogOn
 $trigger2  = New-ScheduledTaskTrigger -AtStartup
 $trigger2.Delay = "PT30S"

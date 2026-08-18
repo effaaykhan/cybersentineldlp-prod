@@ -27,7 +27,18 @@ echo "This may take 30-60 seconds..."
 echo ""
 
 # Compile the agent
-g++ -std=c++17 -O2 \
+# -mwindows links the GUI subsystem, so Windows never allocates a console for
+# this process at all. The agent already hid its console at startup, but hiding
+# one is not the same as never having one: with a console subsystem binary the
+# window exists for the moment between CreateProcess and ShowWindow, which is
+# the flash a user sees at every logon. It is also why the installer used to
+# wrap the exe in a .vbs, and that wrapper is what Application Control blocks.
+#
+# Safe here because nothing depends on stdout: the agent logs to a file, and
+# its console writes are already conditional on a visible console window
+# (agent.cpp, Log()). mingw-w64 supplies the WinMain shim, so main() is
+# untouched.
+g++ -std=c++17 -O2 -mwindows \
     agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
     -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \

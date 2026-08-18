@@ -284,10 +284,22 @@ export default function WebActivityControlForm({ config, onChange: rawOnChange }
           </table>
         </div>
 
-        <p className="text-[11px] text-cs-ink-3 mt-1.5">
-          <strong>AI Response</strong> is recorded, never blocked — by the time a reply exists the prompt
-          has already been sent, and the answer streams in with no single moment to intercept.
-        </p>
+        <div className="mt-2 space-y-1.5 text-[11.5px] leading-relaxed text-cs-muted">
+          <p>
+            <strong className="text-cs-ink-2">Post</strong> and{' '}
+            <strong className="text-cs-ink-2">Attach</strong> are what stop data reaching an AI
+            vendor. On <span className="text-cs-act-block font-semibold">Block</span> the prompt is
+            held in the browser, inspected, and only released if it is clean — it never leaves the
+            machine.
+          </p>
+          <p>
+            <strong className="text-cs-ink-2">AI Response</strong> is the reply coming back. On{' '}
+            <span className="text-cs-act-block font-semibold">Block</span> it is masked while it
+            streams and shown only once it has been checked, so a reply that carries sensitive data
+            is never read. It cannot un-send the prompt — that is what Post and Attach are for — and
+            it costs a short pause before each answer appears.
+          </p>
+        </div>
       </div>
 
       {/* Threshold */}

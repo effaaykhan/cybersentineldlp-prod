@@ -1173,25 +1173,114 @@
     /* -- AI response capture ------------------------------------------------- */
 
     /**
-     * The model's reply, logged and never blocked.
+     * The model's reply.
      *
-     * The requirement lists "AI Response" alongside the outbound verbs, and it
-     * belongs in the record: what came back is half of what an investigator
-     * needs when a prompt turns out to have carried customer data. But blocking
-     * it is the wrong control — the data has already left by then, the reply
-     * streams in token by token so there is no single moment to intercept, and
-     * tearing text out of the page mid-render breaks the application for no
-     * security gain. So this observes and reports.
+     * `log` records it and leaves the page alone. `block` HOLDS it: the reply is
+     * masked from the moment it starts streaming, inspected once it settles, and
+     * then either revealed or withheld for good.
+     *
+     * Why holding rather than redacting after the fact: the reply arrives token
+     * by token, so there is no single moment to intercept, and by the time the
+     * text is complete enough to classify the user has already read it. Masking
+     * first and clearing second is the only ordering where a block actually
+     * prevents anything. It is the same shape as the submit guard — suppress,
+     * decide, release — applied to the inbound direction.
+     *
+     * The mask is an attribute plus a stylesheet rule, not inline style and not
+     * a DOM edit. These pages are React and Angular applications that re-render
+     * their own message nodes constantly; removing or rewriting children fights
+     * the framework and eventually loses, while an attribute survives a
+     * re-render and a stylesheet rule with !important survives the vendor's CSS.
      */
+    var HELD_ATTR = "data-csdlp-held";
+    var heldStyleInstalled = false;
+
+    function installHeldStyle() {
+      if (heldStyleInstalled) return;
+      heldStyleInstalled = true;
+      var style = document.createElement("style");
+      style.id = "cybersentinel-dlp-held-style";
+      style.textContent =
+        "[" + HELD_ATTR + "]{filter:blur(11px)!important;user-select:none!important;" +
+        "-webkit-user-select:none!important;pointer-events:none!important;" +
+        "transition:filter 120ms ease!important}" +
+        "[" + HELD_ATTR + "='withheld']{filter:blur(14px) grayscale(1)!important;opacity:.55!important}";
+      (document.head || document.documentElement).appendChild(style);
+
+      // Blur hides the text from a reader; it does not stop a copy. A selection
+      // that starts outside a held reply can still sweep through it, so the copy
+      // itself is refused while anything is held.
+      document.addEventListener("copy", function (e) {
+        var sel = window.getSelection && window.getSelection();
+        if (!sel || sel.isCollapsed) return;
+        var node = sel.anchorNode;
+        var el = node && (node.nodeType === 1 ? node : node.parentElement);
+        if (el && el.closest("[" + HELD_ATTR + "]")) {
+          e.preventDefault();
+          e.stopPropagation();
+          console.warn("[CyberSentinel] Copy refused — the selection includes a held reply.");
+        }
+      }, true);
+    }
+
+    function maskReply(node) {
+      if (node.getAttribute(HELD_ATTR)) return;
+      installHeldStyle();
+      node.setAttribute(HELD_ATTR, "checking");
+    }
+
+    function revealReply(node) {
+      node.removeAttribute(HELD_ATTR);
+    }
+
+    function withholdReply(node, why) {
+      installHeldStyle();
+      node.setAttribute(HELD_ATTR, "withheld");
+      // A banner rather than replacing the text: the reply stays in the page for
+      // the framework's benefit and stays unreadable for the user's.
+      var key = node;
+      showNotice(
+        key,
+        '<div style="font-weight:700;font-size:15px">Reply withheld</div>' +
+          '<div style="margin-top:6px;font-size:12px;opacity:.92">' +
+          escapeHtml(APP) + " returned content this policy does not allow to be shown." +
+          "</div>" +
+          (why ? '<div style="margin-top:6px;font-size:12px;opacity:.92">' +
+                 escapeHtml(why) + "</div>" : ""),
+        "#c62828",
+        15000
+      );
+    }
+
     function installResponseObserver() {
       var selector = profile.response;
-      if (!selector) return;
+      if (!selector) {
+        console.warn(
+          "[CyberSentinel] " + APP + " has no response selector — AI replies are NOT being " +
+          "inspected on this site."
+        );
+        return;
+      }
 
       var seen = new WeakSet();
       var pendingTimer = null;
 
-      function harvest() {
+      /* Mask every reply the moment it appears, before it is readable. Runs on
+         every mutation batch rather than on the settle debounce, because a
+         2.5s-late mask is no mask at all. */
+      function maskNewReplies() {
+        if (cellAction("ai_response") !== "block" || auditMode()) return;
         var nodes = document.querySelectorAll(selector);
+        for (var i = 0; i < nodes.length; i++) {
+          if (!seen.has(nodes[i])) maskReply(nodes[i]);
+        }
+      }
+
+      function harvest() {
+        var action = cellAction("ai_response");
+        var holding = action === "block" && !auditMode();
+        var nodes = document.querySelectorAll(selector);
+
         for (var i = 0; i < nodes.length; i++) {
           var node = nodes[i];
           if (seen.has(node)) continue;
@@ -1201,27 +1290,67 @@
           // one answer becoming forty events.
           if (text.length < 40) continue;
           seen.add(node);
-          send({
-            type: "CSDLP_ACTIVITY_EVENT",
-            payload: {
-              appId: profile.appId, appName: APP, category: profile.category,
-              activity: "ai_response",
-              pageUrl: location.href, pageHost: location.hostname,
-              text: text,
-              description: APP + " returned a response",
-              blocked: false
-            }
-          });
+          decide(node, text, action, holding);
         }
       }
 
+      function decide(node, text, action, holding) {
+        var payload = {
+          appId: profile.appId, appName: APP, category: profile.category,
+          activity: "ai_response",
+          pageUrl: location.href, pageHost: location.hostname,
+          text: text,
+          description: APP + " returned a response"
+        };
+
+        // `log` never asks and never waits — visibility only, exactly as before.
+        if (action === "log") {
+          send({ type: "CSDLP_ACTIVITY_EVENT", payload: Object.assign(payload, { blocked: false }) });
+          return;
+        }
+
+        requestVerdict(payload).then(function (verdict) {
+          verdict = verdict || { action: "timeout" };
+
+          if (holding && verdict.action === "block") {
+            withholdReply(node, verdict.reason || verdict.why || "");
+            send({
+              type: "CSDLP_ACTIVITY_EVENT",
+              payload: Object.assign({}, payload, {
+                blocked: true,
+                description: APP + " reply withheld — " + (verdict.reason || "policy")
+              })
+            });
+            return;
+          }
+
+          // Anything else releases it. Fail open on timeout and on error: a
+          // guard that cannot reach the server must not leave the user staring
+          // at a permanently blurred page with no explanation, and the outbound
+          // direction — the one that actually loses data — is already guarded.
+          if (verdict.action === "timeout") {
+            console.warn("[CyberSentinel] No verdict for an AI reply in time — released.");
+          }
+          if (holding) revealReply(node);
+          send({
+            type: "CSDLP_ACTIVITY_EVENT",
+            payload: Object.assign(payload, { blocked: false })
+          });
+        }).catch(function (err) {
+          console.error("[CyberSentinel] AI reply inspection failed — released:", err);
+          if (holding) revealReply(node);
+        });
+      }
+
       var observer = new MutationObserver(function () {
+        maskNewReplies();
         if (pendingTimer) clearTimeout(pendingTimer);
         // Debounced well past the streaming cadence so a reply is captured once,
         // complete, rather than at every intermediate length.
         pendingTimer = setTimeout(harvest, 2500);
       });
       observer.observe(document.documentElement, { childList: true, subtree: true });
+      maskNewReplies();
     }
 
     /* -- go ------------------------------------------------------------------ */

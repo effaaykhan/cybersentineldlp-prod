@@ -1208,12 +1208,27 @@ objShell.Run """$exePath""", 0, False
     $stale = @($before | Where-Object { $_.Version -ne $WantVersion })
     if (@($stale).Count -eq 0) {
       Ok "Every profile already has v$WantVersion."
-      return
+      Blank
+      # Matching version numbers are NOT proof of matching code. A rebuild that
+      # keeps the same version - which happens whenever the extension is
+      # repacked mid-test - is invisible to both this check and to Chrome's own
+      # update poll, which only fetches when the published version is HIGHER.
+      # Returning quietly here is how someone spends an afternoon testing a
+      # build they thought they had replaced. So the choice is offered instead.
+      Hint 'A rebuild that kept the same version number looks identical to this'
+      Hint 'check, and Chrome only re-downloads when the version goes UP - so'
+      Hint 'the code on this machine may still be the older build.'
+      Blank
+      $again = Read-Host '   Clear the cached extension and re-download anyway? (y/N)'
+      if ($again -ne 'y' -and $again -ne 'Y') {
+        Info 'Left as it is.'
+        return
+      }
+    } else {
+      Blank
+      Warn "$(@($stale).Count) profile(s) are on an older build:"
+      foreach ($s in $stale) { Hint "  $($s.Browser) / $($s.User) / $($s.Profile) : v$($s.Version)" }
     }
-
-    Blank
-    Warn "$(@($stale).Count) profile(s) are on an older build:"
-    foreach ($s in $stale) { Hint "  $($s.Browser) / $($s.User) / $($s.Profile) : v$($s.Version)" }
 
     if (-not (Stop-Browsers)) { return }
 

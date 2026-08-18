@@ -246,6 +246,28 @@ def main() -> int:
     # first. The manager generates the feed per request from the host the
     # endpoint actually reached (see server/app/api/v1/extension.py).
 
+    # A rebuild that keeps the same version number is invisible to every
+    # consumer downstream. Chrome only re-downloads when the published version
+    # is HIGHER, so a same-version repack leaves every managed browser running
+    # the previous code while the server insists it published the new one — and
+    # nothing in the chain complains. Say so here, where it can still be fixed.
+    prior_path = args.out / "extension.json"
+    if prior_path.exists():
+        try:
+            prior = json.loads(prior_path.read_text())
+        except Exception:
+            prior = {}
+        new_hash = hashlib.sha256(crx).hexdigest()
+        if prior.get("version") == version and prior.get("sha256") not in (None, new_hash):
+            print()
+            print(f"  !! WARNING: this is a DIFFERENT build of version {version}.")
+            print(f"     was  sha256 {prior.get('sha256')}")
+            print(f"     now  sha256 {new_hash}")
+            print("     Chrome updates only when the version goes UP, so managed browsers")
+            print("     will keep running the old code. Bump \"version\" in")
+            print("     agents/browser-extension/manifest.json and pack again, or clear the")
+            print("     cached extension per profile with manage-windows-agent.ps1 -> [5].")
+
     # Consumed by the manager's /extension/info route, which is what
     # manage-windows-agent.ps1 reads so an operator never types an id by hand.
     (args.out / "extension.json").write_text(json.dumps({

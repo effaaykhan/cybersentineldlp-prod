@@ -830,6 +830,20 @@ class ClassificationEngine:
 
         return multiplier
 
+    # ── Accessors for the redaction planner ──────────────────────────────
+    # Masking has to re-find, in the text, the values that these rules matched.
+    # It uses the loaded rules and the compiled-pattern cache rather than its
+    # own copies, so a mask can never be computed from a different pattern than
+    # the one that produced the verdict.
+
+    async def get_active_rules(self) -> List[Rule]:
+        """The rules this engine is currently classifying with."""
+        return await self._get_cached_rules()
+
+    def compiled_pattern(self, rule: Rule) -> Optional[re.Pattern]:
+        """The compiled regex for a rule, from the shared cache."""
+        return self._get_compiled_regex(rule)
+
     def _build_rule_result(self, rule: Rule, match_count: int) -> Dict[str, Any]:
         """Build a standardized rule result dictionary."""
         result: Dict[str, Any] = {

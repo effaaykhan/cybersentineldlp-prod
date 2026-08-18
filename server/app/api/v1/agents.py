@@ -20,6 +20,7 @@ from app.policies.agent_policy_transformer import AgentPolicyTransformer
 from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 from app.core.cache import get_cache, CacheService
 from app.core import web_activity as _WA
+from app.core import masking as _MASK
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -1153,6 +1154,18 @@ class PolicyEvaluationResponse(BaseModel):
     # classification below is therefore not evidence of being clean.
     extraction_status: str = Field("readable", description="readable | unreadable")
     extraction_kind: str = Field("text", description="pdf | docx | xlsx | archive | text | ...")
+    # Redaction, for action="mask". masked_text is authoritative: the caller
+    # writes exactly this back into the composer rather than applying the
+    # offsets itself, so there is one implementation of the substitution and
+    # no way for the two sides to disagree about encoding or ordering.
+    # `redactions` is for display and audit only.
+    masked_text: Optional[str] = Field(None, description="The submitted text with sensitive values replaced")
+    redactions: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Replaced spans: start, end, type, token — never the value"
+    )
+    mask_summary: List[Dict[str, Any]] = Field(
+        default_factory=list, description="What was replaced, as [{type, count}]"
+    )
 
 
 class DeviceAuthorizeRequest(BaseModel):
@@ -2187,21 +2200,26 @@ async def _match_web_activity(
     action per cell. Expressing this as conditions would take 24 separate
     policies to say what one matrix row says.
 
-    Returns (should_block, should_alert, reason). Says nothing — (False, False,
-    "") — when no policy addresses this cell, which is the deliberate default:
-    an activity nobody wrote a rule for is allowed, so deploying the extension
-    does not silently start blocking work.
+    Returns (action, reason) where action is one of allow/log/alert/mask/block.
+    Says nothing — ("allow", "") — when no policy addresses this cell, which is
+    the deliberate default: an activity nobody wrote a rule for is allowed, so
+    deploying the extension does not silently start blocking work.
+
+    This used to return (should_block, should_alert, reason). Two booleans
+    cannot express a third enforcement outcome, and collapsing "mask" into
+    either of them would have made a redaction indistinguishable from a block
+    at the call site.
     """
     try:
         cat = _WA.normalize_category(category)
         act = _WA.normalize_activity(activity)
         if not cat or not act:
-            return (False, False, "")
+            return (_WA.ACTION_ALLOW, "")
         if not _WA.is_valid_pair(cat, act):
             # e.g. "ai_response on webmail" — a caller confusion, not a policy
             # decision. Matching it would let a nonsense pair inherit whatever
             # the operator set for a real one.
-            return (False, False, "")
+            return (_WA.ACTION_ALLOW, "")
 
         policies = await PolicyService(db).get_all_policies(skip=0, limit=1000, enabled_only=True)
 
@@ -2224,10 +2242,10 @@ async def _match_web_activity(
                 strongest = action
                 reason = why
 
-        return (strongest == _WA.ACTION_BLOCK, strongest == _WA.ACTION_ALERT, reason)
+        return (strongest, reason)
     except Exception as e:  # never let matching break evaluation
         logger.warning("Web-activity match failed (non-fatal)", error=str(e))
-        return (False, False, "")
+        return (_WA.ACTION_ALLOW, "")
 
 
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
@@ -2544,14 +2562,50 @@ async def evaluate_policy_realtime(
         # upload / download / attach / send / post / ai_response). Independent
         # of the generic evaluator because a matrix needs a different action per
         # cell; see _match_web_activity.
-        _wa_block, _wa_alert, _wa_reason = await _match_web_activity(
+        _wa_action, _wa_reason = await _match_web_activity(
             db, agent_id, request.app_category, request.activity,
             request.app_id, request.app_name,
             classification_result.classification, extraction_status,
         )
-        if _wa_block:
+
+        # A mask verdict has to be turned into an actual redaction here, and if
+        # that cannot be done it becomes a block. Masking is the only action
+        # that can FAIL to be carried out — allow, log, alert and block are all
+        # decisions, while mask is a decision plus a piece of work.
+        mask_plan = None
+        if _wa_action == _WA.ACTION_MASK:
+            refused = ""
+            if request.file_content_b64 or (request.file_content or "").strip():
+                # An attachment cannot be redacted in place: rebuilding a PDF or
+                # a spreadsheet with values removed is a different feature, and
+                # sending the prose masked while the file goes out whole would
+                # be worse than doing nothing.
+                refused = "the submission carries an attachment, which cannot be redacted"
+            else:
+                # Planned against text_content ALONE, never the concatenated
+                # blob that was classified: the offsets have to line up with the
+                # exact string the caller is going to rewrite.
+                mask_plan, refused = _MASK.plan(
+                    request.text_content or "",
+                    classification_result.matched_rules,
+                    await classification_engine.get_active_rules(),
+                    classification_engine.compiled_pattern,
+                )
+
+            if mask_plan is None:
+                _wa_action = _WA.ACTION_BLOCK
+                _wa_reason = (
+                    f"{_wa_reason} — masking was not possible because {refused}"
+                    if _wa_reason else f"Masking was not possible because {refused}"
+                )
+                logger.info(
+                    "Mask refused, falling back to block",
+                    agent_id=agent_id, activity=request.activity, reason=refused,
+                )
+
+        if _wa_action == _WA.ACTION_BLOCK:
             should_block = True
-        elif _wa_alert:
+        elif _wa_action in (_WA.ACTION_ALERT, _WA.ACTION_MASK):
             should_alert = True
             if alert_severity is None:
                 alert_severity = "high" if _level_rank(
@@ -2559,7 +2613,11 @@ async def evaluate_policy_realtime(
                 ) >= _LEVEL_RANK["confidential"] else "medium"
 
         # 5. Build response
-        action = "block" if should_block else "allow"
+        action = (
+            "block" if should_block
+            else "mask" if mask_plan is not None
+            else "allow"
+        )
 
         # Build detailed reason
         if classification_result.matched_rules:
@@ -2583,7 +2641,7 @@ async def evaluate_policy_realtime(
         # configured, and what the end user needs to read on the block banner —
         # far more actionable than a classification summary.
         if _wa_reason:
-            reason = (f"BLOCKED - {_wa_reason}" if _wa_block else _wa_reason)
+            reason = (f"BLOCKED - {_wa_reason}" if _wa_action == _WA.ACTION_BLOCK else _wa_reason)
 
         logger.info(
             "Policy evaluation complete",
@@ -2609,6 +2667,12 @@ async def evaluate_policy_realtime(
             alert_severity=alert_severity,
             extraction_status=extraction_status,
             extraction_kind=extract_kind,
+            masked_text=mask_plan.masked_text if mask_plan else None,
+            redactions=[
+                {"start": r.start, "end": r.end, "type": r.type, "token": r.token}
+                for r in (mask_plan.redactions if mask_plan else [])
+            ],
+            mask_summary=mask_plan.summary if mask_plan else [],
         )
 
     except Exception as e:

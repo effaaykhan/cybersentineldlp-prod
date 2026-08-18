@@ -314,12 +314,13 @@ export function Callout({
 
 /* ── Action semantics ──────────────────────────────────────────────────── */
 
-export type PolicyAction = 'allow' | 'log' | 'alert' | 'block' | 'quarantine' | 'audit' | 'enforce'
+export type PolicyAction = 'allow' | 'log' | 'alert' | 'mask' | 'block' | 'quarantine' | 'audit' | 'enforce'
 
 const ACTION_TONE: Record<string, string> = {
   allow: 'text-cs-act-allow',
   log: 'text-cs-act-log',
   alert: 'text-cs-act-alert',
+  mask: 'text-cs-act-mask',
   block: 'text-cs-act-block',
   quarantine: 'text-cs-act-block',
   audit: 'text-cs-act-alert',

@@ -179,7 +179,7 @@ export interface PrintContentConfig extends FileIdentityDenylist {
 // faithfully expressing a filled grid as rules would take up to 24 policies.
 export type WebActivityCategory = 'webmail' | 'cloud_storage' | 'collaboration' | 'genai'
 export type WebActivity = 'upload' | 'download' | 'attach' | 'send' | 'post' | 'ai_response'
-export type WebActivityAction = 'allow' | 'log' | 'alert' | 'block'
+export type WebActivityAction = 'allow' | 'log' | 'alert' | 'mask' | 'block'
 
 export interface WebActivityCell {
   action: WebActivityAction

@@ -45,6 +45,7 @@ module.exports = {
           'act-allow': 'var(--cs-act-allow)',
           'act-log': 'var(--cs-act-log)',
           'act-alert': 'var(--cs-act-alert)',
+          'act-mask': 'var(--cs-act-mask)',
           'act-block': 'var(--cs-act-block)',
         },
         // Single brand accent — indigo. The dashboard already leaned indigo

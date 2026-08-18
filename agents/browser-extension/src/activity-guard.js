@@ -192,6 +192,32 @@
     );
   }
 
+  /**
+   * What was taken out, after the fact.
+   *
+   * Rewriting somebody's message without telling them would be worse than
+   * blocking it: they would send something they did not write and only find
+   * out from the reply. This names the types and counts — never the values,
+   * which is the whole point of having removed them.
+   */
+  function showMaskNotice(key, summary) {
+    var parts = (summary || []).map(function (s) {
+      var label = String(s.type || "value").toLowerCase().replace(/_/g, " ");
+      return s.count + " " + label + (s.count === 1 ? "" : "s");
+    });
+    showNotice(
+      key,
+      '<div style="font-weight:700;font-size:15px">Sensitive values replaced</div>' +
+        '<div style="margin-top:6px;font-size:12px;opacity:.92">' +
+        (parts.length
+          ? escapeHtml(parts.join(", ")) + " replaced with placeholders before sending."
+          : "Sensitive values were replaced with placeholders before sending.") +
+        "</div>",
+      "#2e7d32",
+      9000
+    );
+  }
+
   function showTimeoutNotice(key) {
     showNotice(
       key,
@@ -386,6 +412,119 @@
       // matters: a scanner that throws here fails open, so a missing property
       // would silently disable body scanning rather than degrade it.
       return el.innerText || el.textContent || "";
+    }
+
+    /* -- writing the composer back ------------------------------------------ */
+
+    /**
+     * Find the element the body text was read from, so a mask is written back
+     * to exactly what was inspected.
+     */
+    function getBodyElement(container) {
+      var active = document.activeElement;
+      if (active && active.matches && active.matches(BODY_SELECTOR)) {
+        if (container === document || container.contains(active)) return active;
+      }
+      return container.querySelector ? container.querySelector(BODY_SELECTOR) : null;
+    }
+
+    /**
+     * Replace the composer's contents.
+     *
+     * The naive version — el.textContent = masked — is the one failure mode
+     * that would make masking dangerous rather than merely broken. Every one of
+     * these apps keeps its own copy of the draft in framework state (ProseMirror
+     * for ChatGPT, Angular for Gemini), and a direct DOM write does not tell it
+     * anything. The page would still be holding the ORIGINAL text, the mask
+     * would look applied on screen, and the unredacted prompt would be what
+     * actually got sent.
+     *
+     * So the write goes through the same events a human keystroke produces:
+     * select everything, then insertText. The framework's own input handling
+     * runs, and its state and the DOM stay in agreement. For a real <textarea>
+     * the equivalent is the native value setter plus a dispatched `input`,
+     * because assigning .value directly is invisible to React's synthetic
+     * event layer.
+     *
+     * Returns false if it could not be done at all. The caller must treat that
+     * as "block", never as "sent".
+     */
+    function writeComposer(el, text) {
+      if (!el) return false;
+      try {
+        el.focus();
+
+        if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+          var proto = el.tagName === "TEXTAREA"
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+          var setter = Object.getOwnPropertyDescriptor(proto, "value");
+          if (setter && setter.set) setter.set.call(el, text);
+          else el.value = text;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        }
+
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        // execCommand is deprecated and still the only call that routes a
+        // programmatic edit through a contenteditable's own input pipeline.
+        var wrote = document.execCommand("insertText", false, text);
+        if (!wrote) {
+          // Older/stricter editors: beforeinput carries the same intent and
+          // several of them honour it when execCommand is refused.
+          el.dispatchEvent(new InputEvent("beforeinput", {
+            bubbles: true, cancelable: true, inputType: "insertText", data: text
+          }));
+          el.dispatchEvent(new InputEvent("input", {
+            bubbles: true, inputType: "insertText", data: text
+          }));
+        }
+        sel.removeAllRanges();
+        return true;
+      } catch (err) {
+        console.error("[CyberSentinel] Could not rewrite the composer:", err);
+        return false;
+      }
+    }
+
+    /**
+     * Rewrite the composer with the server's masked text and prove it took.
+     *
+     * The proof is the point. A rewrite that silently failed would leave the
+     * original prompt in place and this code would then replay the gesture —
+     * sending the very data the mask existed to remove, while reporting a
+     * successful redaction. So nothing is replayed until the composer reads
+     * back as the masked text.
+     */
+    function applyMask(container, originalText, maskedText) {
+      var el = getBodyElement(container);
+      if (!el) {
+        console.error("[CyberSentinel] No composer to mask — blocking instead.");
+        return false;
+      }
+      if (!writeComposer(el, maskedText)) return false;
+
+      var readBack = readEditable(el);
+      var norm = function (v) { return String(v || "").replace(/\s+/g, " ").trim(); };
+      if (norm(readBack) !== norm(maskedText)) {
+        console.error(
+          "[CyberSentinel] The composer did not accept the redacted text — blocking instead. " +
+          "Expected " + norm(maskedText).length + " chars, read back " + norm(readBack).length + "."
+        );
+        return false;
+      }
+      // Belt and braces: even if the lengths agreed, the original must be gone.
+      if (originalText && norm(readBack) === norm(originalText)) {
+        console.error("[CyberSentinel] The composer still holds the original text — blocking instead.");
+        return false;
+      }
+      return true;
     }
 
     function getSubjectText(container) {
@@ -1004,7 +1143,43 @@
             console.warn("[CyberSentinel] Would have blocked (audit mode) — resuming:", verdict.reason);
           }
 
-          hideNotice(key);
+          if (action === "mask" && !auditMode()) {
+            // Redact and continue. The server has already decided WHAT to
+            // replace and has sent the finished text; this side's only job is
+            // to get that text into the composer and prove it landed.
+            //
+            // A subject line is inspected together with the body and comes back
+            // as one redacted string, which cannot be written into two separate
+            // fields without guessing where the split is. Webmail therefore
+            // blocks rather than masks; GenAI, which has no subject, is exactly
+            // where this is wanted and works.
+            var ok = !fresh.subjectText &&
+              applyMask(fresh.container, fresh.bodyText, verdict.maskedText || "");
+            if (!ok && fresh.subjectText) {
+              console.warn("[CyberSentinel] Cannot redact a message with a separate subject line — blocking.");
+            }
+            if (!ok) {
+              // The rewrite is the one step that can fail after a decision has
+              // been made. Failing it means the composer still holds the
+              // original, so this becomes a block — never a send.
+              console.error("[CyberSentinel] Redaction could not be applied — blocking.");
+              showBlockNotice(key, fresh.localReasons,
+                "Sensitive values could not be removed from this message, so it was not sent.");
+              send({
+                type: "CSDLP_ACTIVITY_EVENT",
+                payload: Object.assign(buildPayload(fresh, activity), {
+                  blocked: true,
+                  description: "Redaction failed in " + APP + " — submission blocked"
+                })
+              });
+              return;
+            }
+            showMaskNotice(key, verdict.maskSummary || []);
+          } else if (action === "mask") {
+            console.warn("[CyberSentinel] Would have redacted (audit mode) — resuming untouched.");
+          }
+
+          if (action !== "mask") hideNotice(key);
           resumeSubmit(submitButton, keyboardCtx, keyboardCtx && keyboardCtx.target);
         })
         .catch(function (err) {

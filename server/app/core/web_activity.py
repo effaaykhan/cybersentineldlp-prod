@@ -100,9 +100,15 @@ CATEGORY_ACTIVITIES: Dict[str, Tuple[str, ...]] = {
 ACTION_ALLOW = "allow"
 ACTION_LOG = "log"
 ACTION_ALERT = "alert"
+# Let the activity happen, but strip the sensitive values out of it first. Sits
+# below block because it is the weaker guarantee: the user's work continues, so
+# a policy that says block and a policy that says mask must resolve to block.
+ACTION_MASK = "mask"
 ACTION_BLOCK = "block"
 
-ACTIONS: Tuple[str, ...] = (ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_BLOCK)
+ACTIONS: Tuple[str, ...] = (
+    ACTION_ALLOW, ACTION_LOG, ACTION_ALERT, ACTION_MASK, ACTION_BLOCK,
+)
 
 # Rank for collapsing several matching rules into one effective action. Mirrors
 # ``policy_transformer._ACTION_RANK`` so the endpoint and the dashboard never
@@ -111,7 +117,8 @@ ACTION_RANK: Dict[str, int] = {
     ACTION_ALLOW: 0,
     ACTION_LOG: 1,
     ACTION_ALERT: 2,
-    ACTION_BLOCK: 3,
+    ACTION_MASK: 3,
+    ACTION_BLOCK: 4,
 }
 
 # ── Event types ──────────────────────────────────────────────────────────────

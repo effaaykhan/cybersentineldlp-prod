@@ -681,9 +681,17 @@ async function evaluateOne(cfg, item, ctx) {
 
   const data = res.data || {};
   const level = (data.classification || {}).level || null;
-  let action = data.action === "block" ? "block" : (data.alert_severity ? "alert" : "allow");
+  let action =
+    data.action === "block" ? "block" :
+    data.action === "mask" ? "mask" :
+    (data.alert_severity ? "alert" : "allow");
   return {
     action,
+    // The finished redacted text, authoritative. The guard writes exactly this
+    // rather than applying offsets itself, so there is one implementation of
+    // the substitution and no way for the two sides to disagree.
+    maskedText: typeof data.masked_text === "string" ? data.masked_text : null,
+    maskSummary: data.mask_summary || [],
     level,
     reason: data.reason || "",
     severity: data.alert_severity || null,
@@ -777,7 +785,37 @@ async function evaluateActivity(payload) {
       if (worst.action === "block") break;
     }
     if (anyServerAnswer) {
-      verdict = { action: worst.action, level: worst.level, reason: worst.reason, source: "server" };
+      verdict = {
+        action: worst.action, level: worst.level, reason: worst.reason, source: "server",
+        maskedText: worst.maskedText || null, maskSummary: worst.maskSummary || []
+      };
+
+      /*
+        A mask has to be refused here in three cases the server cannot see.
+
+        Attachments: the verdict is the worst across every item, and only the
+        prose item can carry a redaction. Masking the message while its
+        attachment goes out whole would be worse than doing nothing.
+
+        Truncation: text longer than MAX_TEXT_CHARS is clipped before it is
+        sent for inspection, so the redacted text that comes back is also
+        clipped. Writing that into the composer would silently delete
+        everything past the limit — a mask must never lose the user's work.
+
+        No text at all: nothing to rewrite.
+      */
+      if (verdict.action === "mask") {
+        const refuse =
+          items.length > 1 ? "the submission carries an attachment" :
+          (payload.text || "").length > MAX_TEXT_CHARS ? "the message is too long to redact without truncating it" :
+          !verdict.maskedText ? "the server returned no redacted text" : "";
+        if (refuse) {
+          warn(`mask refused for ${payload.appName}: ${refuse} — blocking instead`);
+          verdict.action = "block";
+          verdict.reason = `${verdict.reason || "Redaction required"} — blocked because ${refuse}`;
+          verdict.maskedText = null;
+        }
+      }
     }
   }
 
@@ -797,7 +835,17 @@ async function evaluateActivity(payload) {
       reason: fb.reason,
       source: "cached-policy"
     };
-    warn(`falling back to the cached policy for ${payload.appName}: ${fb.action} — ${fb.reason}`);
+
+    // A redaction is computed by the server from the rules that matched. With
+    // no server there is nothing to compute it from, and a cell set to Redact
+    // must not degrade into "send it anyway" — the stricter neighbour is the
+    // only safe reading.
+    if (verdict.action === "mask") {
+      verdict.action = "block";
+      verdict.reason = `${fb.reason} — blocked because redaction needs the server and it could not be reached`;
+    }
+
+    warn(`falling back to the cached policy for ${payload.appName}: ${verdict.action} — ${verdict.reason}`);
   }
 
   // Report it. Awaited only far enough to start; the guard is holding a user's
@@ -827,6 +875,7 @@ function describe(payload, verdict) {
   }
   const outcome =
     verdict.action === "block" ? "BLOCKED" :
+    verdict.action === "mask" ? "sent with sensitive values replaced" :
     verdict.action === "alert" ? "flagged" : "allowed";
   const what = payload.attachmentNames && payload.attachmentNames.length
     ? ` (${payload.attachmentNames.join(", ")})` : "";
@@ -887,7 +936,9 @@ async function reportActivity(payload, verdict) {
 
   const level = verdict.level || payload.localLevel || null;
   const blocked = verdict.action === "block" || !!payload.scanTimedOut;
-  const action = blocked ? "blocked" : verdict.action === "alert" ? "alert" : "logged";
+  const action = blocked ? "blocked"
+    : verdict.action === "mask" ? "masked"
+    : verdict.action === "alert" ? "alert" : "logged";
   const text = clip(payload.text || "");
 
   const eventBody = {

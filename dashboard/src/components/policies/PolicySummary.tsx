@@ -17,7 +17,7 @@
  */
 
 import { ReactNode } from 'react'
-import { Ban, Bell, Eye, ShieldCheck, Users, Gauge } from 'lucide-react'
+import { Ban, Bell, Eye, EyeOff, ShieldCheck, Users, Gauge } from 'lucide-react'
 import { PolicyType } from '@/types/policy'
 import { getPolicyTypeLabel } from '@/utils/policyUtils'
 
@@ -32,9 +32,9 @@ type Draft = {
 }
 
 /** The strongest thing this policy will do, across every shape of config. */
-function effectiveAction(d: Draft): 'block' | 'quarantine' | 'alert' | 'log' | 'none' {
+function effectiveAction(d: Draft): 'block' | 'quarantine' | 'mask' | 'alert' | 'log' | 'none' {
   const c = d.config || {}
-  const rank: Record<string, number> = { block: 4, quarantine: 3, alert: 2, log: 1 }
+  const rank: Record<string, number> = { block: 5, quarantine: 4, mask: 3, alert: 2, log: 1 }
   let best = 'none'
   const consider = (a?: string) => {
     const k = String(a || '').toLowerCase()
@@ -84,13 +84,16 @@ function describe(d: Draft): ReactNode {
       }
     }
 
-    const order = ['block', 'alert', 'log']
+    const order = ['block', 'mask', 'alert', 'log']
     const filled = order.filter((a) => byAction[a]?.length)
     if (!filled.length) return 'Nothing is ruled yet. Every activity is allowed.'
 
-    const VERB: Record<string, string> = { block: 'Blocks', alert: 'Alerts on', log: 'Records' }
+    const VERB: Record<string, string> = {
+      block: 'Blocks', mask: 'Redacts', alert: 'Alerts on', log: 'Records',
+    }
     const TONE: Record<string, string> = {
       block: 'text-cs-act-block',
+      mask: 'text-cs-act-mask',
       alert: 'text-cs-act-alert',
       log: 'text-cs-act-log',
     }
@@ -167,6 +170,7 @@ function describe(d: Draft): ReactNode {
 export default function PolicySummary({ draft }: { draft: Draft }) {
   const action = effectiveAction(draft)
   const interrupts = action === 'block' || action === 'quarantine'
+  const redacts = action === 'mask'
   const audit = draft.config?.mode === 'audit'
 
   const Row = ({ icon, label, value }: { icon: ReactNode; label: string; value: ReactNode }) => (
@@ -225,18 +229,28 @@ export default function PolicySummary({ draft }: { draft: Draft }) {
         className={`mt-3 rounded-cs-sm border p-3 flex items-start gap-2.5 ${
           interrupts && !audit
             ? 'border-cs-crit/30 bg-cs-crit/[0.06]'
-            : action === 'none'
-              ? 'border-cs-hair bg-cs-panel'
-              : 'border-cs-med/30 bg-cs-med/[0.06]'
+            : redacts && !audit
+              ? 'border-cs-high/30 bg-cs-high/[0.06]'
+              : action === 'none'
+                ? 'border-cs-hair bg-cs-panel'
+                : 'border-cs-med/30 bg-cs-med/[0.06]'
         }`}
       >
         <span
           className={`shrink-0 mt-[1px] ${
-            interrupts && !audit ? 'text-cs-crit' : action === 'none' ? 'text-cs-muted-2' : 'text-cs-med'
+            interrupts && !audit
+              ? 'text-cs-crit'
+              : redacts && !audit
+                ? 'text-cs-high'
+                : action === 'none'
+                  ? 'text-cs-muted-2'
+                  : 'text-cs-med'
           }`}
         >
           {interrupts && !audit ? (
             <Ban className="h-4 w-4" />
+          ) : redacts && !audit ? (
+            <EyeOff className="h-4 w-4" />
           ) : action === 'none' ? (
             <ShieldCheck className="h-4 w-4" />
           ) : (
@@ -250,6 +264,16 @@ export default function PolicySummary({ draft }: { draft: Draft }) {
               <span className="text-cs-ink-2">
                 {' '}
                 The action fails and they see a notice explaining why.
+              </span>
+            </>
+          ) : redacts && !audit ? (
+            <>
+              <b className="text-cs-ink">Nobody is stopped — the data is.</b>
+              <span className="text-cs-ink-2">
+                {' '}
+                Sensitive values are replaced with placeholders before the message goes, and the
+                person is told what was replaced. If they cannot be located, or the message carries
+                an attachment, it is blocked instead.
               </span>
             </>
           ) : audit ? (

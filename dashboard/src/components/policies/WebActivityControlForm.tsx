@@ -51,6 +51,7 @@ const ACTIONS: Array<{ value: WebActivityAction; label: string; cls: string }> =
   { value: 'allow', label: 'Allow', cls: 'text-cs-ink-2' },
   { value: 'log', label: 'Log', cls: 'text-cs-indigo' },
   { value: 'alert', label: 'Alert', cls: 'text-cs-med' },
+  { value: 'mask', label: 'Redact', cls: 'text-cs-high' },
   { value: 'block', label: 'Block', cls: 'text-cs-crit' },
 ]
 
@@ -65,7 +66,8 @@ function cellMinLevel(cell: WebActivityAction | WebActivityCell | undefined): st
   return cell && typeof cell === 'object' ? cell.minLevel || '' : ''
 }
 
-const ACTION_RANK: Record<WebActivityAction, number> = { allow: 0, log: 1, alert: 2, block: 3 }
+// Mirrors app/core/web_activity.ACTION_RANK and policy.js.
+const ACTION_RANK: Record<WebActivityAction, number> = { allow: 0, log: 1, alert: 2, mask: 3, block: 4 }
 
 /**
  * Stamp the policy's headline action onto the config.

@@ -24,7 +24,10 @@
 (function (root) {
   "use strict";
 
-  var ACTION_RANK = { allow: 0, log: 1, alert: 2, block: 3 };
+  // Mirrors app/core/web_activity.ACTION_RANK. mask sits below block: it lets
+  // the work continue, so a cell that says block and a cell that says mask
+  // must resolve to block.
+  var ACTION_RANK = { allow: 0, log: 1, alert: 2, mask: 3, block: 4 };
   var LEVEL_RANK = { public: 0, internal: 1, confidential: 2, restricted: 3 };
 
   function normAction(value, fallback) {

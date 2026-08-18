@@ -58,6 +58,10 @@
   --cs-act-allow: var(--cs-muted-2);
   --cs-act-log:   var(--cs-indigo);
   --cs-act-alert: var(--cs-med);
+  /* Redaction is the one outcome that is neither "nothing happened" nor
+     "someone was stopped" — the work continues, altered. It takes the high
+     step of the severity ramp rather than a new hue. */
+  --cs-act-mask:  var(--cs-high);
   --cs-act-block: var(--cs-crit);
 
   /* fonts */

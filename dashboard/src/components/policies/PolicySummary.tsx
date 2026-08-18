@@ -183,7 +183,10 @@ export default function PolicySummary({ draft }: { draft: Draft }) {
 
   return (
     <aside
-      className="rounded-cs-card border border-cs-hair bg-cs-panel-2 p-4 lg:sticky lg:top-4"
+      /* self-start so the panel is only as tall as what it says. Without it the
+         grid stretches it to the full height of the form and the tinted block
+         runs into the footer with its bottom corners cut off. */
+      className="self-start rounded-cs-card border border-cs-hair bg-cs-panel-2 p-4 lg:sticky lg:top-4"
       aria-live="polite"
     >
       <div className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-cs-muted-2">

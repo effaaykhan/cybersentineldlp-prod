@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { 
   Policy, 
   PolicyType, 
@@ -40,7 +40,8 @@ import WebActivityControlForm from './WebActivityControlForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
-import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check } from 'lucide-react'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 
 interface PolicyCreatorModalProps {
@@ -94,6 +95,27 @@ const POLICY_TEMPLATES: Partial<Record<PolicyType, ClassificationTemplate>> = {
 }
 
 const isChannelPolicy = (t: PolicyType | null): boolean => t !== null && t in POLICY_TEMPLATES
+
+/*
+  How wide the dialog needs to be.
+
+  It used to be one width for everything — the width the activity matrix needs
+  — so a clipboard policy with four checkboxes opened a 1150px panel and set its
+  text inputs a mile wide. A dialog should be as big as its work and no bigger:
+  wide for the things that are genuinely two-dimensional (a category × activity
+  matrix, a list of applications, a stack of condition rows), ordinary for the
+  rest.
+*/
+const WIDE_FORMS: PolicyType[] = [
+  'web_activity_control',
+  'application_control',
+  'classification_aware_policy',
+  'cloud_upload_prevention',
+  'email_send_prevention',
+  'network_exfiltration_prevention',
+  'file_transfer_monitoring',
+  'usb_file_transfer_monitoring',
+]
 
 // The generic classification policy and every channel-scoped policy above use
 // the conditions/actions builder rather than a typed `config` object.
@@ -377,35 +399,11 @@ export default function PolicyCreatorModal({
       .catch(() => setAgents([]))
   }, [isOpen])
 
-  // Escape closes the dialog. Without it a keyboard user has to tab to the X,
-  // and the overlay's click-to-dismiss is mouse-only.
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [isOpen])
-
-  // Move focus into the dialog when it opens, so the first Tab lands somewhere
-  // sensible instead of continuing from whatever was behind it.
-  const panelRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!isOpen) return
-    const t = setTimeout(() => {
-      // querySelector returns DOM order, not the order of the selector list, so
-      // a single call landed on the Close button in the header. Fields first,
-      // then anything focusable — on the type step there are no fields and the
-      // first policy tile is the right place to be.
-      const root = panelRef.current
-      const field = root?.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea')
-      const fallback = root?.querySelector<HTMLElement>('button:not([disabled])')
-      ;(field || fallback)?.focus()
-    }, 0)
-    return () => clearTimeout(t)
-  }, [isOpen, step])
-
+  /*
+    Escape-to-close, focus management, scroll lock and the focus trap all live
+    in <Modal>. They used to be re-implemented here — and in six other dialogs,
+    each slightly differently.
+  */
   const handleClose = () => {
     setStep(1)
     onClose()
@@ -513,52 +511,33 @@ export default function PolicyCreatorModal({
   )
   const canSave = policyName.trim() !== '' && policyType !== null
 
-  if (!isOpen) return null
-
   const typeLabel = policyType ? getPolicyTypeLabel(policyType) : null
   const agentName = agents.find((a) => a.agent_id === agentId)?.name || null
   const STEPS = ['Type', 'Configure', 'Review'] as const
 
   return (
-    <div
-      className="fixed inset-0 z-50 overflow-y-auto bg-cs-scrim p-4 sm:p-6"
-      onClick={handleClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label={editingPolicy ? 'Edit policy' : 'New policy'}
-    >
-      <div
-        ref={panelRef}
-        className="mx-auto w-full max-w-6xl rounded-cs-card border border-cs-hair bg-cs-panel
-                   shadow-[0_24px_64px_-16px_rgba(21,23,28,0.28)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/*
+    <Modal
+      open={isOpen}
+      onClose={handleClose}
+      // Step 1 is a gallery and wants the room; after that the form decides.
+      size={step === 1 || (policyType !== null && WIDE_FORMS.includes(policyType)) ? '3xl' : '2xl'}
+      /* A half-written policy must not evaporate because a click landed beside
+         the panel. Escape and Cancel are the ways out; both are deliberate. */
+      closeOnBackdrop={false}
+      initialFocus="#policy-name"
+      label={editingPolicy ? 'Edit policy' : 'New policy'}
+      header={
+        /*
           The header states the POLICY TYPE once one is chosen, not "Create New
           Policy". After step 1 the type is the single most important fact about
           what you are editing, and it used to vanish the moment you left the
           type list.
-        */}
-        <header className="sticky top-0 z-10 rounded-t-cs-card border-b border-cs-hair bg-cs-panel px-6 py-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-cs-muted-2">
-                {editingPolicy ? 'Edit policy' : 'New policy'}
-              </div>
-              <h3 className="text-[19px] font-semibold tracking-[-0.01em] text-cs-ink mt-0.5 truncate">
-                {typeLabel || 'Choose what to protect'}
-              </h3>
-            </div>
-            <button
-              onClick={handleClose}
-              aria-label="Close"
-              className="shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
-                         focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
-            >
-              <X className="h-4.5 w-4.5" />
-            </button>
-          </div>
-
+        */
+        <ModalHeader
+          eyebrow={editingPolicy ? 'Edit policy' : 'New policy'}
+          title={typeLabel || 'Choose what to protect'}
+          onClose={handleClose}
+        >
           {/*
             Replaces three large numbered circles and their connecting rules.
             In a modal that already scrolls, that device cost a band of vertical
@@ -598,9 +577,40 @@ export default function PolicyCreatorModal({
               )
             })}
           </nav>
-        </header>
+        </ModalHeader>
+      }
+      footer={
+        <ModalFooter
+          left={
+            step > 1 ? (
+              <button onClick={handleBack} className="btn btn-ghost">
+                <ChevronLeft className="h-4 w-4" />
+                Back
+              </button>
+            ) : null
+          }
+        >
+          <button onClick={handleClose} className="btn btn-ghost">
+            Cancel
+          </button>
+          {step < 3 ? (
+            <button
+              onClick={handleNext}
+              disabled={step === 1 ? !canProceedFromStep1 : !canProceedFromStep2}
+              className="btn btn-primary"
+            >
+              Continue
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          ) : (
+            <button onClick={handleSave} disabled={!canSave} className="btn btn-primary">
+              {editingPolicy ? 'Save changes' : 'Create policy'}
+            </button>
+          )}
+        </ModalFooter>
+      }
+    >
 
-        <div className="px-6 py-5">
           {step === 1 && (
             <PolicyTypeSelector
               selectedType={policyType}
@@ -913,54 +923,6 @@ export default function PolicyCreatorModal({
               />
             </div>
           )}
-        </div>
-
-        <footer className="sticky bottom-0 flex items-center gap-2 rounded-b-cs-card border-t border-cs-hair bg-cs-panel px-6 py-3.5">
-          {step > 1 && (
-            <button
-              onClick={handleBack}
-              className="inline-flex items-center gap-1 rounded-cs-sm px-3 py-2 text-[13px] font-medium text-cs-ink-2
-                         transition-colors hover:bg-cs-panel-2 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              Back
-            </button>
-          )}
-
-          <div className="flex-1" />
-
-          <button
-            onClick={handleClose}
-            className="rounded-cs-sm px-3.5 py-2 text-[13px] font-medium text-cs-ink-2
-                       transition-colors hover:bg-cs-panel-2 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
-          >
-            Cancel
-          </button>
-
-          {step < 3 ? (
-            <button
-              onClick={handleNext}
-              disabled={step === 1 ? !canProceedFromStep1 : !canProceedFromStep2}
-              className="inline-flex items-center gap-1 rounded-cs-sm bg-cs-indigo px-4 py-2 text-[13px] font-semibold text-white
-                         transition-colors hover:bg-cs-indigo-d disabled:cursor-not-allowed disabled:bg-cs-hair disabled:text-cs-muted-2
-                         focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
-            >
-              Continue
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          ) : (
-            <button
-              onClick={handleSave}
-              disabled={!canSave}
-              className="rounded-cs-sm bg-cs-indigo px-4 py-2 text-[13px] font-semibold text-white
-                         transition-colors hover:bg-cs-indigo-d disabled:cursor-not-allowed disabled:bg-cs-hair disabled:text-cs-muted-2
-                         focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
-            >
-              {editingPolicy ? 'Save changes' : 'Create policy'}
-            </button>
-          )}
-        </footer>
-      </div>
-    </div>
+    </Modal>
   )
 }

@@ -52,7 +52,7 @@ function ChartTooltip({
   if (!active || !payload?.length) return null
   return (
     <div
-      className="rounded-lg px-3 py-2 text-xs font-mono"
+      className="rounded-cs-sm px-3 py-2 text-xs font-mono"
       style={{
         background: RECHARTS_CONFIG.tooltipBackground,
         border: `1px solid ${RECHARTS_CONFIG.tooltipBorder}`,
@@ -142,18 +142,18 @@ export default function Dashboard() {
       <header className="flex items-end justify-between gap-4 flex-wrap">
         <div>
           <p className="eyebrow mb-1.5">Overview</p>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+          <h1 className="text-2xl font-bold tracking-tight text-cs-ink">
             Security Operations
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-cs-muted">
             Real-time view of DLP activity across endpoints and channels.
           </p>
         </div>
-        <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-500 shadow-card">
+        <div className="inline-flex items-center gap-2 rounded-cs-sm border border-cs-hair bg-white px-3 py-1.5 text-xs text-cs-muted shadow-card">
           <span className="live-dot" />
-          <span className="font-medium text-slate-700">Live</span>
-          <span className="text-slate-300" aria-hidden>·</span>
-          <span><span className="num text-slate-700">5s</span> refresh</span>
+          <span className="font-medium text-cs-ink-2">Live</span>
+          <span className="text-cs-muted-2" aria-hidden>·</span>
+          <span><span className="num text-cs-ink-2">5s</span> refresh</span>
           {isFetching && (
             <span className="text-primary-600 font-medium">· syncing…</span>
           )}
@@ -335,7 +335,7 @@ export default function Dashboard() {
               {eventsByType.slice(0, 6).map((row: any, i: number) => (
                 <li
                   key={i}
-                  className="flex items-center gap-2 min-w-0 group cursor-pointer rounded px-1 py-0.5 -mx-1 hover:bg-indigo-50 transition-colors"
+                  className="flex items-center gap-2 min-w-0 group cursor-pointer rounded px-1 py-0.5 -mx-1 hover:bg-cs-indigo-faint transition-colors"
                   title={`${DRILL_TOOLTIP}: module=${row.type}`}
                   onClick={() =>
                     navigate(drillDownUrl({ module: String(row.type ?? 'unknown') }))
@@ -345,10 +345,10 @@ export default function Dashboard() {
                     className="h-2 w-2 rounded-full shrink-0"
                     style={{ background: TYPE_PALETTE[i % TYPE_PALETTE.length] }}
                   />
-                  <span className="text-gray-700 group-hover:text-indigo-700 truncate" title={row.type}>
+                  <span className="text-cs-ink-2 group-hover:text-cs-indigo-d truncate" title={row.type}>
                     {row.type || 'unknown'}
                   </span>
-                  <span className="ml-auto font-mono text-gray-500 tabular-nums">
+                  <span className="ml-auto font-mono text-cs-muted tabular-nums">
                     {Number(row.count).toLocaleString()}
                   </span>
                 </li>
@@ -456,13 +456,13 @@ function ChartCard({
       <header className="flex items-start justify-between gap-3 mb-5">
         <div className="flex items-center gap-2.5">
           {Icon && (
-            <span className={cn('h-8 w-8 rounded-lg flex items-center justify-center shrink-0', chipMap[accent])}>
+            <span className={cn('h-8 w-8 rounded-cs-sm flex items-center justify-center shrink-0', chipMap[accent])}>
               <Icon className="h-4 w-4" />
             </span>
           )}
           <div>
             <h3 className="section-title">{title}</h3>
-            {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
+            {subtitle && <p className="mt-0.5 text-xs text-cs-muted">{subtitle}</p>}
           </div>
         </div>
       </header>
@@ -514,12 +514,12 @@ function ActionsPanel({
   return (
     <section className="card-static">
       <header className="flex items-center gap-2.5 mb-5">
-        <span className="h-8 w-8 rounded-lg flex items-center justify-center bg-primary-50 text-primary-600 shrink-0">
+        <span className="h-8 w-8 rounded-cs-sm flex items-center justify-center bg-primary-50 text-primary-600 shrink-0">
           <Shield className="h-4 w-4" />
         </span>
         <div>
           <h3 className="section-title">DLP Enforcement</h3>
-          <p className="mt-0.5 text-xs text-slate-500">Live policy outcomes — click to investigate</p>
+          <p className="mt-0.5 text-xs text-cs-muted">Live policy outcomes — click to investigate</p>
         </div>
       </header>
       <ul className="space-y-2.5">
@@ -562,18 +562,18 @@ function ActionRow({
       title={`${DRILL_TOOLTIP}: ${label}`}
       aria-label={`${label}: ${value.toLocaleString()}. ${DRILL_TOOLTIP}.`}
       className={cn(
-        'group relative flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-200 cursor-pointer bg-white',
-        'transition-colors duration-150 hover:bg-slate-50 hover:border-slate-300',
+        'group relative flex items-center justify-between gap-3 p-3 rounded-cs-sm border border-cs-hair cursor-pointer bg-white',
+        'transition-colors duration-150 hover:bg-cs-panel-2 hover:border-cs-muted-2',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50 focus-visible:ring-offset-1',
       )}
     >
       <div className="flex items-center gap-3 min-w-0">
-        <div className={cn('h-9 w-9 rounded-lg flex items-center justify-center shrink-0', m.iconBg)}>
+        <div className={cn('h-9 w-9 rounded-cs-sm flex items-center justify-center shrink-0', m.iconBg)}>
           <Icon className="h-[18px] w-[18px]" />
         </div>
         <div className="min-w-0">
-          <p className="font-semibold text-slate-900 truncate text-sm">{label}</p>
-          <p className="text-xs text-slate-500 truncate">{sub}</p>
+          <p className="font-semibold text-cs-ink truncate text-sm">{label}</p>
+          <p className="text-xs text-cs-muted truncate">{sub}</p>
         </div>
       </div>
       <span className={cn('num text-xl font-semibold', m.text)}>
@@ -587,14 +587,14 @@ function ActionRow({
 function ChartSkeleton() {
   return (
     <div className="h-[300px] flex items-center justify-center">
-      <div className="h-full w-full rounded-lg bg-gradient-to-br from-gray-100 to-gray-50 animate-pulse" />
+      <div className="h-full w-full rounded-cs-sm bg-cs-hair-2 animate-pulse" />
     </div>
   )
 }
 
 function ChartEmpty() {
   return (
-    <div className="h-[300px] flex items-center justify-center text-sm text-gray-400 italic">
+    <div className="h-[300px] flex items-center justify-center text-sm text-cs-muted italic">
       No data yet — agents will populate this as events arrive.
     </div>
   )

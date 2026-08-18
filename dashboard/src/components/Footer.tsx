@@ -34,7 +34,7 @@ export default function Footer() {
             <span className="brand-gradient-text text-base font-bold tracking-tight">
               CyberSentinel
             </span>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-indigo-500">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-cs-indigo">
               Data Loss Prevention
             </span>
           </div>
@@ -63,7 +63,7 @@ export default function Footer() {
           {!vgiLogoFailed ? (
             <div className="relative">
               <div
-                className="absolute -inset-0.5 rounded-lg bg-[linear-gradient(90deg,transparent,rgba(79,70,229,0.45),transparent)] opacity-0 blur transition-opacity duration-300 group-hover:opacity-100"
+                className="absolute -inset-0.5 rounded-cs-sm bg-[linear-gradient(90deg,transparent,rgba(79,70,229,0.45),transparent)] opacity-0 blur transition-opacity duration-300 group-hover:opacity-100"
                 aria-hidden="true"
               />
               <div

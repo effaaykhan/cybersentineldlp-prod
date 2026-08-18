@@ -102,8 +102,8 @@ export default function Alerts() {
       {/* Page Header */}
       <div>
         <p className="eyebrow mb-1.5">Security</p>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Alerts</h1>
-        <p className="mt-1 text-sm text-slate-600">
+        <h1 className="text-2xl font-bold tracking-tight text-cs-ink">Alerts</h1>
+        <p className="mt-1 text-sm text-cs-ink-2">
           Manage security alerts from DLP policies
         </p>
       </div>
@@ -115,27 +115,27 @@ export default function Alerts() {
           onClick={() => setFilter('all')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary-50 rounded-lg">
+            <div className="p-2 bg-primary-50 rounded-cs-sm">
               <ShieldAlert className="h-5 w-5 text-primary-600" />
             </div>
             <div>
-              <p className="text-sm text-slate-600">Total Alerts</p>
+              <p className="text-sm text-cs-ink-2">Total Alerts</p>
               <p className="font-mono text-2xl font-semibold tabular-nums text-primary-600">{totalAlertsCount}</p>
             </div>
           </div>
         </div>
 
         <div
-          className={`card-modern cursor-pointer ${filter === 'high' ? 'ring-2 ring-orange-500' : ''}`}
+          className={`card-modern cursor-pointer ${filter === 'high' ? 'ring-2 ring-cs-high' : ''}`}
           onClick={() => setFilter('high')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-50 rounded-lg">
-              <AlertTriangle className="h-5 w-5 text-orange-600" />
+            <div className="p-2 bg-cs-high/[0.07] rounded-cs-sm">
+              <AlertTriangle className="h-5 w-5 text-cs-high" />
             </div>
             <div>
-              <p className="text-sm text-slate-600">High Alerts</p>
-              <p className="font-mono text-2xl font-semibold tabular-nums text-orange-600">
+              <p className="text-sm text-cs-ink-2">High Alerts</p>
+              <p className="font-mono text-2xl font-semibold tabular-nums text-cs-high">
                 {highAlertsCount}
               </p>
             </div>
@@ -143,16 +143,16 @@ export default function Alerts() {
         </div>
 
         <div
-          className={`card-modern cursor-pointer ${filter === 'critical' ? 'ring-2 ring-red-500' : ''}`}
+          className={`card-modern cursor-pointer ${filter === 'critical' ? 'ring-2 ring-cs-crit' : ''}`}
           onClick={() => setFilter('critical')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-red-50 rounded-lg">
-              <AlertCircle className="h-5 w-5 text-red-600" />
+            <div className="p-2 bg-cs-crit/[0.07] rounded-cs-sm">
+              <AlertCircle className="h-5 w-5 text-cs-crit" />
             </div>
             <div>
-              <p className="text-sm text-slate-600">Critical Alerts</p>
-              <p className="font-mono text-2xl font-semibold tabular-nums text-red-600">
+              <p className="text-sm text-cs-ink-2">Critical Alerts</p>
+              <p className="font-mono text-2xl font-semibold tabular-nums text-cs-crit">
                 {criticalAlertsCount}
               </p>
             </div>
@@ -163,7 +163,7 @@ export default function Alerts() {
       {/* Search Bar */}
       <div className="card">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-cs-muted" />
           <input
             type="text"
             placeholder="Search alerts by title, description, agent ID, severity..."
@@ -176,21 +176,21 @@ export default function Alerts() {
 
       {/* Alerts List */}
       <div className="card p-0">
-        <div className="px-6 py-4 border-b border-slate-200">
+        <div className="px-6 py-4 border-b border-cs-hair">
           <h3 className="section-title">
             {filter === 'all' ? 'All Alerts' : filter === 'high' ? 'High Severity Alerts' : 'Critical Severity Alerts'}
             {searchQuery && ` - Search: "${searchQuery}"`}
           </h3>
         </div>
 
-        <div className="divide-y divide-slate-200">
+        <div className="divide-y divide-cs-hair">
           {!filteredAlerts || filteredAlerts.length === 0 ? (
             <div className="p-12 text-center">
-              <AlertCircle className="h-12 w-12 text-slate-400 mx-auto mb-3" />
-              <p className="text-slate-600 font-medium">
+              <AlertCircle className="h-12 w-12 text-cs-muted mx-auto mb-3" />
+              <p className="text-cs-ink-2 font-medium">
                 {searchQuery ? 'No alerts found' : filter === 'all' ? 'No alerts' : `No ${filter} severity alerts`}
               </p>
-              <p className="text-sm text-slate-500 mt-1">
+              <p className="text-sm text-cs-muted mt-1">
                 {searchQuery
                   ? 'Try adjusting your search query'
                   : filter === 'all'
@@ -203,7 +203,7 @@ export default function Alerts() {
             pagedAlerts.map((alert) => (
               <div
                 key={alert.id}
-                className="p-4 hover:bg-slate-50 cursor-pointer transition-colors"
+                className="p-4 hover:bg-cs-panel-2 cursor-pointer transition-colors"
                 onClick={() => handleAlertClick(alert)}
               >
                 <div className="flex items-start gap-4">
@@ -225,17 +225,17 @@ export default function Alerts() {
                       )}
                     </div>
 
-                    <h4 className="font-medium text-slate-900">{alert.title}</h4>
-                    <p className="mt-1 text-sm text-slate-600">
+                    <h4 className="font-medium text-cs-ink">{alert.title}</h4>
+                    <p className="mt-1 text-sm text-cs-ink-2">
                       {alert.description}
                     </p>
 
-                    <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
+                    <div className="mt-2 flex items-center gap-3 text-xs text-cs-muted">
                       <span>Agent: <span className="num">{alert.agent_id}</span></span>
                       <span>•</span>
                       <span className="num">{formatRelativeTime(alert.created_at)}</span>
                       <span>•</span>
-                      <code className="num bg-slate-100 text-slate-700 px-1 py-0.5 rounded">
+                      <code className="num bg-cs-hair-2 text-cs-ink-2 px-1 py-0.5 rounded">
                         {alert.event_id}
                       </code>
                     </div>

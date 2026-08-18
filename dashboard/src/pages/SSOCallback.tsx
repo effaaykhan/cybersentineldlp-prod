@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
+import { AlertTriangle } from 'lucide-react'
 
 /**
  * SSO Callback page — mounted at /auth/sso.
@@ -97,38 +98,52 @@ export default function SSOCallback() {
     }
   }, [searchParams, navigate, setTokens])
 
+  /*
+    The SSO handoff sits between the light login screen and the light console,
+    and it used to be a pitch-black gradient panel — so signing in flashed the
+    user through a screen that looked like a different product. Both states now
+    reuse the login backdrop, and the only thing that changes between them is
+    what the card says.
+  */
+  const Shell = ({ children }: { children: React.ReactNode }) => (
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-cs-hair-2 p-4">
+      <div
+        className="absolute inset-0 bg-[linear-gradient(rgba(15,23,42,.045)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,.045)_1px,transparent_1px)] bg-[size:44px_44px] [mask-image:radial-gradient(ellipse_75%_60%_at_50%_45%,#000,transparent)]"
+        aria-hidden="true"
+      />
+      <div
+        className="absolute inset-0 bg-[radial-gradient(ellipse_50%_45%_at_50%_38%,rgba(99,102,241,0.10),transparent_70%)]"
+        aria-hidden="true"
+      />
+      <div className="relative z-10 w-full max-w-md rounded-cs-card border border-cs-hair bg-cs-panel p-8 text-center shadow-modal">
+        {children}
+      </div>
+    </div>
+  )
+
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-black flex items-center justify-center p-4">
-        <div className="bg-gray-800/80 backdrop-blur-sm border border-red-500/30 rounded-xl p-8 max-w-md w-full text-center">
-          <div className="text-red-400 text-5xl mb-4">!</div>
-          <h2 className="text-xl font-semibold text-white mb-2">
-            SSO Login Failed
-          </h2>
-          <p className="text-gray-400 mb-6">{error}</p>
-          <a
-            href="/login"
-            className="inline-block px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
-          >
-            Go to Login Page
-          </a>
+      <Shell>
+        <div className="mx-auto mb-4 grid h-11 w-11 place-items-center rounded-full bg-cs-crit/10 text-cs-crit">
+          <AlertTriangle className="h-5 w-5" />
         </div>
-      </div>
+        <h2 className="text-[17px] font-semibold text-cs-ink">Single sign-on did not complete</h2>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-cs-muted">{error}</p>
+        <a href="/login" className="btn btn-primary mt-6">
+          Back to sign in
+        </a>
+      </Shell>
     )
   }
 
-  // Loading state while exchange is in progress
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-black flex items-center justify-center p-4">
-      <div className="bg-gray-800/80 backdrop-blur-sm border border-gray-700/50 rounded-xl p-8 max-w-md w-full text-center">
-        <div className="inline-block w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <h2 className="text-lg font-semibold text-white mb-1">
-          Signing you in...
-        </h2>
-        <p className="text-gray-400 text-sm">
-          Verifying SSO credentials with the server
-        </p>
-      </div>
-    </div>
+    <Shell>
+      <div
+        className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-[3px] border-cs-indigo border-t-transparent"
+        aria-hidden="true"
+      />
+      <h2 className="text-[17px] font-semibold text-cs-ink">Signing you in</h2>
+      <p className="mt-1.5 text-[13px] text-cs-muted">Verifying your credentials with the server.</p>
+    </Shell>
   )
 }

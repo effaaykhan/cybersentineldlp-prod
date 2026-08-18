@@ -54,22 +54,37 @@ function App() {
           }
         />
       </Routes>
+      {/*
+        The last surviving piece of the old dark theme. Every successful action
+        in this light console popped a near-black slab with pale blue text, in
+        five hardcoded hexes that appear nowhere else in the palette. A toast is
+        the most frequently seen surface in the product; it should look like the
+        product.
+      */}
       <Toaster
         position="top-right"
         toastOptions={{
           duration: 4000,
           style: {
-            background: '#111118',
-            color: '#D0D0E8',
-            border: '0.5px solid #1E1E2E',
+            background: 'var(--cs-panel)',
+            color: 'var(--cs-ink)',
+            border: '1px solid var(--cs-hair)',
+            borderRadius: 'var(--cs-r-card)',
+            boxShadow: 'var(--cs-shadow-pop)',
+            fontSize: '13px',
+            padding: '10px 14px',
+            maxWidth: '420px',
           },
           success: {
             duration: 3000,
-            iconTheme: { primary: '#34D399', secondary: '#111118' },
+            iconTheme: { primary: 'var(--cs-ok)', secondary: 'var(--cs-panel)' },
           },
           error: {
             duration: 5000,
-            iconTheme: { primary: '#F87171', secondary: '#111118' },
+            iconTheme: { primary: 'var(--cs-crit)', secondary: 'var(--cs-panel)' },
+          },
+          loading: {
+            iconTheme: { primary: 'var(--cs-indigo)', secondary: 'var(--cs-panel)' },
           },
         }}
       />

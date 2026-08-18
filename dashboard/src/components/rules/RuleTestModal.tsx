@@ -5,6 +5,7 @@ import { X, TestTube, AlertTriangle, CheckCircle } from 'lucide-react'
 import { testRules, type RuleTestResponse } from '@/lib/rules-api'
 import { cn } from '@/lib/utils'
 import toast from 'react-hot-toast'
+import Modal, { ModalFooter } from '@/components/ui/Modal'
 
 interface RuleTestModalProps {
   isOpen: boolean
@@ -41,60 +42,69 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
   const getClassificationColor = (classification: string) => {
     switch (classification) {
       case 'Restricted':
-        return 'text-red-700 bg-red-100 border-red-300'
+        return 'text-cs-crit bg-cs-crit/10 border-cs-crit/30'
       case 'Confidential':
-        return 'text-orange-700 bg-orange-100 border-orange-300'
+        return 'text-cs-high bg-cs-high/10 border-cs-high/30'
       case 'Internal':
-        return 'text-yellow-700 bg-yellow-100 border-yellow-300'
+        return 'text-cs-med bg-cs-med/12 border-cs-med/35'
       case 'Public':
-        return 'text-green-700 bg-green-100 border-green-300'
+        return 'text-cs-ok bg-cs-ok/12 border-cs-ok/30'
       default:
         return 'text-cs-ink-2 bg-cs-hair-2 border-cs-hair'
     }
   }
 
   const getConfidenceColor = (score: number) => {
-    if (score >= 0.8) return 'text-red-700'
-    if (score >= 0.6) return 'text-orange-700'
-    if (score >= 0.3) return 'text-yellow-700'
-    return 'text-green-700'
+    if (score >= 0.8) return 'text-cs-crit'
+    if (score >= 0.6) return 'text-cs-high'
+    if (score >= 0.3) return 'text-cs-med'
+    return 'text-cs-ok'
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50">
-      <div className="bg-white rounded-cs-sm shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-cs-hair">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
-              <TestTube className="h-6 w-6 text-cs-indigo" />
-            </div>
-            <div>
-              <h3 className="text-2xl font-bold text-cs-ink">Rule Testing Tool</h3>
-              <p className="text-sm text-cs-muted-2 mt-1">
-                Test content against your classification rules
-              </p>
-            </div>
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="2xl"
+      initialFocus="#test-content"
+      header={
+        <div className="flex items-center gap-3">
+          <div className="rounded-cs-sm bg-cs-indigo-faint p-2">
+            <TestTube className="h-5 w-5 text-cs-indigo" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="truncate text-[19px] font-semibold tracking-[-0.01em] text-cs-ink">
+              Test a rule
+            </h3>
+            <p className="mt-0.5 text-[12.5px] text-cs-muted">
+              Paste content and see what your classification rules make of it.
+            </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-cs-muted hover:text-cs-muted-2 transition-colors"
+            aria-label="Close"
+            className="ml-auto shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                       focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
           >
-            <X className="w-6 h-6" />
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
-
-        {/* Content */}
-        <div className="p-6 space-y-6">
+      }
+      footer={
+        <ModalFooter>
+          <button onClick={onClose} className="btn btn-secondary">Close</button>
+        </ModalFooter>
+      }
+      bodyClassName="px-6 py-5 space-y-6"
+    >
           {/* Input */}
           <div>
             <label className="block text-sm font-medium text-cs-ink-2 mb-2">
               Test Content
             </label>
             <textarea
+              id="test-content"
               value={content}
               onChange={(e) => setContent(e.target.value)}
               className="input w-full font-mono text-sm"
@@ -199,12 +209,12 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
                                   className={cn(
                                     'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mb-1',
                                     match.severity === 'critical'
-                                      ? 'bg-red-100 text-red-800'
+                                      ? 'bg-cs-crit/10 text-cs-crit'
                                       : match.severity === 'high'
-                                      ? 'bg-orange-100 text-orange-800'
+                                      ? 'bg-cs-high/10 text-cs-high'
                                       : match.severity === 'medium'
-                                      ? 'bg-yellow-100 text-yellow-800'
-                                      : 'bg-green-100 text-green-800'
+                                      ? 'bg-cs-med/12 text-cs-med'
+                                      : 'bg-cs-ok/12 text-cs-ok'
                                   )}
                                 >
                                   {match.severity}
@@ -227,7 +237,7 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
                                   {match.classification_labels.map((label) => (
                                     <span
                                       key={label}
-                                      className="px-2 py-0.5 bg-purple-100 text-purple-800 rounded text-xs"
+                                      className="px-2 py-0.5 bg-cs-indigo-faint text-cs-indigo rounded text-xs"
                                     >
                                       {label}
                                     </span>
@@ -268,15 +278,6 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
               </div>
             </div>
           )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-cs-hair bg-cs-panel-2">
-          <button onClick={onClose} className="btn-secondary">
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

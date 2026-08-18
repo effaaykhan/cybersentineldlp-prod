@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useMutation } from '@tanstack/react-query'
-import { X, Plus, Trash2 } from 'lucide-react'
+import { X, Plus } from 'lucide-react'
 import { createRule, updateRule, type Rule, type RuleCreate } from '@/lib/rules-api'
 import toast from 'react-hot-toast'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 
 interface RuleModalProps {
   rule: Rule | null
@@ -185,28 +186,49 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
     })
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50">
-      <div className="bg-white rounded-cs-sm shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-        <form onSubmit={handleSubmit}>
-          {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-cs-hair">
-            <h3 className="text-2xl font-bold text-cs-ink">
-              {isEdit ? 'Edit Rule' : 'Create Rule'}
-            </h3>
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-cs-muted hover:text-cs-muted-2 transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          </div>
-
-          {/* Content */}
-          <div className="p-6 space-y-6">
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="xl"
+      /* A rule half-written is real work; a stray click beside the panel must
+         not throw it away. */
+      closeOnBackdrop={false}
+      initialFocus="#rule-name"
+      header={
+        <ModalHeader
+          eyebrow="Classification rule"
+          title={isEdit ? 'Edit rule' : 'New rule'}
+          onClose={onClose}
+        />
+      }
+      footer={
+        <ModalFooter>
+          <button type="button" onClick={onClose} className="btn btn-ghost">
+            Cancel
+          </button>
+          {/*
+            The submit lives in the fixed footer while the fields live in the
+            scrolling body, so it reaches the form by id rather than by being
+            nested inside it.
+          */}
+          <button
+            type="submit"
+            form="rule-form"
+            disabled={createMutation.isPending || updateMutation.isPending}
+            className="btn btn-primary"
+          >
+            {createMutation.isPending || updateMutation.isPending
+              ? 'Saving…'
+              : isEdit
+                ? 'Save changes'
+                : 'Create rule'}
+          </button>
+        </ModalFooter>
+      }
+    >
+      <form id="rule-form" onSubmit={handleSubmit}>
+        <div className="space-y-6">
             {/* Basic Info */}
             <div className="space-y-4">
               <div>
@@ -214,6 +236,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                   Rule Name *
                 </label>
                 <input
+                  id="rule-name"
                   type="text"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -340,7 +363,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                     onChange={(e) =>
                       setFormData({ ...formData, case_sensitive: e.target.checked })
                     }
-                    className="rounded border-cs-hair text-cs-indigo focus:ring-blue-500"
+                    className="rounded border-cs-hair text-cs-indigo focus:ring-cs-indigo"
                   />
                   <label htmlFor="case-sensitive" className="ml-2 text-sm text-cs-ink-2">
                     Case sensitive matching
@@ -448,13 +471,13 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 {formData.classification_labels?.map((label) => (
                   <span
                     key={label}
-                    className="inline-flex items-center gap-1 px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm"
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-cs-indigo-faint text-cs-indigo rounded-full text-sm"
                   >
                     {label}
                     <button
                       type="button"
                       onClick={() => removeLabel(label)}
-                      className="hover:text-purple-900"
+                      className="hover:text-cs-indigo-d"
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -504,7 +527,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 id="enabled"
                 checked={formData.enabled}
                 onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
-                className="rounded border-cs-hair text-cs-indigo focus:ring-blue-500"
+                className="rounded border-cs-hair text-cs-indigo focus:ring-cs-indigo"
               />
               <label htmlFor="enabled" className="ml-2 text-sm text-cs-ink-2">
                 Enable this rule immediately
@@ -512,25 +535,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
             </div>
           </div>
 
-          {/* Footer */}
-          <div className="flex items-center justify-end gap-3 p-6 border-t border-cs-hair bg-cs-panel-2">
-            <button type="button" onClick={onClose} className="btn-secondary">
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={createMutation.isPending || updateMutation.isPending}
-              className="btn-primary"
-            >
-              {createMutation.isPending || updateMutation.isPending
-                ? 'Saving...'
-                : isEdit
-                ? 'Update Rule'
-                : 'Create Rule'}
-            </button>
-          </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   )
 }

@@ -20,6 +20,7 @@ import {
 } from '@/lib/api'
 import { usePermission } from '@/hooks/usePermission'
 import Pagination from '@/components/ui/Pagination'
+import Dialog, { ModalHeader, useConfirm } from '@/components/ui/Modal'
 
 // Roles exposed by the dropdowns — mirrors the backend whitelist.
 const ROLE_OPTIONS = [
@@ -52,6 +53,7 @@ const EMPTY_CREATE: AdminUserCreateInput = {
 }
 
 export default function UserManagement() {
+  const { confirm, dialog } = useConfirm()
   const { has, permissions, role } = usePermission()
   const canManage = has('manage_users')
   const queryClient = useQueryClient()
@@ -248,13 +250,19 @@ export default function UserManagement() {
                         {u.is_active && (
                           <IconButton
                             title="Deactivate (soft)"
-                            onClick={() => {
-                              if (
-                                window.confirm(
-                                  `Deactivate ${u.email}? They will no longer be able to log in. You can reactivate them later.`
-                                )
-                              )
-                                deactivateMutation.mutate(u.id)
+                            onClick={async () => {
+                              const yes = await confirm({
+                                title: 'Deactivate this account?',
+                                confirmLabel: 'Deactivate account',
+                                children: (
+                                  <p>
+                                    <span className="font-semibold text-cs-ink">{u.email}</span> can
+                                    no longer sign in. Nothing is deleted and you can reactivate the
+                                    account later.
+                                  </p>
+                                ),
+                              })
+                              if (yes) deactivateMutation.mutate(u.id)
                             }}
                             color="yellow"
                             disabled={deactivateMutation.isPending}
@@ -317,6 +325,7 @@ export default function UserManagement() {
           isSubmitting={hardDeleteMutation.isPending}
         />
       )}
+      {dialog}
     </div>
   )
 }
@@ -843,6 +852,12 @@ function PermissionPicker({
 }
 
 // ── Shared primitives ─────────────────────────────────────────────────────
+/*
+  A thin adapter onto the shared <Modal>. This page had the ONLY hand-rolled
+  dialog that got the scroll structure right — flex column, min-h-0 body — and
+  it still re-implemented Escape and the scroll lock locally. Now it just names
+  the two things that vary here: the title and the width.
+*/
 function Modal({
   title,
   children,
@@ -854,52 +869,15 @@ function Modal({
   onClose: () => void
   wide?: boolean
 }) {
-  // Close on Escape, lock body scroll while open.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prevOverflow
-    }
-  }, [onClose])
-
   return (
-    // Use items-start + py-8 so tall content doesn't get its top clipped off
-    // the viewport (flex-centering would push it beyond the scroll region).
-    // The outer layer scrolls if the card exceeds viewport height.
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
+    <Dialog
+      open
+      onClose={onClose}
+      size={wide ? 'lg' : 'sm'}
+      header={<ModalHeader title={title} onClose={onClose} />}
     >
-      <div
-        // max-h caps the card to leave breathing room top+bottom; min-h-0 on
-        // the flex child lets the body's overflow-y-auto actually scroll.
-        className={`bg-cs-panel rounded-cs-card border border-cs-hair shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
-          wide ? 'max-w-2xl' : 'max-w-md'
-        }`}
-        role="dialog"
-        aria-modal="true"
-      >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-cs-hair shrink-0">
-          <h2 className="text-lg font-semibold text-cs-ink">{title}</h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-cs-sm hover:bg-cs-hair-2 text-cs-muted transition-colors"
-            aria-label="Close dialog"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="px-6 py-5 overflow-y-auto flex-1 min-h-0">{children}</div>
-      </div>
-    </div>
+      {children}
+    </Dialog>
   )
 }
 

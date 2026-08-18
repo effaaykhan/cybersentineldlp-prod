@@ -3,6 +3,7 @@ import { X, Upload, FileUp, Shield, CheckCircle2, XCircle, MinusCircle, Loader2 
 import { importPolicies } from '@/lib/api'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import toast from 'react-hot-toast'
+import Modal, { ModalFooter } from '@/components/ui/Modal'
 
 interface ImportPoliciesModalProps {
   isOpen: boolean
@@ -97,29 +98,46 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-cs-card max-w-2xl w-full max-h-[90vh] flex flex-col border border-cs-hair shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-cs-hair">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-cs-sm bg-cs-indigo-faint">
-              <Upload className="h-6 w-6 text-cs-indigo" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-cs-ink">Import Policies</h3>
-              <p className="text-sm text-cs-muted-2 mt-0.5">Load policies from an exported JSON file.</p>
-            </div>
+    <Modal
+      open
+      onClose={onClose}
+      size="lg"
+      bodyClassName="px-6 py-5 space-y-5"
+      header={
+        <div className="flex items-center gap-3">
+          <div className="rounded-cs-sm bg-cs-indigo-faint p-2">
+            <Upload className="h-5 w-5 text-cs-indigo" />
           </div>
-          <button onClick={onClose} className="p-2 rounded-cs-sm hover:bg-cs-hair-2 transition-colors">
-            <X className="h-5 w-5 text-cs-muted-2" />
+          <div className="min-w-0">
+            <h3 className="truncate text-[19px] font-semibold tracking-[-0.01em] text-cs-ink">Import policies</h3>
+            <p className="mt-0.5 text-[12.5px] text-cs-muted">Load policies from an exported JSON file.</p>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="ml-auto shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                       focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+          >
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+      }
+      footer={
+        <ModalFooter>
+          {result ? (
+            <button onClick={onClose} className="btn btn-primary">Done</button>
+          ) : (
+            <>
+              <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+              <button onClick={handleImport} disabled={!parsed || importing} className="btn btn-primary">
+                {importing && <Loader2 className="h-4 w-4 animate-spin" />}
+                Import{parsed ? ` (${parsed.length})` : ''}
+              </button>
+            </>
+          )}
+        </ModalFooter>
+      }
+    >
           {result ? (
             <>
               <div className="grid grid-cols-4 gap-3">
@@ -228,32 +246,6 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
               )}
             </>
           )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-cs-hair">
-          {result ? (
-            <button onClick={onClose} className="btn-primary">Done</button>
-          ) : (
-            <>
-              <button
-                onClick={onClose}
-                className="px-4 py-2 bg-cs-hair-2 text-cs-ink-2 rounded-cs-sm hover:bg-cs-hair transition-colors text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleImport}
-                disabled={!parsed || importing}
-                className="btn-primary gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {importing && <Loader2 className="w-4 h-4 animate-spin" />}
-                Import {parsed ? `(${parsed.length})` : ''}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

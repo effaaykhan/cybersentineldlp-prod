@@ -3,6 +3,7 @@ import { X, Download } from 'lucide-react'
 import { Policy } from '@/types/policy'
 import { transformFrontendPolicyToApi, getPolicyTypeLabel, getSeverityColorLight } from '@/utils/policyUtils'
 import toast from 'react-hot-toast'
+import Modal, { ModalFooter } from '@/components/ui/Modal'
 
 interface ExportPoliciesModalProps {
   isOpen: boolean
@@ -72,29 +73,46 @@ export default function ExportPoliciesModal({ isOpen, policies, onClose }: Expor
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-cs-card max-w-3xl w-full max-h-[90vh] flex flex-col border border-cs-hair shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-cs-hair">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-cs-sm bg-cs-indigo-faint">
-              <Download className="h-6 w-6 text-cs-indigo" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-cs-ink">Export Policies</h3>
-              <p className="text-sm text-cs-muted-2 mt-0.5">Choose the policies to save to a JSON file.</p>
-            </div>
+    <Modal
+      open
+      onClose={onClose}
+      size="xl"
+      bodyClassName="px-6 py-5"
+      header={
+        <div className="flex items-center gap-3">
+          <div className="rounded-cs-sm bg-cs-indigo-faint p-2">
+            <Download className="h-5 w-5 text-cs-indigo" />
           </div>
-          <button onClick={onClose} className="p-2 rounded-cs-sm hover:bg-cs-hair-2 transition-colors">
-            <X className="h-5 w-5 text-cs-muted-2" />
+          <div className="min-w-0">
+            <h3 className="truncate text-[19px] font-semibold tracking-[-0.01em] text-cs-ink">Export policies</h3>
+            <p className="mt-0.5 text-[12.5px] text-cs-muted">Choose the policies to save to a JSON file.</p>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="ml-auto shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                       focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+          >
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
-
-        {/* Table */}
-        <div className="flex-1 overflow-y-auto p-6">
+      }
+      footer={
+        <ModalFooter
+          left={
+            <span className="text-[12.5px] text-cs-muted">
+              {selected.size} of {policies.length} selected
+            </span>
+          }
+        >
+          <button onClick={onClose} className="btn btn-ghost">Cancel</button>
+          <button onClick={handleExport} disabled={selected.size === 0} className="btn btn-primary">
+            <Download className="h-4 w-4" />
+            Export{selected.size > 0 ? ` (${selected.size})` : ''}
+          </button>
+        </ModalFooter>
+      }
+    >
           {policies.length === 0 ? (
             <p className="text-sm text-cs-muted-2 text-center py-8">There are no policies to export.</p>
           ) : (
@@ -159,29 +177,6 @@ export default function ExportPoliciesModal({ isOpen, policies, onClose }: Expor
               </table>
             </div>
           )}
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between p-6 border-t border-cs-hair">
-          <span className="text-sm text-cs-muted-2">{selected.size} of {policies.length} selected</span>
-          <div className="flex gap-3">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 bg-cs-hair-2 text-cs-ink-2 rounded-cs-sm hover:bg-cs-hair transition-colors text-sm"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={selected.size === 0}
-              className="btn-primary gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Download className="w-4 h-4" />
-              Export {selected.size > 0 ? `(${selected.size})` : ''}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

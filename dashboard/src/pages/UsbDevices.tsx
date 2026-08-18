@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
+import Dialog, { useConfirm } from '@/components/ui/Modal'
 import {
   listDevices, seenDevices, approveDevice, updateDevice, revokeDevice, getDeviceActivity,
   dismissSeenDevice, restoreSeenDevice,
@@ -303,6 +304,7 @@ function RegistryRow({ d, onChange, onOpenActivity, deny }: {
 function SeenRow({ s, onChanged, onOpenActivity }: {
   s: SeenDevice; onChanged: () => void; onOpenActivity: (serial?: string | null, n?: string) => void
 }) {
+  const { confirm, dialog } = useConfirm()
   const base = {
     serial_number: s.serial_number,
     vendor_id: s.vendor_id || undefined,
@@ -370,14 +372,31 @@ function SeenRow({ s, onChanged, onOpenActivity }: {
           <button className="btn btn-secondary btn-sm inline-flex items-center gap-1"
             disabled={dismiss.isPending}
             title="Clear it off this list without allowing or denying it. The device stays monitored, stays blocked unless approved, and its event history is kept."
-            onClick={() => {
-              if (confirm(`Dismiss "${label}" from the seen list?\n\nThis does NOT allow the device — it stays blocked unless you approve it, and it keeps generating events. You can restore it at any time.`)) {
-                dismiss.mutate()
-              }
+            onClick={async () => {
+              const yes = await confirm({
+                title: 'Dismiss this device?',
+                confirmLabel: 'Dismiss device',
+                tone: 'primary',
+                children: (
+                  <>
+                    <p>
+                      <span className="font-semibold text-cs-ink">{label}</span> is cleared off this
+                      list. That is all it does.
+                    </p>
+                    <p className="mt-2">
+                      It is <b className="text-cs-ink">not</b> approved — it stays blocked, stays
+                      monitored and keeps generating events. Its history is kept, and you can
+                      restore it at any time.
+                    </p>
+                  </>
+                ),
+              })
+              if (yes) dismiss.mutate()
             }}>
             <EyeOff className="h-3.5 w-3.5" />{dismiss.isPending ? '…' : 'Dismiss'}
           </button>
         )}
+        {dialog}
       </td>
     </tr>
   )
@@ -386,18 +405,32 @@ function SeenRow({ s, onChanged, onOpenActivity }: {
 function ActivityModal({ serial, name, onClose }: { serial: string; name: string; onClose: () => void }) {
   const q = useQuery({ queryKey: ['usb-activity', serial], queryFn: () => getDeviceActivity(serial) })
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-2xl rounded-cs-card border border-cs-hair bg-cs-panel shadow-xl"
-        onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-cs-hair px-4 py-3">
-          <div className="flex items-center gap-2">
-            <MapPin className="h-4 w-4 text-cs-indigo" />
-            <span className="font-semibold text-cs-ink">Where it was inserted</span>
-            <span className="text-xs text-cs-muted num">· {name}</span>
+    <Dialog
+      open
+      onClose={onClose}
+      size="lg"
+      bodyClassName="px-4 py-4"
+      header={
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-cs-muted-2">
+              <MapPin className="h-3.5 w-3.5" />
+              Insertion history
+            </div>
+            <h3 className="mt-0.5 truncate text-[17px] font-semibold text-cs-ink">{name}</h3>
+            <p className="num mt-0.5 text-[11.5px] text-cs-muted">{serial}</p>
           </div>
-          <button className="text-cs-muted hover:text-cs-ink" onClick={onClose}><X className="h-4 w-4" /></button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                       focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+          >
+            <X className="h-[18px] w-[18px]" />
+          </button>
         </div>
-        <div className="p-4 max-h-[60vh] overflow-y-auto">
+      }
+    >
           {q.isLoading ? <LoadingSpinner /> : q.error ? (
             <ErrorMessage message="Failed to load activity" retry={() => q.refetch()} />
           ) : (q.data?.count || 0) === 0 ? (
@@ -419,9 +452,7 @@ function ActivityModal({ serial, name, onClose }: { serial: string; name: string
               ))}
             </Table>
           )}
-        </div>
-      </div>
-    </div>
+    </Dialog>
   )
 }
 

@@ -9,11 +9,13 @@ import {
   listSources, createEdm, createFingerprint, updateSource, deleteSource,
   testContent, fileToBase64, type MatchResult,
 } from '@/lib/data-matching-api'
+import Dialog, { useConfirm } from '@/components/ui/Modal'
 
 const CLASSIFICATIONS = ['Restricted', 'Confidential', 'Internal']
 const utf8ToB64 = (s: string) => btoa(unescape(encodeURIComponent(s)))
 
 export default function DataMatching() {
+  const { confirm, dialog } = useConfirm()
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [testOpen, setTestOpen] = useState(false)
@@ -136,7 +138,20 @@ export default function DataMatching() {
                       <button
                         className="p-1.5 rounded-cs-sm hover:bg-cs-hair-2 text-cs-crit"
                         title="Delete"
-                        onClick={() => { if (confirm(`Delete "${s.name}"? Its index is removed.`)) remove.mutate(s.id) }}
+                        onClick={async () => {
+                          const yes = await confirm({
+                            title: 'Delete this source?',
+                            confirmLabel: 'Delete source',
+                            children: (
+                              <p>
+                                <span className="font-semibold text-cs-ink">{s.name}</span> and its
+                                index are removed. Content that used to match it stops being
+                                detected.
+                              </p>
+                            ),
+                          })
+                          if (yes) remove.mutate(s.id)
+                        }}
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -151,6 +166,7 @@ export default function DataMatching() {
 
       {createOpen && <CreateModal onClose={() => setCreateOpen(false)} onSaved={() => { setCreateOpen(false); qc.invalidateQueries({ queryKey: ['data-match-sources'] }) }} />}
       {testOpen && <TestModal onClose={() => setTestOpen(false)} />}
+      {dialog}
     </div>
   )
 }
@@ -303,15 +319,28 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-cs-panel rounded-cs-card border border-cs-hair shadow-card w-full max-w-xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-cs-hair sticky top-0 bg-cs-panel">
-          <h2 className="text-lg font-semibold text-cs-ink flex items-center gap-2"><Fingerprint className="h-5 w-5 text-cs-indigo" />{title}</h2>
-          <button className="p-1 rounded-cs-sm hover:bg-cs-hair-2" onClick={onClose}><X className="h-4 w-4 text-cs-muted" /></button>
+    <Dialog
+      open
+      onClose={onClose}
+      size="md"
+      header={
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="flex items-center gap-2 text-[17px] font-semibold text-cs-ink">
+            <Fingerprint className="h-5 w-5 text-cs-indigo" />
+            {title}
+          </h2>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                       focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
+          >
+            <X className="h-[18px] w-[18px]" />
+          </button>
         </div>
-        <div className="px-5 py-4">{children}</div>
-      </div>
-    </div>
+      }
+    >
+      {children}
+    </Dialog>
   )
 }

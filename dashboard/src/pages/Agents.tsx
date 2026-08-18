@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Server, RefreshCw, Trash2, X } from 'lucide-react'
+import { Server, RefreshCw, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -13,6 +13,7 @@ import {
   type Agent,
 } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/utils'
+import { ConfirmDialog } from '@/components/ui/Modal'
 
 type LifecycleTier = 'active' | 'disconnected'
 type FilterType = 'all' | LifecycleTier
@@ -130,7 +131,6 @@ export default function Agents() {
   const confirmBody =
     'This soft-deletes the agent record. Event history is preserved, but the agent will no longer appear in this list. If the agent is still installed and heartbeating, it will automatically reappear on its next heartbeat.'
   const confirmCta = 'Remove'
-  const confirmCtaClass = 'bg-cs-crit hover:brightness-95 text-white'
 
   const isMutating = deleteMutation.isPending
 
@@ -337,54 +337,24 @@ export default function Agents() {
         />
       </div>
 
-      {/* Confirmation modal for removing an agent */}
-      {confirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50"
-            onClick={() => !isMutating && setConfirm(null)}
-          />
-          <div className="relative bg-cs-panel rounded-cs-card border border-cs-hair shadow-card max-w-md w-full mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-cs-hair">
-              <h2 className="text-lg font-semibold text-cs-ink">{confirmTitle}</h2>
-              <button
-                onClick={() => !isMutating && setConfirm(null)}
-                className="p-1 hover:bg-cs-hair-2 rounded-cs-sm transition-colors"
-                disabled={isMutating}
-              >
-                <X className="h-4 w-4 text-cs-muted" />
-              </button>
-            </div>
-            <div className="px-6 py-4 space-y-3 text-sm">
-              <p className="text-cs-ink-2">
-                <span className="font-medium">{confirm.agent.name}</span>
-                {typeof confirm.agent.agent_code === 'number' && (
-                  <span className="ml-2 num text-xs text-cs-muted">
-                    ({String(confirm.agent.agent_code).padStart(3, '0')})
-                  </span>
-                )}
-              </p>
-              <p className="text-cs-ink-2">{confirmBody}</p>
-            </div>
-            <div className="px-6 py-3 border-t border-cs-hair flex justify-end gap-2">
-              <button
-                onClick={() => setConfirm(null)}
-                className="px-3 py-1.5 rounded-cs-sm text-sm font-medium text-cs-ink-2 hover:bg-cs-hair-2"
-                disabled={isMutating}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => deleteMutation.mutate(confirm.agent.agent_id)}
-                className={`px-3 py-1.5 rounded-cs-sm text-sm font-medium ${confirmCtaClass} disabled:opacity-50`}
-                disabled={isMutating}
-              >
-                {isMutating ? 'Working…' : confirmCta}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={!!confirm}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => confirm && deleteMutation.mutate(confirm.agent.agent_id)}
+        title={confirmTitle}
+        confirmLabel={confirmCta}
+        busy={isMutating}
+      >
+        <p className="text-cs-ink">
+          <span className="font-semibold">{confirm?.agent.name}</span>
+          {typeof confirm?.agent.agent_code === 'number' && (
+            <span className="num ml-2 text-[12px] text-cs-muted">
+              ({String(confirm.agent.agent_code).padStart(3, '0')})
+            </span>
+          )}
+        </p>
+        <p className="mt-1.5">{confirmBody}</p>
+      </ConfirmDialog>
     </div>
   )
 }

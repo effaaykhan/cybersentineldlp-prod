@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { X, ChevronDown, ChevronUp } from 'lucide-react'
 import { Policy } from '@/types/policy'
 import { getPolicyTypeIcon, getPolicyTypeLabel, getSeverityColorLight } from '@/utils/policyUtils'
+import Modal, { ModalFooter } from '@/components/ui/Modal'
 
 interface PolicyDetailsModalProps {
   isOpen: boolean
@@ -29,35 +30,41 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-cs-card max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-cs-hair shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-cs-hair sticky top-0 bg-white z-10">
-          <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-cs-sm ${severityColor.bg}`}>
-              <Icon className={`h-6 w-6 ${severityColor.icon}`} />
+    <Modal
+      open
+      onClose={onClose}
+      size="xl"
+      header={
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-cs-sm ${severityColor.bg}`}>
+            <Icon className={`h-5 w-5 ${severityColor.icon}`} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-cs-muted-2">
+              {getPolicyTypeLabel(policy.type)}
             </div>
-            <div>
-              <h3 className="text-2xl font-bold text-cs-ink">{policy.name}</h3>
-              <p className="text-sm text-cs-muted-2 mt-1">{getPolicyTypeLabel(policy.type)}</p>
-            </div>
+            <h3 className="mt-0.5 truncate text-[19px] font-semibold tracking-[-0.01em] text-cs-ink">
+              {policy.name}
+            </h3>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-cs-sm hover:bg-cs-hair-2 transition-colors"
+            aria-label="Close"
+            className="ml-auto shrink-0 rounded-cs-sm p-1.5 text-cs-muted transition-colors hover:bg-cs-panel-2 hover:text-cs-ink
+                       focus:outline-none focus-visible:ring-[3px] focus-visible:ring-cs-indigo-faint"
           >
-            <X className="h-5 w-5 text-cs-muted-2" />
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
-
-        {/* Content */}
-        <div className="p-6 space-y-6">
+      }
+      footer={
+        <ModalFooter>
+          <button onClick={onClose} className="btn btn-secondary">Close</button>
+        </ModalFooter>
+      }
+      bodyClassName="px-6 py-5"
+    >
+      <div className="space-y-6">
           {/* Basic Information */}
           <div>
             <h4 className="text-lg font-semibold text-cs-ink mb-4">Basic Information</h4>
@@ -163,19 +170,7 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
               </div>
             )}
           </div>
-        </div>
-
-        {/* Footer */}
-        <div className="flex justify-end p-6 border-t border-cs-hair sticky bottom-0 bg-white">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-cs-hair-2 text-cs-ink-2 rounded-cs-sm hover:bg-cs-hair transition-colors"
-          >
-            Close
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>
   )
 }
-

@@ -1659,8 +1659,28 @@ objShell.Run """$exePath""", 0, False
             # that makes it immediate.
             $installed = @(Get-InstalledExtensionVersions $extId)
             if (@($installed).Count -eq 0) {
+              # Nothing on disk is ambiguous, and the two readings need
+              # different answers. Either it has never been installed here — a
+              # browser start fixes that — or it WAS installed and its files
+              # went away while the browser's record of it stayed, which a start
+              # cannot fix because the browser still believes it has it.
+              # Watching tells the two apart without having to ask.
               Blank
-              Info 'Not installed here yet - the browser installs it the next time it starts.'
+              Info 'Not on disk in any profile.'
+              Blank
+              $doNow = Read-Host '   Install it now? (Y/n)'
+              if ($doNow -ne 'n' -and $doNow -ne 'N') {
+                if (-not (Invoke-ExtensionUpdate -ExtId $extId -WantVersion $info.version -UpdateUrl $updateUrl)) {
+                  Blank
+                  Warn 'It did not arrive after a browser start.'
+                  Hint 'That usually means the browser still holds a record of an'
+                  Hint 'extension whose files are gone - it believes it already has'
+                  Hint 'this one, so it never fetches it. A restart cannot clear that.'
+                  Hint 'Use [3] Repair, which does.'
+                }
+              } else {
+                Info 'Left as it is - the browser installs it the next time it starts.'
+              }
             } else {
               $stale = @($installed | Where-Object { $_.Version -ne $info.version })
               if (@($stale).Count -eq 0) {

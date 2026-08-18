@@ -1222,170 +1222,216 @@ objShell.Run """$exePath""", 0, False
     return $false
   }
 
-  # Wait for the browser to act on a policy change.
+  # Is a browser actually OPEN?
   #
-  # Chrome and Edge watch the policy registry and apply ExtensionInstallForcelist
-  # changes WHILE RUNNING - removing an entry uninstalls the extension, adding
-  # one installs it, no restart involved. That is the whole basis of the update
-  # below: the browser does the work, and this only has to notice when it is
-  # finished. Polling the folder is how we notice, because it is the browser
-  # itself that creates and removes it.
-  function Wait-ForExtensionState {
-    param(
-      [string]$ExtId,
-      [ValidateSet('gone', 'installed')] [string]$Until,
-      [string]$Version,
-      [int]$TimeoutSeconds = 150
-    )
+  # Not the same question as "is there a process called msedge". Edge keeps
+  # background processes alive after every window is closed (startup boost,
+  # extension service workers, the WebView host), and Chrome does the same when
+  # background apps are enabled. Asking Get-Process alone reports a browser that
+  # is running when the machine's owner would tell you it is shut.
+  #
+  # That is not a detail: it decided which branch the update took, so a script
+  # run on a machine with no browser open announced "Working with: Edge - leave
+  # the window open" and then waited for a window that was never there.
+  #
+  # A visible main window is the honest test.
+  function Get-OpenBrowsers {
+    $open = @()
+    foreach ($b in $BROWSERS) {
+      $procs = @(Get-Process -Name $b.Process -ErrorAction SilentlyContinue |
+                 Where-Object { $_.MainWindowHandle -ne 0 })
+      if (@($procs).Count -gt 0) { $open += $b.Name }
+    }
+    $open
+  }
+
+  # Wait for the published version to land, reporting as it goes.
+  function Wait-ForExtensionVersion {
+    param([string]$ExtId, [string]$Version, [int]$TimeoutSeconds = 300)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $spin = @('|', '/', '-', '\')
     $i = 0
     while ((Get-Date) -lt $deadline) {
       $found = @(Get-InstalledExtensionVersions $ExtId)
-      if ($Until -eq 'gone' -and @($found).Count -eq 0) { Write-Host "`r   " -NoNewline; return $true }
-      if ($Until -eq 'installed') {
-        $matching = @($found | Where-Object { $_.Version -eq $Version })
-        if (@($matching).Count -gt 0 -and @($found).Count -eq @($matching).Count) {
-          Write-Host "`r   " -NoNewline; return $true
-        }
+      if (@($found).Count -gt 0) {
+        $stale = @($found | Where-Object { $_.Version -ne $Version })
+        if (@($stale).Count -eq 0) { Write-Host ("`r" + (' ' * 60) + "`r") -NoNewline; return $true }
       }
       $left = [int]($deadline - (Get-Date)).TotalSeconds
-      Write-Host ("`r   {0} waiting for the browser ({1}s)   " -f $spin[$i % 4], $left) -NoNewline
+      Write-Host ("`r   {0} waiting for the browser to fetch v{1}  ({2}s left)   " -f $spin[$i % 4], $Version, $left) -NoNewline
       $i++
-      Start-Sleep -Milliseconds 700
+      Start-Sleep -Milliseconds 800
     }
-    Write-Host "`r   " -NoNewline
+    Write-Host ("`r" + (' ' * 60) + "`r") -NoNewline
     return $false
   }
 
-  # Replace the installed extension with the published build.
+  # Bring this machine onto the published build.
   #
-  # TWO MISTAKES THIS REPLACES.
+  # THREE ATTEMPTS AT THIS, AND WHAT THEY TAUGHT:
   #
-  # The first was deleting <Profile>\Extensions\<id>\ and trusting the browser
-  # to notice. It does not. Chrome's record of an extension lives in the
-  # profile's Preferences, not with its files, so after the delete the browser
-  # lists an extension it cannot load - no icon, popup 404 - and being
-  # force-installed it will not re-fetch until its own update cycle hours later.
-  # Deleting more carefully cannot help; the files were never the wrong half.
+  #   Deleting <Profile>\Extensions\<id>\ breaks it. The browser's record of an
+  #   extension lives in the profile's Preferences, not with the files, so the
+  #   delete leaves it listing an extension it cannot load and it will not
+  #   re-fetch for hours.
   #
-  # The second was fixing that by making the operator close and reopen the
-  # browser twice. It worked, and asking a person to do a job the browser will
-  # do by itself is not a fix.
+  #   Toggling the forcelist entry while the browser runs works, but only while
+  #   the browser really is running - and it is not the common case. Making it
+  #   the main path meant a closed browser fell into a branch that could not
+  #   finish.
   #
-  # Chrome applies forcelist changes live. So the update is: take the entry
-  # away, wait for the browser to uninstall, put it back, wait for it to
-  # install. No files touched, no restarts, and every step waits for the browser
-  # to actually do it rather than assuming it did.
-  function Invoke-ExtensionReinstall {
+  # There is no supported way for an outside process to make a browser fetch an
+  # extension on demand. What the browser DOES do, reliably, is check the update
+  # feed when it starts. So this asks for the one thing that actually works, the
+  # one thing the operator would have done anyway, and then WAITS and says
+  # whether it landed. No files are touched and no policy is toggled, so there
+  # is nothing here that can leave the extension broken.
+  function Invoke-ExtensionUpdate {
+    param([string]$ExtId, [string]$WantVersion, [string]$UpdateUrl)
+
+    $open = @(Get-OpenBrowsers)
+    Blank
+    Hr '-' 'DarkCyan'
+    if (@($open).Count -gt 0) {
+      Warn "NOW: close $($open -join ' and ') completely, then open it again."
+    } else {
+      Warn 'NOW: open Chrome (or Edge).'
+      Hint 'No browser window is open at the moment.'
+    }
+    Hint 'A browser fetches new versions of its managed extensions when it'
+    Hint 'starts. That start is the whole update - there is nothing to delete'
+    Hint 'and nothing to reconfigure.'
+    Hr '-' 'DarkCyan'
+    Blank
+    Info 'Watching for it to land - this window can be left alone.'
+
+    if (Wait-ForExtensionVersion -ExtId $ExtId -Version $WantVersion -TimeoutSeconds 300) {
+      Blank
+      Ok "Every profile is on v$WantVersion."
+      return $true
+    }
+
+    $now = @(Get-InstalledExtensionVersions $ExtId)
+    Blank
+    if (@($now).Count -eq 0) {
+      Warn 'The extension is not on disk in any profile.'
+      Hint 'If the browser has been started since, it cannot reach the feed:'
+      Hint "  $UpdateUrl"
+      Hint 'Try that URL in the browser itself - it should return XML naming'
+      Hint "version $WantVersion."
+    } else {
+      Warn "Still not on v${WantVersion}:"
+      foreach ($n in $now) { Hint "  $($n.Browser) / $($n.User) / $($n.Profile) : v$($n.Version)" }
+      Blank
+      Hint 'The policy is correct and nothing is broken - the browser simply has'
+      Hint 'not fetched it yet. It will, on its own, within a few hours.'
+      Hint 'To force it now: open chrome://extensions (or edge://extensions),'
+      Hint 'turn on Developer mode, and press Update.'
+      Blank
+      Hint 'If it stays on the old version after that, use [3] Repair.'
+    }
+    return $false
+  }
+
+  # For a browser whose RECORD of the extension is wrong.
+  #
+  # Restarting cannot fix that: the browser believes the extension is installed
+  # and never re-fetches it. The symptoms are an extension listed with no icon,
+  # a popup that says the file was not found, or a version that will not move no
+  # matter how often the policy is written.
+  #
+  # The only thing that clears the record is the browser's own uninstall, and
+  # the only way to ask for that from outside is to stop force-installing it and
+  # let the browser act on that. Hence two starts. This is a recovery path, not
+  # the way updates normally happen - [1] handles those with a single restart.
+  function Invoke-ExtensionRepair {
     param(
       [string]$ExtId, [string]$UpdateUrl, [string]$ApiBase,
       [string]$AgentId, [string]$WantVersion
     )
 
-    # This one needs the browser RUNNING - the opposite of the old approach.
-    # A policy change made while it is closed is simply the state it starts in,
-    # so it never sees the extension leave and never reinstalls it.
-    $running = @()
-    foreach ($b in $BROWSERS) {
-      if (Get-Process -Name $b.Process -ErrorAction SilentlyContinue) { $running += $b.Name }
-    }
-    if ($running.Count -eq 0) {
-      Blank
-      Warn 'No browser is running.'
-      Hint 'The browser has to be open for this: it applies the policy change'
-      Hint 'as it happens, which is what removes the need to restart anything.'
-      Blank
-      Read-Host '   Open Chrome (or Edge) and press Enter' | Out-Null
-      foreach ($b in $BROWSERS) {
-        if (Get-Process -Name $b.Process -ErrorAction SilentlyContinue) { $running += $b.Name }
-      }
-      if ($running.Count -eq 0) { Err 'Still no browser running - nothing to do.'; return $false }
-    }
-    Info "Working with: $($running -join ', ') - leave the window open."
+    Blank
+    Info 'Repair is for a browser that lists the extension but cannot load it -'
+    Info 'no icon, or a popup that says the file was not found. It clears the'
+    Info "browser's own record of it, which a restart alone will not do."
+    Blank
+    Warn 'It needs the browser opened and closed twice.'
+    Blank
+    $go = Read-Host '   Repair now? (y/N)'
+    if ($go -ne 'y' -and $go -ne 'Y') { Warn 'Cancelled - nothing changed.'; return }
 
-    # ── 1. take the entry away; the browser uninstalls it ─────────────────
+    # ── 1. stop force-installing it ───────────────────────────────────────
     try {
       Remove-ExtensionPolicy $ExtId
+      Ok 'Force-install policy withdrawn.'
     } catch {
       Err "Could not remove the policy: $($_.Exception.Message)"
       Hint 'This needs an ELEVATED PowerShell (Run as administrator).'
-      return $false
+      return
     }
-    Info 'Policy withdrawn - the browser is uninstalling the old build.'
 
-    if (-not (Wait-ForExtensionState -ExtId $ExtId -Until 'gone' -TimeoutSeconds 150)) {
+    Blank
+    Hr '-' 'DarkCyan'
+    Warn 'STEP 1 of 2: open the browser, wait for the window, then close it.'
+    Hint 'That start is what makes it uninstall the extension and forget it.'
+    Hr '-' 'DarkCyan'
+    Blank
+    Read-Host '   Press Enter once you have done that' | Out-Null
+
+    # ── 2. check the browser really did forget it ─────────────────────────
+    $left = @(Get-InstalledExtensionVersions $ExtId)
+    if (@($left).Count -gt 0) {
       Blank
-      Err 'The browser did not uninstall it within 150s.'
-      Hint 'It may be configured to refresh policy less often than usual.'
+      Err 'The browser has not uninstalled it.'
+      foreach ($l in $left) { Hint "  still present: $($l.Browser) / $($l.User) / $($l.Profile) : v$($l.Version)" }
       Blank
-      Warn 'Restoring the policy - the extension is unchanged and still working.'
+      Hint 'Either it was not started, or it was started as a different Windows'
+      Hint 'user than the profiles listed above.'
+      Blank
+      Warn 'Putting the policy back - the extension is unchanged.'
       try {
         foreach ($b in $BROWSERS) {
           $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
           Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId
         }
         Ok 'Policy restored.'
-        Hint 'Fully closing and reopening the browser, then running this again,'
-        Hint 'makes it pick the change up immediately.'
       } catch { Err "Could not restore the policy: $($_.Exception.Message)" }
-      return $false
+      return
     }
-    Ok 'Old build uninstalled by the browser.'
+    Ok 'The browser uninstalled it and cleared its record.'
 
-    # ── 2. put it back; the browser installs the published build ──────────
+    # ── 3. force it again ─────────────────────────────────────────────────
     try {
       foreach ($b in $BROWSERS) {
         $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
         Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId
+        Ok "$($b.Name): force-install restored + configured"
       }
     } catch {
       Err "Could not restore the policy: $($_.Exception.Message)"
       Hint 'Run [1] Deploy to put it back.'
-      return $false
+      return
     }
-    Info "Policy restored - the browser is installing v$WantVersion."
 
-    if (-not (Wait-ForExtensionState -ExtId $ExtId -Until 'installed' -Version $WantVersion -TimeoutSeconds 180)) {
-      $now = @(Get-InstalledExtensionVersions $ExtId)
+    Blank
+    Hr '-' 'DarkCyan'
+    Warn "STEP 2 of 2: open the browser again. It installs v$WantVersion fresh."
+    Hr '-' 'DarkCyan'
+    Blank
+    Info 'Watching for it to land.'
+    if (Wait-ForExtensionVersion -ExtId $ExtId -Version $WantVersion -TimeoutSeconds 300) {
       Blank
-      if (@($now).Count -eq 0) {
-        Err "The browser has not installed v$WantVersion yet."
-        Hint 'The policy IS in place, so it will arrive on its own. If it does'
-        Hint 'not, the browser cannot reach the update feed:'
-        Hint "  $UpdateUrl"
-      } else {
-        Warn 'Installed, but not all profiles are on the published version yet:'
-        foreach ($n in $now) { Hint "  $($n.Browser) / $($n.User) / $($n.Profile) : v$($n.Version)" }
-        Hint 'Still downloading, most likely. Check again in a minute.'
-      }
-      return $false
+      Ok "Repaired - every profile is on v$WantVersion."
+      Hint 'chrome://extensions should show that version, an icon, and'
+      Hint '"Installed by enterprise policy".'
+      return
     }
 
     Blank
-    Ok "Every profile is on v$WantVersion. No restart was needed."
-    Hint 'chrome://extensions should show that version, an icon, and'
-    Hint '"Installed by enterprise policy".'
-    return $true
-  }
-
-  # Same operation, offered separately because it is also the answer when the
-  # version numbers look correct and the extension is still visibly broken.
-  function Invoke-ExtensionRepair {
-    param(
-      [string]$ExtId, [string]$UpdateUrl, [string]$ApiBase,
-      [string]$AgentId, [string]$WantVersion
-    )
-    Blank
-    Info 'Repair reinstalls the extension through the browser rather than by'
-    Info 'deleting its files - the only thing that fixes a browser still holding'
-    Info 'a record of an extension that is no longer really there.'
-    Blank
-    Info 'Leave the browser open. It takes about half a minute and needs no restart.'
-    Blank
-    $go = Read-Host '   Repair now? (Y/n)'
-    if ($go -eq 'n' -or $go -eq 'N') { Warn 'Cancelled - nothing changed.'; return }
-    $null = Invoke-ExtensionReinstall -ExtId $ExtId -UpdateUrl $UpdateUrl -ApiBase $ApiBase -AgentId $AgentId -WantVersion $WantVersion
+    Warn "It has not appeared as v$WantVersion yet."
+    Hint 'The policy IS in place, so it will arrive once the browser fetches it.'
+    Hint 'If it does not, the browser cannot reach the update feed:'
+    Hint "  $UpdateUrl"
   }
 
   # Asked on EVERY deploy, whatever the current state.
@@ -1625,14 +1671,12 @@ objShell.Run """$exePath""", 0, False
                 Warn "$(@($stale).Count) profile(s) are on an older build:"
                 foreach ($sv in $stale) { Hint "  $($sv.Browser) / $($sv.User) / $($sv.Profile) : v$($sv.Version)" }
                 Blank
-                Hint "The browser will pick up v$($info.version) on its own within a few hours."
-                Hint 'To have it now takes about half a minute, with the browser left open.'
                 Blank
-                $doNow = Read-Host '   Update it now? (Y/n)'
+                $doNow = Read-Host '   Bring it up to date now? (Y/n)'
                 if ($doNow -ne 'n' -and $doNow -ne 'N') {
-                  $null = Invoke-ExtensionReinstall -ExtId $extId -UpdateUrl $updateUrl -ApiBase $apiBase -AgentId $agentId -WantVersion $info.version
+                  $null = Invoke-ExtensionUpdate -ExtId $extId -WantVersion $info.version -UpdateUrl $updateUrl
                 } else {
-                  Info "Left as it is - it will update itself, or use [3] Repair later."
+                  Info 'Left as it is - the browser will update it on its own within a few hours.'
                 }
               }
             }

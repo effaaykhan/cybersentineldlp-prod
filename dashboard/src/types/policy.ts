@@ -119,6 +119,12 @@ export interface MessagingAppControlConfig {
     users?: string[]        // users / groups exempt
     file_types?: string[]   // extensions never inspected (no leading dot)
   }
+  // Also inspect TYPED chat messages, not just attachments. The agent holds the
+  // send keystroke, reads the composer and classifies it before releasing.
+  // Off unless explicitly turned on: attachment control watches a file dialog,
+  // this sits in front of the keyboard, and that is a separate decision.
+  // Only takes effect together with action: 'block'.
+  inspect_messages?: boolean
 }
 
 export interface WirelessTransferControlConfig {

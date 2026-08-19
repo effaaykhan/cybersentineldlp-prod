@@ -102,6 +102,11 @@ EVENT_TYPE_DOMAIN = {
     # _attempt / _prevented all carry event_type "email").
     "email": PolicyDomain.DATA_PROTECTION,
     "cloud_upload": PolicyDomain.DATA_PROTECTION,
+    # Desktop messaging apps (Teams/WhatsApp/Telegram/…): "messaging" is the
+    # typed-message channel, sent by messaging_text_monitor. Attachment
+    # detections still arrive as network_exfil above, because they come from
+    # the exfil monitor's file-dialog path.
+    "messaging": PolicyDomain.DATA_PROTECTION,
     # Browser-observed web activity. One event_type per app category (see
     # core/web_activity.CATEGORY_EVENT_TYPE) so per-type reporting keeps
     # working; "web_activity" is the umbrella when the category is unknown.

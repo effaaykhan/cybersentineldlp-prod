@@ -13,7 +13,9 @@
 //   3. Browser file-selection detection (DETECTION + ALERT ONLY, never blocks)
 //   3b. Messaging / thick-client attachment detection — Teams/WhatsApp/Telegram/
 //       Slack/Discord/Signal (ALERT by default, BLOCK when policy opts in). Same
-//       UIA file-picker path as (3); drag-and-drop not covered (needs minifilter)
+//       UIA file-picker path as (3); drag-and-drop not covered (needs minifilter).
+//       TYPED messages in those same apps are handled by messaging_text_monitor,
+//       which shares this module's policy callback and classifier.
 //   4. Bluetooth: INTENTIONALLY DEFERRED
 //
 // Blocking mechanism: WMI process-creation events -> NtSuspendProcess ->
@@ -65,6 +67,11 @@ struct MessagingVerdict {
     bool managed = false;                       // is exeLower a managed messaging app?
     bool block   = false;                       // sensitive attach: true = block, false = alert
     std::vector<std::string> exemptExtensions;  // lowercased, no leading dot
+    // Typed chat text, not attachments (see messaging_text_monitor.h). Separate
+    // from `managed` because an operator may well want attachment control on a
+    // fleet without the agent holding keystrokes in it — that is a bigger step,
+    // and it should be one they take on purpose rather than inherit.
+    bool inspectMessages = false;
 };
 using MessagingPolicyFn = std::function<MessagingVerdict(const std::string& exeLower,
                                                          const std::string& userName)>;

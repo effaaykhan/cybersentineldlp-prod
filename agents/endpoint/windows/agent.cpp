@@ -43,6 +43,7 @@
  #include "screen_capture_monitor.h"
  #include "print_monitor.h"
  #include "network_exfil_monitor.h"
+#include "messaging_text_monitor.h"
  #include <regex>
  #include <iomanip>
  #include <filesystem>
@@ -2115,6 +2116,10 @@ static ClassificationResult Classify(const std::string& content,
     // to "alert" so enabling a policy never kills an app until an admin opts in.
     std::atomic<bool> messagingEnforced{false};
     std::string messagingAction;                        // "alert" | "block"
+    // Typed chat text (messaging_text_monitor). Server-driven and OFF unless the
+    // policy says otherwise, because holding keystrokes in a chat app is a
+    // bigger commitment than inspecting an attachment and must be chosen.
+    bool messagingInspectMessages = false;
     std::set<std::string> messagingApps;                // managed messaging exe names
     std::set<std::string> messagingExceptUsers;         // users exempt
     std::vector<std::string> messagingExemptTypes;      // extensions, no leading dot
@@ -2788,8 +2793,10 @@ if (!shouldBlock) {
                          "whatsapp.exe", "telegram.exe", "slack.exe",
                          "discord.exe", "signal.exe"};
              }
+             bool inspectMessages = JsonBoolTrue(response, "inspect_messages");
              {
                  std::lock_guard<std::mutex> lock(messagingMutex);
+                 messagingInspectMessages = inspectMessages;
                  messagingAction      = action;
                  messagingApps        = std::set<std::string>(apps.begin(), apps.end());
                  messagingExceptUsers = std::set<std::string>(exUsers.begin(), exUsers.end());
@@ -2798,7 +2805,8 @@ if (!shouldBlock) {
              messagingEnforced.store(enforced);
              logger.Info("Messaging app control: enforced=" +
                          std::string(enforced ? "true" : "false") +
-                         " action=" + action + " apps=" + std::to_string(apps.size()));
+                         " action=" + action + " apps=" + std::to_string(apps.size()) +
+                         " typed_messages=" + std::string(inspectMessages ? "inspected" : "off"));
          } catch (...) {
              logger.Error("FetchMessagingAppPolicy failed");
          }
@@ -2819,6 +2827,7 @@ if (!shouldBlock) {
              v.managed          = true;
              v.block            = (messagingAction == "block");
              v.exemptExtensions = messagingExemptTypes;
+             v.inspectMessages  = messagingInspectMessages;
          }
          return v;
      }
@@ -4890,6 +4899,32 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  logger.Info("Network Exfiltration Monitor started");
              } else {
                  logger.Warning("Network Exfiltration Monitor did not start");
+             }
+
+             // Typed-message control for those same managed messaging apps.
+             // The attachment path above only ever sees the file picker, so a
+             // sensitive number TYPED into the chat box went out with nothing
+             // logged. This closes that path; it shares the policy callback and
+             // the classifier, so there is one definition of "managed app" and
+             // one of "sensitive" across both.
+             //
+             // Starting it is unconditional and harmless: it holds a keystroke
+             // only when the server says this app is managed AND typed-message
+             // inspection is on AND the action is block, so a fleet that has not
+             // opted in never notices it is running.
+             MessagingTextMonitor::Config mtCfg;
+             mtCfg.agentId         = config.agentId;
+             mtCfg.agentName       = config.agentName;
+             mtCfg.username        = GetUsername();
+             mtCfg.hostname        = GetHostname();
+             mtCfg.classify        = nemCfg.classify;
+             mtCfg.sendEvent       = nemCfg.sendEvent;
+             mtCfg.log             = nemCfg.log;
+             mtCfg.messagingPolicy = nemCfg.messagingPolicy;
+             if (MessagingTextMonitor::Start(mtCfg)) {
+                 logger.Info("Messaging typed-message monitor started");
+             } else {
+                 logger.Warning("Messaging typed-message monitor did not start");
              }
          }
 

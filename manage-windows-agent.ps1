@@ -1960,9 +1960,29 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
     if ($shadow) {
       Blank
-      Err '   A COPY OF THIS POLICY EXISTS UNDER WOW6432Node.'
-      Hint '   Something wrote it from a 32-bit process. The browser ignores that'
-      Hint '   copy entirely - it is the reason changes appear to work and do not.'
+      Warn '   A COPY OF THIS POLICY EXISTS UNDER WOW6432Node.'
+      Hint '   Written by a 32-bit process at some point. The browser ignores that'
+      Hint '   view entirely, so it is not what is stopping an update - but it is a'
+      Hint '   second, stale copy of a security policy, and leaving it there means'
+      Hint '   the next person to read the registry finds two answers.'
+      Blank
+      $drop = Read-Host '   Delete the WOW6432Node copy? (y/N)'
+      if ($drop -eq 'y' -or $drop -eq 'Y') {
+        foreach ($b in $BROWSERS) {
+          $sub = $b.Root -replace '^HKLM:\\', ''
+          try {
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, 'Registry32')
+            $k = $base.OpenSubKey("$sub\\ExtensionInstallForcelist", $true)
+            if ($k) {
+              foreach ($n in @($k.GetValueNames())) {
+                if ("$($k.GetValue($n))" -like "$ExtId;*") { $k.DeleteValue($n, $false) }
+              }
+              $k.Close()
+              Ok "  $($b.Name): removed the redirected copy"
+            }
+          } catch { Warn "  $($b.Name): could not clean it - $($_.Exception.Message)" }
+        }
+      }
     }
 
     # 4. What is actually installed.
@@ -1979,8 +1999,39 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Field '  url' $UpdateUrl
     try {
       $r = Invoke-WebRequest -Uri $UpdateUrl -UseBasicParsing -TimeoutSec 10
-      $m = [regex]::Match($r.Content, "version='([^']+)'")
-      if ($m.Success) { Ok "  reachable - advertises v$($m.Groups[1].Value)" }
+      # Match the <updatecheck> version, NOT the first version= in the document.
+      # The XML declaration is <?xml version='1.0'?>, so a loose match reports
+      # "advertises v1.0" on a perfectly good feed - which is exactly what the
+      # first run of this diagnostic did, on the one line that mattered most.
+      $m = [regex]::Match($r.Content, "<updatecheck[^>]*\sversion=['""]([^'""]+)['""]")
+      if (-not $m.Success) {
+        $m = [regex]::Match($r.Content, "codebase=['""][^'""]+['""]\s+version=['""]([^'""]+)['""]")
+      }
+      if ($m.Success) {
+        $feedVer = $m.Groups[1].Value
+        if ($feedVer -eq $WantVersion) { Ok "  reachable - advertises v$feedVer" }
+        else { Warn "  reachable, but advertises v$feedVer while the server publishes v$WantVersion" }
+
+        # The manifest is only half of it. The browser then downloads the CRX
+        # from `codebase`, and THAT is the fetch that actually delivers the new
+        # build - a reachable manifest with an unreachable package looks exactly
+        # like "nothing is happening".
+        $cb = [regex]::Match($r.Content, "codebase=['""]([^'""]+)['""]")
+        if ($cb.Success) {
+          $crxUrl = $cb.Groups[1].Value
+          Field '  package url' $crxUrl
+          try {
+            $h = Invoke-WebRequest -Uri $crxUrl -UseBasicParsing -TimeoutSec 30 -Method Head
+            $len = $h.Headers['Content-Length']
+            $ctype = $h.Headers['Content-Type']
+            Ok "  package reachable - $([math]::Round(([int64]$len)/1MB,1)) MB, $ctype"
+          } catch {
+            Err "  PACKAGE NOT reachable: $($_.Exception.Message)"
+            Hint '  The manifest resolves but the .crx does not. The browser can see'
+            Hint '  that an update exists and cannot download it, which is silent.'
+          }
+        }
+      }
       else { Warn '  reachable, but the response is not an update manifest' }
     } catch {
       Err "  NOT reachable from this machine: $($_.Exception.Message)"

@@ -1985,7 +1985,28 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       }
     }
 
-    # 4. What is actually installed.
+    # 4. Is the browser actually running, and does it have windows?
+    #
+    # These are different questions and the difference is the whole problem.
+    # Edge keeps background processes alive after the last window closes
+    # (startup boost / "continue running background apps"), so "I closed it"
+    # routinely means the process never exited - and a browser that never
+    # exits never re-reads policy or re-runs a force-install.
+    Blank
+    Write-Host '   Browser processes' -ForegroundColor White
+    foreach ($b in $BROWSERS) {
+      $all = @(Get-Process -Name $b.Process -ErrorAction SilentlyContinue)
+      $win = @($all | Where-Object { $_.MainWindowHandle -ne 0 })
+      if (@($all).Count -eq 0) { Field "  $($b.Name)" 'not running' }
+      elseif (@($win).Count -eq 0) {
+        Field "  $($b.Name)" "$(@($all).Count) background process(es), NO window"
+        Hint "    Closed but still resident - it has not restarted, so policy is stale."
+        Hint "    Fully exit it:  taskkill /IM $($b.Exe) /F"
+      }
+      else { Field "  $($b.Name)" "running, $(@($win).Count) window(s)" }
+    }
+
+    # 5. What is actually installed.
     Blank
     Write-Host '   Installed on disk' -ForegroundColor White
     $inst = @(Get-InstalledExtensionVersions $ExtId)
@@ -2020,15 +2041,36 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
         if ($cb.Success) {
           $crxUrl = $cb.Groups[1].Value
           Field '  package url' $crxUrl
+          # HEAD first because it is cheap, then fall back to a ranged GET.
+          # An older server serves this route as GET-only and answers HEAD with
+          # 405 - which this reported as "PACKAGE NOT reachable" on a server the
+          # browser was downloading from perfectly well. Test the verb the
+          # BROWSER uses before calling it unreachable.
+          $pkgOk = $false
           try {
             $h = Invoke-WebRequest -Uri $crxUrl -UseBasicParsing -TimeoutSec 30 -Method Head
             $len = $h.Headers['Content-Length']
-            $ctype = $h.Headers['Content-Type']
-            Ok "  package reachable - $([math]::Round(([int64]$len)/1MB,1)) MB, $ctype"
+            Ok "  package reachable - $([math]::Round(([int64]$len)/1MB,1)) MB, $($h.Headers['Content-Type'])"
+            $pkgOk = $true
           } catch {
-            Err "  PACKAGE NOT reachable: $($_.Exception.Message)"
-            Hint '  The manifest resolves but the .crx does not. The browser can see'
-            Hint '  that an update exists and cannot download it, which is silent.'
+            $code = $null
+            if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+            if ($code -eq 405) { Info '  (server does not answer HEAD - retrying the way the browser fetches it)' }
+            else { Warn "  HEAD failed ($($_.Exception.Message)) - retrying as GET" }
+            try {
+              $g = Invoke-WebRequest -Uri $crxUrl -UseBasicParsing -TimeoutSec 60 `
+                                     -Headers @{ Range = 'bytes=0-2047' }
+              $magic = ''
+              if ($g.Content -and $g.Content.Length -ge 4) {
+                $magic = -join ([char[]]$g.Content[0..3])
+              }
+              if ($magic -eq 'Cr24') { Ok '  package reachable and is a valid CRX' ; $pkgOk = $true }
+              else { Ok '  package reachable' ; $pkgOk = $true }
+            } catch {
+              Err "  PACKAGE NOT reachable: $($_.Exception.Message)"
+              Hint '  The manifest resolves but the .crx does not. The browser can see'
+              Hint '  that an update exists and cannot download it, which is silent.'
+            }
           }
         }
       }

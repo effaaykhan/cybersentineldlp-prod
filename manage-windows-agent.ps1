@@ -1200,6 +1200,49 @@
     return $slot
   }
 
+  # THE LEVER THAT ACTUALLY FORCES AN UPDATE.
+  #
+  # ExtensionInstallForcelist only says "this extension must be PRESENT". Once it
+  # is present the browser has exactly what it was asked for, and picks up new
+  # versions on its own multi-hour schedule. That is why every attempt to make it
+  # update now has failed - restarting, and withdrawing/restoring the entry, were
+  # both trying to provoke a decision the browser had no reason to revisit.
+  #
+  # ExtensionSettings carries minimum_version_required. Telling the browser the
+  # installed copy is TOO OLD is a statement it has to act on: it disables the
+  # extension and updates it from update_url. Documented and supported rather
+  # than a trick, it needs no restart, and - unlike withdrawing the forcelist
+  # entry - it never leaves the endpoint without the extension even briefly.
+  #
+  # Stored as one JSON string under the browser's policy root. The policy is a
+  # dictionary keyed by extension id, so any entry for a DIFFERENT extension is
+  # read back and preserved; overwriting the value wholesale would silently drop
+  # rules this script did not write.
+  function Set-ExtensionSettingsPolicy {
+    param([string]$Root, [string]$ExtId, [string]$UpdateUrl, [string]$MinVersion)
+
+    $merged = @{}
+    try {
+      $raw = (Get-ItemProperty -Path $Root -Name 'ExtensionSettings' -ErrorAction SilentlyContinue).ExtensionSettings
+      if ($raw) {
+        foreach ($prop in ($raw | ConvertFrom-Json).PSObject.Properties) { $merged[$prop.Name] = $prop.Value }
+      }
+    } catch { $merged = @{} }
+
+    $entry = @{
+      installation_mode = 'force_installed'
+      update_url        = $UpdateUrl
+    }
+    if ($MinVersion) { $entry['minimum_version_required'] = $MinVersion }
+    $merged[$ExtId] = $entry
+
+    if (-not (Test-Path $Root)) { New-Item -Path $Root -Force | Out-Null }
+    # -Depth matters: the default of 2 would flatten our nested entry to the
+    # string "System.Collections.Hashtable" and the policy would be ignored.
+    Set-ItemProperty -Path $Root -Name 'ExtensionSettings' `
+                     -Value ($merged | ConvertTo-Json -Depth 10 -Compress) -Type String
+  }
+
   # Only what an ADMINISTRATOR owns. Enforcement mode and the uninspectable rule
   # are properties of the Web Activity Control policy on the server, not of a
   # per-browser setting — pushing them here would give an endpoint a way to
@@ -1427,13 +1470,18 @@
   }
 
   # Wait for the published version to land, reporting as it goes.
+  # ``Browsers`` limits the check to the browsers we actually acted on. Without
+  # it, one closed browser holding an old copy makes the wait unsatisfiable:
+  # it can never update while it is not running, so waiting for EVERY profile
+  # means waiting for something that cannot happen, then reporting failure.
   function Wait-ForExtensionVersion {
-    param([string]$ExtId, [string]$Version, [int]$TimeoutSeconds = 300)
+    param([string]$ExtId, [string]$Version, [int]$TimeoutSeconds = 300, [string[]]$Browsers)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $spin = @('|', '/', '-', '\')
     $i = 0
     while ((Get-Date) -lt $deadline) {
       $found = @(Get-InstalledExtensionVersions $ExtId)
+      if ($Browsers) { $found = @($found | Where-Object { $Browsers -contains $_.Browser }) }
       if (@($found).Count -gt 0) {
         $stale = @($found | Where-Object { $_.Version -ne $Version })
         if (@($stale).Count -eq 0) { Write-Host ("`r" + (' ' * 60) + "`r") -NoNewline; return $true }
@@ -1500,86 +1548,32 @@
       return $true
     }
 
-    # --- Browser is running: round-trip the forcelist entry -----------------
+    # --- Tell the browser the installed copy is too old ---------------------
+    # No withdrawing, no restoring, no window where the endpoint is unprotected.
+    # minimum_version_required is an instruction the browser must act on, and it
+    # applies live.
     Blank
-    Info "Updating $($open -join ' and ') in place - no restart needed."
-
-    $touched = @()
+    Info "Requiring v$WantVersion on $($open -join ' and ') - no restart needed."
     try {
       foreach ($b in $BROWSERS) {
-        if ($open -notcontains $b.Name) { continue }
-        $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
-        if (-not (Test-Path $fl)) { continue }
-        $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
-        foreach ($pr in $props.PSObject.Properties) {
-          if ($pr.Name -like 'PS*') { continue }
-          if ($pr.Value -like "$ExtId;*") {
-            $touched += [PSCustomObject]@{ Root = $b.Root; Name = $b.Name; Slot = $pr.Name; Value = $pr.Value }
-            Remove-ItemProperty -Path $fl -Name $pr.Name -ErrorAction SilentlyContinue
-          }
-        }
+        Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl -MinVersion $WantVersion
+        Info "$($b.Name): minimum version set to $WantVersion"
       }
-
-      if (@($touched).Count -eq 0) {
-        Warn 'No forcelist entry found to refresh - run [1] Deploy first.'
-        return $false
-      }
-
-      foreach ($t in $touched) { Info "$($t.Name): entry withdrawn" }
-
-      # WAIT FOR THE BROWSER TO ACT, DO NOT GUESS HOW LONG IT TAKES.
-      #
-      # The first version of this slept a flat 8 seconds and restored the entry.
-      # That failed silently and looked absurd from the outside - "entry
-      # withdrawn / entry restored / still on the old version" - because both
-      # browsers DEBOUNCE policy reloads. A change that is put back inside that
-      # settle window is never observed at all: the browser reloads once,
-      # afterwards, sees the entry present, and concludes nothing changed. The
-      # withdrawal has to outlive the debounce to exist as far as the browser
-      # is concerned.
-      #
-      # So watch for the effect instead of timing the cause. The extension
-      # leaving disk is proof the browser saw the withdrawal, and the moment we
-      # see it we can put the entry straight back - usually well inside the cap.
-      #
-      # If it has not gone by the cap we restore anyway rather than waiting
-      # longer: 45 seconds is already far past any debounce, so the withdrawal
-      # was observable whether or not the profile directory has been cleaned up
-      # yet (browsers defer that). Treating "not observed" as failure here would
-      # extend an unprotected window to no purpose and then report the wrong
-      # thing.
-      $goneBy = (Get-Date).AddSeconds(45)
-      $gone   = $false
-      $spin2  = @('|', '/', '-', '\')
-      $k = 0
-      while (-not $gone -and (Get-Date) -lt $goneBy) {
-        Start-Sleep -Milliseconds 900
-        if (@(Get-InstalledExtensionVersions $ExtId).Count -eq 0) { $gone = $true; break }
-        $rem = [int]($goneBy - (Get-Date)).TotalSeconds
-        Write-Host ("`r   {0} waiting for the browser to release the old build  ({1}s)   " -f $spin2[$k % 4], $rem) -NoNewline
-        $k++
-      }
-      Write-Host ("`r" + (' ' * 66) + "`r") -NoNewline
-      if ($gone) { Ok 'Old build released.' }
-      else       { Info 'Old build still on disk - restoring anyway, the withdrawal was long enough to register.' }
-    }
-    finally {
-      # Unconditional restore. If anything above threw - or the operator hit
-      # Ctrl-C mid-way - the endpoint must not be left without the extension.
-      foreach ($t in $touched) {
-        $fl = Join-Path $t.Root 'ExtensionInstallForcelist'
-        if (-not (Test-Path $fl)) { New-Item -Path $fl -Force | Out-Null }
-        Set-ItemProperty -Path $fl -Name $t.Slot -Value $t.Value -Type String
-      }
+    } catch {
+      Err "Could not write the ExtensionSettings policy: $($_.Exception.Message)"
+      return $false
     }
 
-    foreach ($t in $touched) { Info "$($t.Name): entry restored (browser is installing v$WantVersion)" }
     Blank
     Info 'Watching for it to land - this window can be left alone.'
 
-    if (Wait-ForExtensionVersion -ExtId $ExtId -Version $WantVersion -TimeoutSeconds 180) {
+    if (Wait-ForExtensionVersion -ExtId $ExtId -Version $WantVersion -TimeoutSeconds 180 -Browsers $open) {
       Blank
-      Ok "Every profile is on v$WantVersion."
+      Ok "$($open -join ' and ') on v$WantVersion."
+      $shut = @($BROWSERS.Name | Where-Object { $open -notcontains $_ })
+      if (@($shut).Count -gt 0) {
+        Hint "$($shut -join ' and ') not running - will install v$WantVersion on next start."
+      }
       return $true
     }
 
@@ -1592,8 +1586,18 @@
       Hint 'Try that URL in the browser itself - it should return XML naming'
       Hint "version $WantVersion."
     } else {
+      $stuck = @($now | Where-Object { $open -contains $_.Browser -and $_.Version -ne $WantVersion })
+      $later = @($now | Where-Object { $open -notcontains $_.Browser -and $_.Version -ne $WantVersion })
+      if (@($later).Count -gt 0) {
+        foreach ($n in $later) { Hint "  $($n.Browser) / $($n.User) / $($n.Profile) : v$($n.Version) - not running, installs on next start" }
+      }
+      if (@($stuck).Count -eq 0) {
+        Blank
+        Ok 'Nothing is stuck - every running browser is up to date.'
+        return $true
+      }
       Warn "Still not on v${WantVersion}:"
-      foreach ($n in $now) { Hint "  $($n.Browser) / $($n.User) / $($n.Profile) : v$($n.Version)" }
+      foreach ($n in $stuck) { Hint "  $($n.Browser) / $($n.User) / $($n.Profile) : v$($n.Version)" }
       Blank
       Hint 'The policy is correct and nothing is broken. The browser accepted the'
       Hint 'entry but has not finished installing yet.'
@@ -1670,6 +1674,7 @@
       try {
         foreach ($b in $BROWSERS) {
           $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
+          Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl -MinVersion $WantVersion
           Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId
         }
         Ok 'Policy restored.'
@@ -1682,8 +1687,9 @@
     try {
       foreach ($b in $BROWSERS) {
         $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
+        Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl -MinVersion $WantVersion
         Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId
-        Ok "$($b.Name): force-install restored + configured"
+        Ok "$($b.Name): force-install restored (minimum v$WantVersion) + configured"
       }
     } catch {
       Err "Could not restore the policy: $($_.Exception.Message)"
@@ -1786,6 +1792,28 @@
           }
         }
       }
+      # ExtensionSettings must go too. It carries installation_mode
+      # force_installed independently of the forcelist, so dropping only the
+      # forcelist entry would leave the extension pinned and un-removable -
+      # Remove would report success and change nothing. Only OUR key is
+      # deleted; entries for other extensions are written back.
+      try {
+        $raw = (Get-ItemProperty -Path $b.Root -Name 'ExtensionSettings' -ErrorAction SilentlyContinue).ExtensionSettings
+        if ($raw) {
+          $keep = @{}
+          foreach ($prop in ($raw | ConvertFrom-Json).PSObject.Properties) {
+            if ($prop.Name -ne $ExtId) { $keep[$prop.Name] = $prop.Value }
+          }
+          if ($keep.Count -gt 0) {
+            Set-ItemProperty -Path $b.Root -Name 'ExtensionSettings' `
+                             -Value ($keep | ConvertTo-Json -Depth 10 -Compress) -Type String
+          } else {
+            Remove-ItemProperty -Path $b.Root -Name 'ExtensionSettings' -ErrorAction SilentlyContinue
+          }
+          Info "$($b.Name): removed ExtensionSettings entry"
+        }
+      } catch { Warn "$($b.Name): could not clean ExtensionSettings - $($_.Exception.Message)" }
+
       $mp = Join-Path $b.Root "3rdparty\extensions\$ExtId"
       if (Test-Path $mp) {
         Remove-Item $mp -Recurse -Force -ErrorAction SilentlyContinue
@@ -1925,8 +1953,13 @@
           try {
             foreach ($b in $BROWSERS) {
               $slot = Set-ForcelistEntry -Root $b.Root -ExtId $extId -UpdateUrl $updateUrl
+              # Also state the minimum version. The forcelist alone only asks for
+              # the extension to exist, which an out-of-date copy already
+              # satisfies - this is what makes a deploy converge on the published
+              # build instead of leaving whatever is already installed.
+              Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $extId -UpdateUrl $updateUrl -MinVersion $info.version
               Set-ManagedConfig -Root $b.Root -ExtId $extId -ServerUrl $apiBase -AgentId $agentId
-              Ok "$($b.Name): force-installed (slot $slot) + configured"
+              Ok "$($b.Name): force-installed (slot $slot), minimum v$($info.version) + configured"
             }
             Blank
             Ok 'Policy written.'

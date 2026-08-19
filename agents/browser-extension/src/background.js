@@ -51,6 +51,11 @@ const DEFAULT_SERVER_URL = "http://192.168.2.204:3023/api/v1";
 const NATIVE_HOST = "com.cybersentineldlp.dlp";
 const HEARTBEAT_ALARM = "cybersentinel-heartbeat";
 const SYNC_ALARM = "cybersentinel-sync";
+// Hourly self-update check. Declared with the other alarm names because
+// ensureAlarms() references it — a const declared further down is in the
+// temporal dead zone there, and only avoided a ReferenceError by the accident
+// of boot() awaiting something first.
+const UPDATE_CHECK_ALARM = "csdlp-update-check";
 // Server treats an agent as disconnected after 120s without contact, so beat
 // well inside that window to tolerate a missed beat.
 const HEARTBEAT_PERIOD_MINUTES = 1;
@@ -161,7 +166,7 @@ async function getManagedConfig() {
   try {
     if (!chrome.storage.managed) return {};
     return (await chrome.storage.managed.get([
-      "serverUrl", "agentId", "diagnosticMode"
+      "serverUrl", "agentId", "diagnosticMode", "wantVersion"
     ])) || {};
   } catch (e) {
     // No policy configured is the overwhelmingly common case on an unmanaged
@@ -1241,6 +1246,14 @@ async function ensureAlarms() {
       delayInMinutes: 0.1, periodInMinutes: HEARTBEAT_PERIOD_MINUTES
     });
   }
+  if (!(await chrome.alarms.get(UPDATE_CHECK_ALARM))) {
+    // Hourly. The browser's own feed check is on a multi-hour timer, which is
+    // how an endpoint sat two versions behind; this converges without anyone
+    // running a script or clicking anything.
+    await chrome.alarms.create(UPDATE_CHECK_ALARM, {
+      delayInMinutes: 2, periodInMinutes: 60
+    });
+  }
   if (!(await chrome.alarms.get(SYNC_ALARM))) {
     await chrome.alarms.create(SYNC_ALARM, {
       delayInMinutes: 0.2, periodInMinutes: SYNC_PERIOD_MINUTES
@@ -1251,6 +1264,7 @@ async function ensureAlarms() {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEARTBEAT_ALARM) sendHeartbeat();
   if (alarm.name === SYNC_ALARM) { syncAll(); closeIdleOffscreen(); }
+  if (alarm.name === UPDATE_CHECK_ALARM) checkForUpdate("hourly");
 });
 
 /** Write the defaults into storage if the user has never set any. */
@@ -1289,11 +1303,84 @@ async function boot() {
   syncAll().catch(() => {});      // refresh in the background
 }
 
+/* ── Self-update ───────────────────────────────────────────────────────────
+ *
+ * Force-installing an extension turns out NOT to keep it current, and the
+ * distinction cost several rounds of debugging to find. ExtensionInstallForcelist
+ * says only "this extension must be PRESENT" — an out-of-date copy satisfies it
+ * completely — and the browser re-checks its update feed on a multi-hour timer
+ * of its own. Endpoints sat on 2.5.0 for days with 2.7.0 published, the feed
+ * reachable, and every server-side check correct.
+ *
+ * requestUpdateCheck() is the browser's own supported "check my update URL now".
+ * Nothing outside the browser can call it, which is precisely why the update had
+ * to come from in here.
+ *
+ * onUpdateAvailable matters just as much and is easy to miss: when an update IS
+ * downloaded, the browser will not swap it in underneath a running extension. It
+ * waits for the extension to be idle, which for a service worker that keeps
+ * being woken can be a very long time. reload() applies it deliberately.
+ */
+async function checkForUpdate(reason) {
+  try {
+    // MV3 returns a promise; older builds take a callback. Support both so this
+    // works on whatever the endpoint happens to be running.
+    const result = await new Promise((resolve) => {
+      try {
+        const maybe = chrome.runtime.requestUpdateCheck((status, details) =>
+          resolve({ status, version: details && details.version })
+        );
+        if (maybe && typeof maybe.then === "function") {
+          maybe.then((r) => resolve(r)).catch(() => resolve({ status: "error" }));
+        }
+      } catch (e) {
+        resolve({ status: "error", error: String(e) });
+      }
+    });
+
+    const status = result && result.status;
+    log(`update check (${reason}): ${status}${result && result.version ? " -> v" + result.version : ""}`);
+
+    if (status === "update_available") {
+      // Applies the downloaded update. The worker is torn down and restarted on
+      // the new version, so nothing after this line runs.
+      chrome.runtime.reload();
+    }
+    return result || { status: "error" };
+  } catch (e) {
+    warn("update check failed:", e);
+    return { status: "error", error: String(e) };
+  }
+}
+
+// The installer writes the published version into managed policy as
+// `wantVersion`. Policy reaches a running extension immediately, so changing it
+// is how something OUTSIDE the browser asks for an update check — the closest
+// thing there is to pressing the button remotely. Any managed change triggers
+// one; the value only has to differ from last time for this to fire.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "managed") return;
+  if (!Object.prototype.hasOwnProperty.call(changes, "wantVersion")) return;
+  const want = changes.wantVersion && changes.wantVersion.newValue;
+  if (want && want === chrome.runtime.getManifest().version) return;  // already there
+  log(`policy asks for v${want} — checking for an update`);
+  checkForUpdate("policy");
+});
+
+// The browser has an update ready but is holding it back because we are alive.
+chrome.runtime.onUpdateAvailable.addListener((details) => {
+  log(`update to v${details && details.version} is ready — applying it now`);
+  chrome.runtime.reload();
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   seedDefaults().then(() => { boot(); registerAgent(); });
 });
 chrome.runtime.onStartup.addListener(() => {
   seedDefaults().then(() => { boot(); registerAgent(); });
+  // A browser start is the one moment an operator expects to have picked up a
+  // new build. It did not, before this.
+  checkForUpdate("browser start");
 });
 // Also on a bare worker wake, which MV3 does constantly and which fires neither
 // of the events above.
@@ -1314,6 +1401,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.target === OFFSCREEN_TARGET) return false;
 
   switch (message.type) {
+    case "CSDLP_UPDATE_NOW":
+      checkForUpdate("requested from options").then(sendResponse);
+      return true;
+
     case "CSDLP_RESOLVE":
       loadCaches()
         .then(() => {

@@ -33,6 +33,11 @@
       "title": "Log recovered attachment text to this endpoint's browser console",
       "description": "Diagnostic aid for working out why OCR missed a document on one machine. The text stays on that machine and is never sent anywhere. Leave off.",
       "type": "boolean"
+    },
+    "wantVersion": {
+      "title": "Published extension version this endpoint should be on",
+      "description": "Written by manage-windows-agent.ps1 from the server's published build. Policy reaches a running extension immediately, so CHANGING this value is how the installer asks the extension to check its update feed now \u2014 the closest thing to pressing Update from outside the browser. The extension compares it with its own version and does nothing when they already match.",
+      "type": "string"
     }
   }
 }

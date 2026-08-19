@@ -1247,13 +1247,31 @@
   # are properties of the Web Activity Control policy on the server, not of a
   # per-browser setting — pushing them here would give an endpoint a way to
   # disagree with the policy that is supposed to govern it.
+  # Writes ONLY wantVersion. Deliberately separate from Set-ManagedConfig: the
+  # update path does not know the server URL or the agent id, and calling the
+  # full writer there would have blanked both - silently detaching the extension
+  # from its server while appearing to do nothing but nudge a version.
+  function Set-ManagedWantVersion {
+    param([string]$Root, [string]$ExtId, [string]$WantVersion)
+    if (-not $WantVersion) { return }
+    $mp = Join-Path $Root "3rdparty\extensions\$ExtId\policy"
+    if (-not (Test-Path $mp)) { New-Item -Path $mp -Force | Out-Null }
+    Set-ItemProperty -Path $mp -Name 'wantVersion' -Value $WantVersion -Type String
+  }
+
   function Set-ManagedConfig {
-    param([string]$Root, [string]$ExtId, [string]$ServerUrl, [string]$AgentId)
+    param([string]$Root, [string]$ExtId, [string]$ServerUrl, [string]$AgentId, [string]$WantVersion)
     $mp = Join-Path $Root "3rdparty\extensions\$ExtId\policy"
     if (-not (Test-Path $mp)) { New-Item -Path $mp -Force | Out-Null }
     Set-ItemProperty -Path $mp -Name 'serverUrl' -Value $ServerUrl -Type String
     if ($AgentId) { Set-ItemProperty -Path $mp -Name 'agentId' -Value $AgentId -Type String }
     else { Remove-ItemProperty -Path $mp -Name 'agentId' -ErrorAction SilentlyContinue }
+    # Nothing outside the browser can press "check for updates". Managed policy,
+    # though, reaches a RUNNING extension immediately - so writing the published
+    # version here and letting the extension notice it change is the remote
+    # equivalent of pressing the button. The extension ignores it when it
+    # already matches its own version.
+    if ($WantVersion) { Set-ItemProperty -Path $mp -Name 'wantVersion' -Value $WantVersion -Type String }
   }
 
   # InPrivate / Incognito coverage.
@@ -1557,7 +1575,12 @@
     try {
       foreach ($b in $BROWSERS) {
         Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl -MinVersion $WantVersion
-        Info "$($b.Name): minimum version set to $WantVersion"
+        # Second, independent lever: a running extension sees this change at once
+        # and asks the browser to check its feed. Belt and braces, because the
+        # two fail differently - the policy above is the browser's decision, this
+        # one is the extension's request.
+        Set-ManagedWantVersion -Root $b.Root -ExtId $ExtId -WantVersion $WantVersion
+        Info "$($b.Name): minimum version $WantVersion, extension asked to check"
       }
     } catch {
       Err "Could not write the ExtensionSettings policy: $($_.Exception.Message)"
@@ -1675,7 +1698,7 @@
         foreach ($b in $BROWSERS) {
           $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
           Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl -MinVersion $WantVersion
-          Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId
+          Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId -WantVersion $WantVersion
         }
         Ok 'Policy restored.'
       } catch { Err "Could not restore the policy: $($_.Exception.Message)" }
@@ -1688,7 +1711,7 @@
       foreach ($b in $BROWSERS) {
         $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
         Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl -MinVersion $WantVersion
-        Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId
+        Set-ManagedConfig -Root $b.Root -ExtId $ExtId -ServerUrl $ApiBase -AgentId $AgentId -WantVersion $WantVersion
         Ok "$($b.Name): force-install restored (minimum v$WantVersion) + configured"
       }
     } catch {
@@ -1958,7 +1981,7 @@
               # satisfies - this is what makes a deploy converge on the published
               # build instead of leaving whatever is already installed.
               Set-ExtensionSettingsPolicy -Root $b.Root -ExtId $extId -UpdateUrl $updateUrl -MinVersion $info.version
-              Set-ManagedConfig -Root $b.Root -ExtId $extId -ServerUrl $apiBase -AgentId $agentId
+              Set-ManagedConfig -Root $b.Root -ExtId $extId -ServerUrl $apiBase -AgentId $agentId -WantVersion $info.version
               Ok "$($b.Name): force-installed (slot $slot), minimum v$($info.version) + configured"
             }
             Blank

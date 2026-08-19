@@ -239,6 +239,27 @@ document.getElementById("test").addEventListener("click", async () => {
   await refresh();
 });
 
+document.getElementById("update").addEventListener("click", async () => {
+  setStatusText("Asking the browser to check for a new version…", "info");
+  const r = await ask({ type: "CSDLP_UPDATE_NOW" });
+  const status = r && r.status;
+  if (status === "update_available") {
+    // We will not get to render this: the worker reloads onto the new build the
+    // moment the check reports one, which tears this message channel down.
+    setStatusText("Update found — applying it now.", "ok");
+  } else if (status === "no_update") {
+    setStatusText(`Already on the newest published build (v${chrome.runtime.getManifest().version}).`, "ok");
+  } else if (status === "throttled") {
+    // Chrome rate-limits update checks per extension. Saying so is better than
+    // an unexplained "nothing happened", which is what sent us chasing the
+    // server for days.
+    setStatusText("The browser is rate-limiting update checks. Wait a few minutes and try again.", "info");
+  } else {
+    setStatusText("Could not check for updates. The browser refused the request.", "error");
+  }
+  await refresh();
+});
+
 /**
  * sendMessage rejects outright when the service worker can't be reached (e.g.
  * it crashed on load). Surface that as a readable status instead of an uncaught

@@ -108,6 +108,23 @@ std::string ProcessExeName(DWORD pid) {
 
 // ── Reading the composer ──────────────────────────────────────────────────
 
+// mingw's import libraries carry only PART of the UI Automation IID set:
+// IID_IUIAutomationValuePattern resolves (network_exfil_monitor.cpp has linked
+// against it for as long as it has existed) but IID_IUIAutomationTextPattern
+// does not, and the first CI build of this file died on exactly that undefined
+// reference. The header DECLARES the symbol via DEFINE_GUID; nothing DEFINES it.
+//
+// Defined here instead of reaching for __uuidof: mingw does supply
+// __CRT_UUID_DECL for this interface, so __uuidof would work today, but it
+// would make linking depend on a header macro surviving in whichever MSYS2
+// snapshot CI happens to pull. A literal GUID depends on nothing. The bytes are
+// the interface's own identity and cannot drift — taken from mingw-w64's
+// uiautomationclient.h, which matches the Windows SDK:
+//     DEFINE_GUID(IID_IUIAutomationTextPattern, 0x32eba289, 0x3583, 0x42c9,
+//                 0x9c,0x59, 0x3b,0x6d,0x9a,0x1e,0x9b,0x6a);
+static const GUID kIID_IUIAutomationTextPattern =
+    { 0x32eba289, 0x3583, 0x42c9, { 0x9c, 0x59, 0x3b, 0x6d, 0x9a, 0x1e, 0x9b, 0x6a } };
+
 // Pull text out of one element: ValuePattern for a plain edit, TextPattern for
 // the rich/contenteditable composers that Electron and WinUI apps actually use.
 std::string TextFromElement(IUIAutomationElement* el) {
@@ -133,7 +150,7 @@ std::string TextFromElement(IUIAutomationElement* el) {
     pat = nullptr;
     if (SUCCEEDED(el->GetCurrentPattern(UIA_TextPatternId, &pat)) && pat) {
         IUIAutomationTextPattern* tp = nullptr;
-        pat->QueryInterface(IID_IUIAutomationTextPattern, (void**)&tp);
+        pat->QueryInterface(kIID_IUIAutomationTextPattern, (void**)&tp);
         pat->Release();
         if (tp) {
             IUIAutomationTextRange* range = nullptr;

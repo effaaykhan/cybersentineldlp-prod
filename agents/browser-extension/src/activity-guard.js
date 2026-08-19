@@ -537,9 +537,28 @@
       var body = container.querySelector(BODY_SELECTOR);
       var names = {};
 
+      // UI controls carry the filename INSIDE a label: ChatGPT's remove button is
+      // aria-label="Remove file: Photo.avif", and that whole string was being
+      // recorded as an attachment. Every upload therefore logged twice — once as
+      // the real name and once as "Remove file: <name>" — which reached the
+      // event description and the Attachments list an analyst reads as evidence.
+      //
+      // A colon is not a legal filename character on Windows and effectively
+      // never appears on other platforms, so anything before the last ": " is
+      // the control's own wording. Stripping it rather than rejecting the string
+      // outright matters: some apps expose the name ONLY on the remove/download
+      // control, and dropping those would lose the attachment entirely — which
+      // is worse than a duplicate, because an unnamed attachment is an
+      // uninspected one.
+      function stripControlLabel(label) {
+        var sep = label.lastIndexOf(": ");
+        return sep >= 0 ? label.slice(sep + 2).trim() : label;
+      }
+
       function consider(raw) {
-        var label = (raw || "").trim();
+        var label = stripControlLabel((raw || "").trim());
         if (!label || label.length > 200) return;
+        if (label.indexOf(":") >= 0) return;   // still label-shaped, not a name
         if (!FILENAME_SHAPE.test(label) || NOT_A_FILENAME.test(label)) return;
         names[label] = 1;
       }

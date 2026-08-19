@@ -1241,6 +1241,40 @@ bool IsBrowserExe(const std::string& exeLower) {
 
 // Walk up the UIA subtree looking for the Edit control that contains the
 // currently-typed file name. Depth-limited to avoid runaway traversal.
+// Is this string plausibly a file the user picked, rather than a piece of the
+// dialog's own furniture?
+//
+// The filename box in a Windows file dialog exposes TWO different strings, and
+// they are easy to confuse:
+//     Value = what the user actually selected   -> "aadhaar.png", "C:\\x\\y.pdf"
+//     Name  = the accessible LABEL of the box   -> "File name:"
+//
+// The old check accepted anything containing '\\', ':' or '.', reading Name
+// first. "File name:" contains a colon — the colon was there to catch a drive
+// letter — so the LABEL matched on the very first control and became the
+// "filename" for every browser upload. Every file dialog then produced an
+// event with file_path="File name:" that resolved to nothing, could not be
+// read, and was emitted as an alert about a file that never existed.
+static bool LooksLikeFileName(const std::string& s) {
+    if (s.empty() || s.size() > 260) return false;
+    if (s.back() == ':') return false;            // "File name:", "Save as:" — labels
+
+    const size_t sep = s.find_last_of("\\/");
+    if (sep != std::string::npos) return true;    // a path is a path
+
+    // Otherwise insist on a real extension: a dot followed by 1-8 alphanumerics
+    // at the very end. "File name:" has no dot; "Choose a file to upload." has a
+    // trailing dot and no extension; "report.pdf" passes.
+    const size_t dot = s.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= s.size()) return false;
+    const size_t extLen = s.size() - dot - 1;
+    if (extLen > 8) return false;
+    for (size_t i = dot + 1; i < s.size(); ++i) {
+        if (!std::isalnum(static_cast<unsigned char>(s[i]))) return false;
+    }
+    return true;
+}
+
 std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* root) {
     if (!uia || !root) return {};
     IUIAutomationCondition* cond = nullptr;
@@ -1258,38 +1292,32 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
                 IUIAutomationElement* el = nullptr;
                 arr->GetElement(i, &el);
                 if (!el) continue;
-                BSTR name = nullptr;
-                if (SUCCEEDED(el->get_CurrentName(&name)) && name) {
-                    std::string n = WideToUtf8(name);
-                    SysFreeString(name);
-                    // Skip empty / generic labels
-                    if (!n.empty()) {
-                        // Pattern heuristic: if it contains a path separator
-                        // or a common file extension, treat as filename.
-                        if (n.find('\\') != std::string::npos ||
-                            n.find(':') != std::string::npos  ||
-                            n.find('.') != std::string::npos) {
-                            result = n;
+
+                // Value pattern FIRST — this is the box's contents, i.e. what the
+                // user actually chose. Reading Name first is what let the label win.
+                IUnknown* pat = nullptr;
+                if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &pat)) && pat) {
+                    IUIAutomationValuePattern* vp = nullptr;
+                    pat->QueryInterface(IID_IUIAutomationValuePattern, (void**)&vp);
+                    pat->Release();
+                    if (vp) {
+                        BSTR val = nullptr;
+                        if (SUCCEEDED(vp->get_CurrentValue(&val)) && val) {
+                            std::string sv = WideToUtf8(val);
+                            SysFreeString(val);
+                            if (LooksLikeFileName(sv)) result = sv;
                         }
+                        vp->Release();
                     }
                 }
-                // Also try Value pattern (portable form: GetCurrentPattern + QI)
+
+                // Name only as a fallback, and only when it is not a label.
                 if (result.empty()) {
-                    IUnknown* pat = nullptr;
-                    if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &pat)) && pat) {
-                        IUIAutomationValuePattern* vp = nullptr;
-                        pat->QueryInterface(IID_IUIAutomationValuePattern,
-                                            (void**)&vp);
-                        pat->Release();
-                        if (vp) {
-                            BSTR val = nullptr;
-                            if (SUCCEEDED(vp->get_CurrentValue(&val)) && val) {
-                                std::string s = WideToUtf8(val);
-                                SysFreeString(val);
-                                if (!s.empty()) result = s;
-                            }
-                            vp->Release();
-                        }
+                    BSTR name = nullptr;
+                    if (SUCCEEDED(el->get_CurrentName(&name)) && name) {
+                        std::string n = WideToUtf8(name);
+                        SysFreeString(name);
+                        if (LooksLikeFileName(n)) result = n;
                     }
                 }
                 el->Release();
@@ -1436,11 +1464,27 @@ public:
             } catch (...) {}
 
             if (content.empty()) {
+                // Nothing to report if we never found a real file. A dialog that
+                // was opened and dismissed, or one whose filename box we read
+                // before the user picked anything, leaves a name that resolves to
+                // no file on disk — and an alert naming a file that does not exist
+                // is noise, not evidence. Two test prompts produced six of these.
+                //
+                // Note this is a SECOND line of defence: with the filename box now
+                // read correctly (see LooksLikeFileName), the label case no longer
+                // gets this far. Kept because a real filename can still fail to
+                // resolve — a file picked from a network share or a virtual folder.
+                if (!fs::exists(resolved)) {
+                    LogDbg(chan + " file dialog closed with no resolvable file (" +
+                           resolved + ") — nothing to report");
+                    return;
+                }
                 LogWarn("CONTENT_EXTRACTION_FAILED " + chan + " path=" + resolved);
-                // Browser: emit a low-severity visibility ALERT even when the file
-                // can't be read. Messaging: stay silent — a messaging window also
-                // raises #32770 for Save/download dialogs where no upload file
-                // exists yet, so a not-readable path there is expected, not a leak.
+                // Browser: emit a low-severity visibility ALERT when a file we can
+                // SEE cannot be read — uninspectable is not the same as clean.
+                // Messaging: stay silent — a messaging window also raises #32770
+                // for Save/download dialogs where no upload file exists yet, so a
+                // not-readable path there is expected, not a leak.
                 if (isBrowser) {
                     EventFields f;
                     f.eventSubtype = subtype;

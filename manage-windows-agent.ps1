@@ -1301,7 +1301,13 @@
   # `location` under extensions.settings.<id>. The values that matter here:
   #   1  = installed from a packaged .crx
   #   4  = LOADED UNPACKED  <- the one that shadows everything
-  #   10 = installed by enterprise policy (what we want)
+  #   7  = EXTERNAL_POLICY_DOWNLOAD - installed by ExtensionInstallForcelist,
+  #        which is what a healthy managed endpoint reports. This was previously
+  #        documented (and coded) as 10, so the ONE value that means "working"
+  #        fell through to the default branch and printed a bare "location 7" -
+  #        a correct install rendered as something unrecognised.
+  #   9  = EXTERNAL_POLICY (policy, but not via an update URL)
+  #   10 = EXTERNAL_COMPONENT - not policy at all
   function Get-ExtensionInstallSources {
     param([string]$ExtId)
     $out = @()
@@ -1318,9 +1324,15 @@
                    else {
                      switch ($loc) {
                        1  { 'packaged .crx' }
+                       2  { 'external pref' }
+                       3  { 'external registry' }
                        4  { 'LOADED UNPACKED' }
                        5  { 'component' }
-                       10 { 'enterprise policy' }
+                       6  { 'external pref download' }
+                       7  { 'enterprise policy' }
+                       8  { 'command line' }
+                       9  { 'enterprise policy (local)' }
+                       10 { 'external component' }
                        default { "location $loc" }
                      }
                    }
@@ -1513,11 +1525,43 @@
         return $false
       }
 
-      foreach ($t in $touched) { Info "$($t.Name): entry withdrawn (browser is uninstalling it)" }
+      foreach ($t in $touched) { Info "$($t.Name): entry withdrawn" }
 
-      # Give the browser time to notice the policy change and uninstall. This is
-      # the only part that waits on the browser, and it is seconds.
-      Start-Sleep -Seconds 8
+      # WAIT FOR THE BROWSER TO ACT, DO NOT GUESS HOW LONG IT TAKES.
+      #
+      # The first version of this slept a flat 8 seconds and restored the entry.
+      # That failed silently and looked absurd from the outside - "entry
+      # withdrawn / entry restored / still on the old version" - because both
+      # browsers DEBOUNCE policy reloads. A change that is put back inside that
+      # settle window is never observed at all: the browser reloads once,
+      # afterwards, sees the entry present, and concludes nothing changed. The
+      # withdrawal has to outlive the debounce to exist as far as the browser
+      # is concerned.
+      #
+      # So watch for the effect instead of timing the cause. The extension
+      # leaving disk is proof the browser saw the withdrawal, and the moment we
+      # see it we can put the entry straight back - usually well inside the cap.
+      #
+      # If it has not gone by the cap we restore anyway rather than waiting
+      # longer: 45 seconds is already far past any debounce, so the withdrawal
+      # was observable whether or not the profile directory has been cleaned up
+      # yet (browsers defer that). Treating "not observed" as failure here would
+      # extend an unprotected window to no purpose and then report the wrong
+      # thing.
+      $goneBy = (Get-Date).AddSeconds(45)
+      $gone   = $false
+      $spin2  = @('|', '/', '-', '\')
+      $k = 0
+      while (-not $gone -and (Get-Date) -lt $goneBy) {
+        Start-Sleep -Milliseconds 900
+        if (@(Get-InstalledExtensionVersions $ExtId).Count -eq 0) { $gone = $true; break }
+        $rem = [int]($goneBy - (Get-Date)).TotalSeconds
+        Write-Host ("`r   {0} waiting for the browser to release the old build  ({1}s)   " -f $spin2[$k % 4], $rem) -NoNewline
+        $k++
+      }
+      Write-Host ("`r" + (' ' * 66) + "`r") -NoNewline
+      if ($gone) { Ok 'Old build released.' }
+      else       { Info 'Old build still on disk - restoring anyway, the withdrawal was long enough to register.' }
     }
     finally {
       # Unconditional restore. If anything above threw - or the operator hit

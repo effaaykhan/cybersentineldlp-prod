@@ -1321,7 +1321,54 @@ async function boot() {
  * waits for the extension to be idle, which for a service worker that keeps
  * being woken can be a very long time. reload() applies it deliberately.
  */
+/** What the server publishes right now. Our own API — no browser throttle. */
+async function fetchPublishedVersion() {
+  try {
+    const cfg = await getConfig();
+    if (!cfg.serverUrl) return null;
+    const res = await apiFetch(cfg.serverUrl, "/extension/info", { timeoutMs: 8000 });
+    if (res.ok && res.data && res.data.version) return String(res.data.version);
+  } catch (e) {
+    warn("could not read the published version:", e);
+  }
+  return null;
+}
+
+/** -1 / 0 / 1, comparing dotted numeric versions. */
+function compareVersions(a, b) {
+  const pa = String(a).split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
 async function checkForUpdate(reason) {
+  const installed = chrome.runtime.getManifest().version;
+
+  // Ask the SERVER first, and only spend a browser update check if there is
+  // actually something to fetch.
+  //
+  // requestUpdateCheck is throttled per extension, and this extension was its
+  // own worst enemy: an hourly alarm, plus browser start, plus every policy
+  // change, all calling it whether or not anything had been published. The
+  // budget was therefore usually gone by the time a human pressed the button —
+  // the one call that exists to answer a question someone is actually asking.
+  // In Chrome, which throttles harder than Edge, it was gone essentially always.
+  //
+  // Our own /extension/info is not throttled by anyone. Comparing versions
+  // there costs one small request and answers "is there an update" exactly.
+  // The browser only gets asked when the answer is yes, which is the only time
+  // it can do anything useful anyway.
+  const published = await fetchPublishedVersion();
+
+  if (published && compareVersions(installed, published) >= 0) {
+    log(`update check (${reason}): already on v${installed} (published v${published}) — not asking the browser`);
+    return { status: "current", installed, published };
+  }
+
   try {
     // MV3 returns a promise; older builds take a callback. Support both so this
     // works on whatever the endpoint happens to be running.
@@ -1346,12 +1393,14 @@ async function checkForUpdate(reason) {
       // the new version, so nothing after this line runs.
       chrome.runtime.reload();
     }
-    return result || { status: "error" };
+
+    return Object.assign({ status: "error" }, result, { installed, published });
   } catch (e) {
     warn("update check failed:", e);
-    return { status: "error", error: String(e) };
+    return { status: "error", error: String(e), installed, published };
   }
 }
+
 
 // The installer writes the published version into managed policy as
 // `wantVersion`. Policy reaches a running extension immediately, so changing it

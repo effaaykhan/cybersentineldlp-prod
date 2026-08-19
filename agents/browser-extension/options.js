@@ -240,20 +240,43 @@ document.getElementById("test").addEventListener("click", async () => {
 });
 
 document.getElementById("update").addEventListener("click", async () => {
-  setStatusText("Asking the browser to check for a new version…", "info");
+  setStatusText("Checking…", "info");
   const r = await ask({ type: "CSDLP_UPDATE_NOW" });
   const status = r && r.status;
+  const installed = (r && r.installed) || chrome.runtime.getManifest().version;
+  const published = r && r.published;
+
   if (status === "update_available") {
     // We will not get to render this: the worker reloads onto the new build the
     // moment the check reports one, which tears this message channel down.
     setStatusText("Update found — applying it now.", "ok");
+    return;
+  }
+
+  // Whether the BROWSER agreed to check is a detail. Whether this endpoint is
+  // on the published build is the question, and comparing versions answers it
+  // even when the check was throttled.
+  if (published && published !== installed) {
+    setStatusText(
+      `On v${installed}; the server publishes v${published}. ` +
+      (status === "throttled"
+        ? "The browser is rate-limiting checks right now, so it will pick this up automatically within the hour."
+        : "The browser has not fetched it yet; it will retry automatically."),
+      "info"
+    );
+  } else if (status === "current" || published) {
+    // "current" means we compared against the server and did not need to ask
+    // the browser at all — so this answer is available every time, with no
+    // throttle involved.
+    setStatusText(`Up to date — v${installed} is the published build.`, "ok");
   } else if (status === "no_update") {
-    setStatusText(`Already on the newest published build (v${chrome.runtime.getManifest().version}).`, "ok");
+    setStatusText(`No update offered. Running v${installed}.`, "ok");
   } else if (status === "throttled") {
-    // Chrome rate-limits update checks per extension. Saying so is better than
-    // an unexplained "nothing happened", which is what sent us chasing the
-    // server for days.
-    setStatusText("The browser is rate-limiting update checks. Wait a few minutes and try again.", "info");
+    setStatusText(
+      `Running v${installed}. The browser is rate-limiting update checks and the ` +
+      "server could not be reached to compare — try again shortly.",
+      "info"
+    );
   } else {
     setStatusText("Could not check for updates. The browser refused the request.", "error");
   }

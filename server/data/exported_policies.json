@@ -1630,6 +1630,7 @@
     "type": "messaging_app_control",
     "severity": "high",
     "config": {
+      "action": "block",
       "apps": [
         "teams.exe",
         "ms-teams.exe",
@@ -1640,7 +1641,6 @@
         "discord.exe",
         "signal.exe"
       ],
-      "action": "alert",
       "exceptions": {
         "users": [],
         "file_types": []
@@ -1650,7 +1650,9 @@
       "match": "all",
       "rules": []
     },
-    "actions": {}
+    "actions": {
+      "log": {}
+    }
   },
   {
     "name": "Network File Transfer Linux",

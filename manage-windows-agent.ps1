@@ -1444,37 +1444,96 @@
   #   delete leaves it listing an extension it cannot load and it will not
   #   re-fetch for hours.
   #
-  #   Toggling the forcelist entry while the browser runs works, but only while
-  #   the browser really is running - and it is not the common case. Making it
-  #   the main path meant a closed browser fell into a branch that could not
-  #   finish.
+  #   Toggling the forcelist entry while the browser runs WORKS. It was dropped
+  #   only because it had been made the single path, so a closed browser fell
+  #   into a branch that could not finish. That was a dispatch bug, not a
+  #   verdict on the mechanism.
   #
-  # There is no supported way for an outside process to make a browser fetch an
-  # extension on demand. What the browser DOES do, reliably, is check the update
-  # feed when it starts. So this asks for the one thing that actually works, the
-  # one thing the operator would have done anyway, and then WAITS and says
-  # whether it landed. No files are touched and no policy is toggled, so there
-  # is nothing here that can leave the extension broken.
+  #   "The browser fetches updates when it starts" - which replaced it - is
+  #   simply not true, and is why this kept hanging for five minutes and giving
+  #   up. Chrome and Edge check the extension update feed on a TIMER (a few
+  #   hours), delayed and jittered after launch. Restarting does not schedule
+  #   that check any sooner, so "close it and open it again" was asking the
+  #   operator to perform a ritual with no effect.
+  #
+  # So: branch on what the browser is actually doing.
+  #
+  #   RUNNING -> round-trip the forcelist entry. Both browsers apply
+  #     ExtensionInstallForcelist changes live. Removing the entry makes the
+  #     BROWSER uninstall the extension itself - which keeps its Preferences
+  #     record consistent, the exact thing that deleting Extensions\<id>\ got
+  #     wrong - and putting the entry back makes it install whatever the feed
+  #     advertises right now. No restart, no files touched, seconds not hours.
+  #
+  #   CLOSED -> there is nothing to toggle and nothing to wait for: the policy
+  #     already names the new version, so the next start installs it. Say that
+  #     and stop, rather than watching a browser that will never open.
+  #
+  # The removal is wrapped so the entry is ALWAYS put back, including on Ctrl-C.
+  # An interrupted update must not be able to leave the endpoint unmanaged.
   function Invoke-ExtensionUpdate {
     param([string]$ExtId, [string]$WantVersion, [string]$UpdateUrl)
 
     $open = @(Get-OpenBrowsers)
-    Blank
-    Hr '-' 'DarkCyan'
-    if (@($open).Count -gt 0) {
-      Warn "NOW: close $($open -join ' and ') completely, then open it again."
-    } else {
-      Warn 'NOW: open Chrome (or Edge).'
-      Hint 'No browser window is open at the moment.'
+
+    if (@($open).Count -eq 0) {
+      Blank
+      Hr '-' 'DarkCyan'
+      Ok 'Policy is set to the new version. Nothing else to do here.'
+      Hint "$($BROWSERS.Name -join ' and ') are closed, so there is nothing to update"
+      Hint 'in place. The next time one starts it installs the published build'
+      Hint "directly - it never sees the old one."
+      Hr '-' 'DarkCyan'
+      Blank
+      return $true
     }
-    Hint 'A browser fetches new versions of its managed extensions when it'
-    Hint 'starts. That start is the whole update - there is nothing to delete'
-    Hint 'and nothing to reconfigure.'
-    Hr '-' 'DarkCyan'
+
+    # --- Browser is running: round-trip the forcelist entry -----------------
+    Blank
+    Info "Updating $($open -join ' and ') in place - no restart needed."
+
+    $touched = @()
+    try {
+      foreach ($b in $BROWSERS) {
+        if ($open -notcontains $b.Name) { continue }
+        $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+        if (-not (Test-Path $fl)) { continue }
+        $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+        foreach ($pr in $props.PSObject.Properties) {
+          if ($pr.Name -like 'PS*') { continue }
+          if ($pr.Value -like "$ExtId;*") {
+            $touched += [PSCustomObject]@{ Root = $b.Root; Name = $b.Name; Slot = $pr.Name; Value = $pr.Value }
+            Remove-ItemProperty -Path $fl -Name $pr.Name -ErrorAction SilentlyContinue
+          }
+        }
+      }
+
+      if (@($touched).Count -eq 0) {
+        Warn 'No forcelist entry found to refresh - run [1] Deploy first.'
+        return $false
+      }
+
+      foreach ($t in $touched) { Info "$($t.Name): entry withdrawn (browser is uninstalling it)" }
+
+      # Give the browser time to notice the policy change and uninstall. This is
+      # the only part that waits on the browser, and it is seconds.
+      Start-Sleep -Seconds 8
+    }
+    finally {
+      # Unconditional restore. If anything above threw - or the operator hit
+      # Ctrl-C mid-way - the endpoint must not be left without the extension.
+      foreach ($t in $touched) {
+        $fl = Join-Path $t.Root 'ExtensionInstallForcelist'
+        if (-not (Test-Path $fl)) { New-Item -Path $fl -Force | Out-Null }
+        Set-ItemProperty -Path $fl -Name $t.Slot -Value $t.Value -Type String
+      }
+    }
+
+    foreach ($t in $touched) { Info "$($t.Name): entry restored (browser is installing v$WantVersion)" }
     Blank
     Info 'Watching for it to land - this window can be left alone.'
 
-    if (Wait-ForExtensionVersion -ExtId $ExtId -Version $WantVersion -TimeoutSeconds 300) {
+    if (Wait-ForExtensionVersion -ExtId $ExtId -Version $WantVersion -TimeoutSeconds 180) {
       Blank
       Ok "Every profile is on v$WantVersion."
       return $true
@@ -1492,10 +1551,16 @@
       Warn "Still not on v${WantVersion}:"
       foreach ($n in $now) { Hint "  $($n.Browser) / $($n.User) / $($n.Profile) : v$($n.Version)" }
       Blank
-      Hint 'The policy is correct and nothing is broken - the browser simply has'
-      Hint 'not fetched it yet. It will, on its own, within a few hours.'
-      Hint 'To force it now: open chrome://extensions (or edge://extensions),'
-      Hint 'turn on Developer mode, and press Update.'
+      Hint 'The policy is correct and nothing is broken. The browser accepted the'
+      Hint 'entry but has not finished installing yet.'
+      Blank
+      Hint 'The one trigger that is always immediate belongs to the browser:'
+      Hint '  open chrome://extensions (or edge://extensions),'
+      Hint '  turn on Developer mode, press Update.'
+      Blank
+      Hint 'Closing the browser also works - the next start installs the published'
+      Hint 'build directly. (Starting it does NOT schedule an update check any'
+      Hint 'sooner; that is on a multi-hour timer of its own.)'
       Blank
       Hint 'If it stays on the old version after that, use [3] Repair.'
     }

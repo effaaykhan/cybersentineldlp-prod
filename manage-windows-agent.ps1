@@ -15,6 +15,27 @@
     powershell -ExecutionPolicy Bypass -File .\manage-windows-agent.ps1
 #>
 
+# On 64-bit Windows a 32-bit PowerShell has every HKLM:\SOFTWARE\Policies\...
+# access redirected into WOW6432Node, which no browser reads. This script would
+# then write policy nothing can see and read it back from the same hidden hive,
+# reporting success on every operation while the endpoint never changed. Stop
+# rather than run: a silent no-op that claims to have worked is worse than a
+# refusal, and this one cost days.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+  Write-Host ''
+  Write-Host '  This is 32-bit PowerShell on 64-bit Windows.' -ForegroundColor Red
+  Write-Host '  Browser policy written from here goes to WOW6432Node, which Chrome' -ForegroundColor Red
+  Write-Host '  and Edge never read - every extension operation would silently do' -ForegroundColor Red
+  Write-Host '  nothing while reporting success.' -ForegroundColor Red
+  Write-Host ''
+  Write-Host '  Re-run with the 64-bit PowerShell:' -ForegroundColor Yellow
+  Write-Host '    %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -File "' -NoNewline -ForegroundColor Yellow
+  Write-Host "$PSCommandPath`"" -ForegroundColor Yellow
+  Write-Host ''
+  exit 1
+}
+
+
 & {
   $ErrorActionPreference = 'Continue'
   $ProgressPreference    = 'SilentlyContinue'   # hide the noisy Invoke-WebRequest bar
@@ -1845,6 +1866,130 @@
     }
   }
 
+  # Read a policy value through an EXPLICIT registry view, ignoring whatever
+  # view this process would be given by default.
+  #
+  # This exists because of the failure mode it detects. On 64-bit Windows a
+  # 32-bit PowerShell has every HKLM:\SOFTWARE\Policies\... access silently
+  # redirected into HKLM\SOFTWARE\WOW6432Node\Policies\..., while the browser
+  # reads the 64-bit view. The script then WRITES policy the browser cannot see
+  # and READS it back from the same redirected hive - so it reports success,
+  # every time, on changes that never reached Chrome. Deploy looks fine, Repair
+  # appears to withdraw the policy, Remove appears to remove it, and the
+  # extension sits there unchanged through all of it.
+  function Get-PolicyValueInView {
+    param([string]$SubKey, [string]$Name, [ValidateSet('Registry64','Registry32')][string]$View)
+    try {
+      $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $View)
+      $k = $base.OpenSubKey($SubKey)
+      if (-not $k) { return $null }
+      if ($Name) { return $k.GetValue($Name) }
+      $vals = @{}
+      foreach ($n in $k.GetValueNames()) { $vals[$n] = $k.GetValue($n) }
+      return $vals
+    } catch { return $null }
+  }
+
+  # Everything the browser's own view of the world says, in one screen.
+  #
+  # Written after three separate "fixes" that each looked right and changed
+  # nothing on the endpoint. The problem was never the mechanism, it was that
+  # nothing here reported what the BROWSER could see - only what this script had
+  # done. Those are different, and the gap between them is where every one of
+  # those attempts died.
+  function Show-ExtensionDiagnostics {
+    param([string]$ExtId, [string]$WantVersion, [string]$UpdateUrl)
+
+    Blank
+    Hr '=' 'Cyan'
+    Write-Host '   EXTENSION DIAGNOSTICS' -ForegroundColor Cyan
+    Hr '=' 'Cyan'
+
+    # 1. The trap that makes every other line here a lie.
+    Blank
+    Write-Host '   Registry view' -ForegroundColor White
+    $procBits = if ([Environment]::Is64BitProcess) { '64-bit' } else { '32-bit' }
+    $osBits   = if ([Environment]::Is64BitOperatingSystem) { '64-bit' } else { '32-bit' }
+    Field '  PowerShell' $procBits
+    Field '  Windows'    $osBits
+    if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+      Err '  32-bit PowerShell on 64-bit Windows: every policy write from this'
+      Err '  script is redirected to WOW6432Node and the browser never sees it.'
+      Hint '  Re-run this script with the 64-bit PowerShell:'
+      Hint '    %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    } else {
+      Ok '  Not redirected - writes land where the browser reads.'
+    }
+
+    # 2. What the browser actually reads, taken from the 64-bit view directly.
+    foreach ($b in $BROWSERS) {
+      Blank
+      Write-Host "   $($b.Name) policy (64-bit view - what the browser reads)" -ForegroundColor White
+      $sub = $b.Root -replace '^HKLM:\\', ''
+
+      $fl = Get-PolicyValueInView -SubKey "$sub\ExtensionInstallForcelist" -Name $null -View Registry64
+      if (-not $fl -or $fl.Count -eq 0) {
+        Err '  ExtensionInstallForcelist: EMPTY - the browser is not being told to install anything.'
+      } else {
+        $mine = @($fl.Values | Where-Object { "$_" -like "$ExtId;*" })
+        if (@($mine).Count -gt 0) { Ok "  ExtensionInstallForcelist: our entry present" }
+        else { Err "  ExtensionInstallForcelist: $($fl.Count) entr(y/ies), NONE ours" }
+      }
+
+      $es = Get-PolicyValueInView -SubKey $sub -Name 'ExtensionSettings' -View Registry64
+      if (-not $es) {
+        Warn '  ExtensionSettings: absent - no minimum_version_required, so an old build satisfies policy.'
+      } else {
+        try {
+          $entry = ($es | ConvertFrom-Json).$ExtId
+          if (-not $entry) { Warn '  ExtensionSettings: present, but no entry for our extension.' }
+          else { Ok "  ExtensionSettings: installation_mode=$($entry.installation_mode) minimum_version_required=$($entry.minimum_version_required)" }
+        } catch { Err '  ExtensionSettings: present but NOT VALID JSON - the browser ignores the whole policy.' }
+      }
+
+      $mv = Get-PolicyValueInView -SubKey "$sub\3rdparty\extensions\$ExtId\policy" -Name 'wantVersion' -View Registry64
+      Field '  managed wantVersion' $(if ($mv) { $mv } else { '(not set)' })
+    }
+
+    # 3. Redirected copies, which are the fingerprint of the trap above.
+    $shadow = $false
+    foreach ($b in $BROWSERS) {
+      $sub = $b.Root -replace '^HKLM:\\', ''
+      $fl32 = Get-PolicyValueInView -SubKey "$sub\ExtensionInstallForcelist" -Name $null -View Registry32
+      if ($fl32 -and $fl32.Count -gt 0) { $shadow = $true }
+    }
+    if ($shadow) {
+      Blank
+      Err '   A COPY OF THIS POLICY EXISTS UNDER WOW6432Node.'
+      Hint '   Something wrote it from a 32-bit process. The browser ignores that'
+      Hint '   copy entirely - it is the reason changes appear to work and do not.'
+    }
+
+    # 4. What is actually installed.
+    Blank
+    Write-Host '   Installed on disk' -ForegroundColor White
+    $inst = @(Get-InstalledExtensionVersions $ExtId)
+    if (@($inst).Count -eq 0) { Warn '  not present in any profile' }
+    else { foreach ($i in $inst) { Field "  $($i.Browser) / $($i.User) / $($i.Profile)" "v$($i.Version)" } }
+    Field '  published on the server' "v$WantVersion"
+
+    # 5. Can this machine reach the feed at all?
+    Blank
+    Write-Host '   Update feed' -ForegroundColor White
+    Field '  url' $UpdateUrl
+    try {
+      $r = Invoke-WebRequest -Uri $UpdateUrl -UseBasicParsing -TimeoutSec 10
+      $m = [regex]::Match($r.Content, "version='([^']+)'")
+      if ($m.Success) { Ok "  reachable - advertises v$($m.Groups[1].Value)" }
+      else { Warn '  reachable, but the response is not an update manifest' }
+    } catch {
+      Err "  NOT reachable from this machine: $($_.Exception.Message)"
+      Hint '  The browser fetches this itself. If this fails, no update can ever arrive.'
+    }
+    Blank
+    Hr '=' 'Cyan'
+  }
+
   function Show-Extension {
     param($Status)
     Blank
@@ -1953,9 +2098,10 @@
       Write-Host '   [2] ' -ForegroundColor Magenta -NoNewline; Write-Host 'Private browsing - disable it, or allow it again'
       Write-Host '   [3] ' -ForegroundColor Yellow  -NoNewline; Write-Host 'Repair           - no icon / "file not found" / stuck on an old build'
       Write-Host '   [4] ' -ForegroundColor Red     -NoNewline; Write-Host 'Remove           - drop the policy (user can then uninstall it)'
-      Write-Host '   [5] ' -ForegroundColor Gray    -NoNewline; Write-Host 'Back to main menu'
+      Write-Host '   [5] ' -ForegroundColor Cyan    -NoNewline; Write-Host 'Diagnose         - what the BROWSER sees, not what this script did'
+      Write-Host '   [6] ' -ForegroundColor Gray    -NoNewline; Write-Host 'Back to main menu'
       Blank
-      $c = Read-Host '   Choose (1-5)'
+      $c = Read-Host '   Choose (1-6)'
       switch ($c.Trim()) {
         '1' {
           Blank
@@ -2080,7 +2226,11 @@
           Blank; Read-Host '   Press Enter to continue' | Out-Null
           return
         }
-        '5' { return }
+        '5' {
+          Show-ExtensionDiagnostics -ExtId $extId -WantVersion $info.version -UpdateUrl $updateUrl
+          Blank; Read-Host '   Press Enter to continue' | Out-Null
+        }
+        '6' { return }
         default { Warn 'Enter 1, 2, 3, 4 or 5.' }
       }
     }

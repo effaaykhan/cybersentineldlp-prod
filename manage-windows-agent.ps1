@@ -692,8 +692,17 @@
     Invoke-AgentReconcile -ExePath $exePath -SkipStart
     Info 'Restarting the agent...'
     Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
-    $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+    # Same patience as the install path (6 x 2s), not a single 3s look.
+    # Start-ScheduledTask returns as soon as the task is queued, not when the
+    # process exists, so one early check reported "agent not detected" for an
+    # agent that was starting perfectly well and heartbeating seconds later.
+    # Crying wolf on a routine update is worse than waiting another 9 seconds:
+    # it trains you to ignore the one time it means something.
+    $proc = $null
+    for ($i = 0; $i -lt 6 -and -not $proc; $i++) {
+      Start-Sleep -Seconds 2
+      $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
     Blank
     if ($proc) { Ok "Update complete - agent running (PID $($proc.Id))." }
     else { Warn "Agent not detected yet - start it with: Start-ScheduledTask -TaskName '$TASK_NAME'" }

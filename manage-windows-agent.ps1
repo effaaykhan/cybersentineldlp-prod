@@ -1441,17 +1441,53 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
     Blank
     Warn "Chrome/Edge must be closed to replace the extension's files."
+    Hint 'They will be asked to close normally, so open tabs are restored on the'
+    Hint 'next launch. Anything unsaved - a half-written mail, a form, an upload'
+    Hint 'in progress - is the user\'s to deal with, so do not run this on a'
+    Hint 'machine somebody is working on.'
     $go = Read-Host '   Close them now? (Y/n)'
     if ($go -eq 'n' -or $go -eq 'N') { Warn 'Left running - the refresh was skipped.'; return $false }
 
+    # Ask politely, then WAIT. The previous version allowed two seconds before
+    # force-killing whatever was left, which is not long enough for a browser to
+    # flush session state - so the "polite" close was decoration and the real
+    # mechanism was the kill. On a machine in use that discards open tabs.
+    #
+    # Force is now a separate, explicit decision, taken only after a real grace
+    # period and only by someone who has been told what it costs.
     foreach ($n in $running) {
-      Info "Closing $n..."
-      # Ask politely first so open tabs are restored on next launch.
+      Info "Asking $n to close..."
       Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object {
         $null = $_.CloseMainWindow()
       }
-      Start-Sleep -Seconds 2
-      Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+    $graceUntil = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $graceUntil) {
+      $left = @($names | Where-Object { Get-Process -Name $_ -ErrorAction SilentlyContinue })
+      if (@($left).Count -eq 0) { break }
+      $secs = [int]($graceUntil - (Get-Date)).TotalSeconds
+      Write-Host ("`r   waiting for $($left -join ' and ') to close  ({0}s)   " -f $secs) -NoNewline
+      Start-Sleep -Milliseconds 700
+    }
+    Write-Host ("`r" + (' ' * 66) + "`r") -NoNewline
+
+    $stubborn = @($names | Where-Object { Get-Process -Name $_ -ErrorAction SilentlyContinue })
+    if (@($stubborn).Count -gt 0) {
+      Blank
+      Warn "$($stubborn -join ' and ') did not exit."
+      Hint 'Usually a dialog waiting on an answer, or background processes kept'
+      Hint 'alive by "continue running background apps" / startup boost.'
+      Hint 'Forcing it closes them immediately and DISCARDS anything unsaved.'
+      $force = Read-Host '   Force them closed? (y/N)'
+      if ($force -eq 'y' -or $force -eq 'Y') {
+        foreach ($n in $stubborn) {
+          Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+      } else {
+        Warn 'Left running - the refresh was skipped.'
+        return $false
+      }
     }
 
     # Verify, rather than assume.
@@ -2001,7 +2037,11 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       elseif (@($win).Count -eq 0) {
         Field "  $($b.Name)" "$(@($all).Count) background process(es), NO window"
         Hint "    Closed but still resident - it has not restarted, so policy is stale."
-        Hint "    Fully exit it:  taskkill /IM $($b.Exe) /F"
+        Hint "    Turn off Settings > System > 'Continue running background apps'"
+        Hint "    and 'Startup boost', then close it; or just leave it - the"
+        Hint "    extension self-updates from v2.8.0 and needs no restart at all."
+        Hint "    Last resort on a machine nobody is using, and it DISCARDS open"
+        Hint "    tabs:  taskkill /IM $($b.Exe) /F"
       }
       else { Field "  $($b.Name)" "running, $(@($win).Count) window(s)" }
     }

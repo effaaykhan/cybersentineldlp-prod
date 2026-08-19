@@ -95,7 +95,11 @@ def _is_exempt(method: str, path: str) -> bool:
         return True
     if method == "GET" and _APP_CATALOG_SYNC.match(path):
         return True
-    if method == "GET" and _EXTENSION_DIST.match(path):
+    # HEAD as well as GET: the route now answers both, and an exemption scoped
+    # to one verb makes a reachability probe 403 against an endpoint that is
+    # serving the package fine — indistinguishable, from the endpoint's side,
+    # from the feed being down.
+    if method in ("GET", "HEAD") and _EXTENSION_DIST.match(path):
         return True
     if method == "DELETE" and _AGENT_UNREG.match(path):
         return True

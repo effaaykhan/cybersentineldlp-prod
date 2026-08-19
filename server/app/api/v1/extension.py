@@ -52,7 +52,11 @@ def _dist_file(name: str) -> pathlib.Path:
     return candidate
 
 
-@router.get("/update.xml")
+# GET and HEAD, for the same reason as the package route below: a HEAD probe
+# would otherwise fall through to the /{filename} handler, fail the .crx check
+# and answer 404 — reporting the update feed as missing on a server publishing
+# it correctly.
+@router.api_route("/update.xml", methods=["GET", "HEAD"])
 async def update_manifest(request: Request):
     """The update feed. Polled by every force-installed browser a few times a day.
 
@@ -79,7 +83,7 @@ async def update_manifest(request: Request):
     return Response(content=xml, media_type="application/xml")
 
 
-@router.get("/info")
+@router.api_route("/info", methods=["GET", "HEAD"])
 async def extension_info():
     """Extension id, version and hash — what the Windows installer script reads.
 
@@ -91,7 +95,12 @@ async def extension_info():
     return json.loads(path.read_text())
 
 
-@router.get("/{filename}")
+# HEAD as well as GET. Browsers only ever GET the package, so this is not for
+# them — it is so anything checking "can this endpoint be reached" can ask
+# without pulling 11MB. Without it such a probe gets 405 and reports the package
+# unreachable on a server that is serving it perfectly well, which is precisely
+# what the endpoint diagnostic did.
+@router.api_route("/{filename}", methods=["GET", "HEAD"])
 async def download_crx(filename: str):
     """The signed package itself."""
     if not filename.endswith(".crx"):

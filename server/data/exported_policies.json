@@ -1630,7 +1630,6 @@
     "type": "messaging_app_control",
     "severity": "high",
     "config": {
-      "action": "block",
       "apps": [
         "teams.exe",
         "ms-teams.exe",
@@ -1641,6 +1640,7 @@
         "discord.exe",
         "signal.exe"
       ],
+      "action": "block",
       "exceptions": {
         "users": [],
         "file_types": []

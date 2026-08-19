@@ -1487,7 +1487,7 @@
       "minLevel": "Confidential",
       "matrix": {
         "genai": {
-          "post": "mask",
+          "post": "block",
           "attach": "block",
           "download": "block",
           "upload": "block"

@@ -107,6 +107,29 @@ export const deleteAgent = async (agentId: string) => {
   return data
 }
 
+/**
+ * Pause an endpoint: it stops being policed and its events are discarded
+ * until ``durationMinutes`` elapses. Pass null to pause until it is resumed
+ * by hand. Reversible and non-destructive — the opposite of deleteAgent.
+ */
+export const suspendAgent = async (
+  agentId: string,
+  durationMinutes: number | null,
+  reason?: string,
+) => {
+  const { data } = await apiClient.post(`/agents/${agentId}/suspend`, {
+    duration_minutes: durationMinutes,
+    reason: reason || null,
+  })
+  return data
+}
+
+/** Lift a pause early. Idempotent — safe on an agent that already resumed. */
+export const resumeAgent = async (agentId: string) => {
+  const { data } = await apiClient.post(`/agents/${agentId}/resume`)
+  return data
+}
+
 // Additional exports for direct imports
 export const getAlerts = async (params?: any) => {
   const { data } = await apiClient.get('/alerts/', { params })
@@ -163,6 +186,18 @@ export type Agent = {
   is_deleted?: boolean
   deleted_at?: string
   deleted_by?: string
+  /** Temporarily paused: no policies are applied to this endpoint and its
+   *  events are discarded. Distinct from ``is_deleted`` — a paused agent is
+   *  still listed, still heartbeats, and comes back on its own. */
+  is_suspended?: boolean
+  /** When the pause auto-expires. Null while paused means "until someone
+   *  resumes it" — there is no timer to wait for. */
+  suspended_until?: string | null
+  suspended_at?: string | null
+  suspended_by?: string | null
+  suspend_reason?: string | null
+  /** Seconds until auto-resume; null when the pause is indefinite. */
+  suspension_seconds_remaining?: number | null
 }
 
 export type Event = {

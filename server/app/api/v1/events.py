@@ -22,6 +22,7 @@ from app.core.redaction import may_view_sensitive, redact_event, redact_events
 from app.core.database import get_mongodb, get_db
 from app.core.domains import domain_for_event_type
 from app.core import web_activity as _WA
+from app.core import agent_suspension as _SUSP
 from app.services.domain_service import build_domain_mongo_filter
 from app.services.event_processor import get_event_processor
 from app.integrations.siem.integration_service import siem_service
@@ -505,6 +506,22 @@ async def create_event(
 
     from app.api.v1.agents import verify_agent_key
     await verify_agent_key(request)
+
+    # ── Paused endpoint: accept and discard ──────────────────────────────────
+    #
+    # A suspended agent should already be silent — its policy bundle is empty,
+    # which switches its monitoring off at the source. This guard covers the
+    # gap before it next syncs, events that were spooled on disk while it was
+    # offline, and the browser extension reporting under the same agent id.
+    #
+    # Answering 201 rather than an error is deliberate. The agent spools any
+    # non-2xx response and replays it later, so rejecting these would build a
+    # backlog on the endpoint that floods in the moment the pause is lifted —
+    # the opposite of "I'm not receiving its logs". The distinct status lets
+    # anyone reading the response tell this apart from a real accept.
+    if await _SUSP.is_suspended(event.agent_id):
+        logger.debug("Discarded event from suspended agent", agent_id=event.agent_id)
+        return {"status": "suspended", "event_id": event.event_id}
 
     db = get_mongodb()
     events_collection = db["dlp_events"]

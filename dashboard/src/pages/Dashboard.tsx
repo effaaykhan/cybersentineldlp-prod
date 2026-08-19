@@ -178,9 +178,14 @@ export default function Dashboard() {
           icon={Server}
           color="green"
           subtext={
-            agentHealth !== null
-              ? `${agentHealth}% of ${stats?.total_agents ?? 0} online`
-              : 'awaiting heartbeats'
+            // Paused endpoints are excluded from the count server-side, so
+            // when any exist the subtext must say where they went — a number
+            // that silently dropped reads as agents going offline.
+            (stats?.suspended_agents ?? 0) > 0
+              ? `${stats?.suspended_agents} paused · ${stats?.total_agents ?? 0} total`
+              : agentHealth !== null
+                ? `${agentHealth}% of ${stats?.total_agents ?? 0} online`
+                : 'awaiting heartbeats'
           }
           to="/agents"
           drillTooltip="Open the agents view"

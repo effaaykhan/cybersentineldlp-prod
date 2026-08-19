@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import get_current_user
 from app.core.database import get_mongodb, get_db
 from app.services.domain_service import build_domain_mongo_filter
+from app.core import agent_suspension as _SUSP
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -57,12 +58,21 @@ async def get_dashboard_overview(
     cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
     cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 
-    active_agents = await agents_collection.count_documents({
+    # A PAUSED agent is deliberately excluded from this count. It may be
+    # heartbeating perfectly, but it is applying no policy and reporting
+    # nothing — counting it as active would report protection that isn't
+    # running, which is the one thing this tile must never do. Paused agents
+    # are reported separately so the headline stays reconcilable.
+    fresh_heartbeat = {
         "$or": [
             {"last_seen": {"$gte": cutoff_time}},
             {"last_seen": {"$gte": cutoff_naive}},
         ]
-    })
+    }
+    active_agents = await agents_collection.count_documents(
+        {"$and": [fresh_heartbeat, _SUSP.mongo_not_filter()]}
+    )
+    suspended_agents = await agents_collection.count_documents(_SUSP.mongo_filter())
 
     # Query events from MongoDB (using correct collection name)
     events_collection = db.dlp_events
@@ -85,6 +95,7 @@ async def get_dashboard_overview(
     return {
         "total_agents": total_agents,
         "active_agents": active_agents,
+        "suspended_agents": suspended_agents,
         "total_events": total_events,
         "critical_alerts": critical_alerts,
         "blocked_events": blocked_events,
@@ -173,11 +184,22 @@ async def get_agents_stats(
     # Total agents
     total = await agents_collection.count_documents({})
 
+    # Paused agents are counted on their own and excluded from both active and
+    # disconnected, so the three add up and "active" means "actually policing
+    # an endpoint" rather than merely "reachable".
+    suspended = await agents_collection.count_documents(_SUSP.mongo_filter())
+    not_suspended = _SUSP.mongo_not_filter()
+
     # Active agents (recent heartbeat - handle both timezone-aware and naive datetimes)
     active = await agents_collection.count_documents({
-        "$or": [
-            {"last_seen": {"$gte": cutoff_time}},
-            {"last_seen": {"$gte": cutoff_naive}},
+        "$and": [
+            {
+                "$or": [
+                    {"last_seen": {"$gte": cutoff_time}},
+                    {"last_seen": {"$gte": cutoff_naive}},
+                ]
+            },
+            not_suspended,
         ]
     })
 
@@ -190,7 +212,8 @@ async def get_agents_stats(
                     {"last_seen": {"$lt": cutoff_time}},
                     {"last_seen": {"$lt": cutoff_naive}},
                 ]
-            }
+            },
+            not_suspended,
         ]
     })
 
@@ -198,6 +221,7 @@ async def get_agents_stats(
         "total": total,
         "active": active,
         "online": active,  # Keep for backwards compatibility
+        "suspended": suspended,
         "disconnected": disconnected,
         "offline": disconnected,  # Keep for backwards compatibility
         "warning": 0,  # Deprecated field

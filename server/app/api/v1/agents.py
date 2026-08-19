@@ -21,6 +21,8 @@ from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 from app.core.cache import get_cache, CacheService
 from app.core import web_activity as _WA
 from app.core import masking as _MASK
+from app.core import agent_suspension as _SUSP
+from pymongo import ReturnDocument as _ReturnDocument
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -197,6 +199,16 @@ class Agent(AgentBase):
     policy_sync_status: Optional[str] = Field(None, description="Most recent policy sync status")
     policy_last_synced_at: Optional[str] = Field(None, description="ISO timestamp for last policy sync")
     policy_sync_error: Optional[str] = Field(None, description="Last policy sync error message, if any")
+    # Temporary suspension ("Pause"). Orthogonal to lifecycle_status, which
+    # answers a different question — whether the machine is heartbeating. An
+    # agent can be paused and connected (the normal case), or paused and
+    # unplugged, and collapsing the two would hide one of them.
+    is_suspended: bool = Field(False, description="Agent is currently paused: no policies applied, events discarded")
+    suspended_until: Optional[datetime] = Field(None, description="When the pause auto-expires; null means until manually resumed")
+    suspended_at: Optional[datetime] = Field(None, description="When the pause was applied")
+    suspended_by: Optional[str] = Field(None, description="Admin who paused it")
+    suspend_reason: Optional[str] = Field(None, description="Operator-supplied reason for the pause")
+    suspension_seconds_remaining: Optional[float] = Field(None, description="Seconds until auto-resume; null when indefinite")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -280,6 +292,10 @@ async def list_agents(
                     dt_val = dt_val.replace(tzinfo=timezone.utc)
                 agent_doc[dt_field] = dt_val.isoformat()
 
+        # Resolve the pause on read (expiry is never swept by a job) so a
+        # lapsed suspension reports as live even before anything rewrites it.
+        agent_doc.update(_SUSP.resolve(agent_doc))
+
         agents.append(Agent(**agent_doc))
 
     logger.info("Listed agents", count=len(agents))
@@ -360,12 +376,19 @@ async def list_all_agents(
         # Soft-delete flag so admin views can distinguish deleted records.
         agent_doc["is_deleted"] = bool(agent_doc.get("is_deleted"))
 
+        # Temporary suspension, resolved on read: a pause whose deadline has
+        # passed reports as live here without waiting for anything to clear
+        # the stored flag.
+        agent_doc.update(_SUSP.resolve(agent_doc))
+
         # Normalize datetime fields to ISO format
         for dt_field in (
             "last_seen",
             "created_at",
             "last_heartbeat",
             "deleted_at",
+            "suspended_at",
+            "suspended_until",
         ):
             if dt_field in agent_doc and isinstance(agent_doc[dt_field], datetime):
                 dt_val = agent_doc[dt_field]
@@ -574,6 +597,8 @@ async def get_agent(
     if "capabilities" not in agent_doc:
         agent_doc["capabilities"] = {}
 
+    agent_doc.update(_SUSP.resolve(agent_doc))
+
     return Agent(**agent_doc)
 
 
@@ -706,6 +731,20 @@ async def agent_heartbeat(
             agent_id=agent_id,
         )
 
+    # A pause that has run out is already over everywhere it matters —
+    # ``_SUSP.resolve`` computes expiry on read, so nothing is enforcing it.
+    # Clear the stored flags here, on a write we were doing anyway, so the
+    # record stops advertising a suspension that no longer applies (a stale
+    # "paused by alice" on a live agent is the kind of thing an operator acts
+    # on). Only fires on the one heartbeat that crosses the deadline.
+    if previous.get("suspended") and not _SUSP.resolve(previous)["is_suspended"]:
+        await agents_collection.update_one(
+            {"_id": previous["_id"]}, {"$set": _SUSP.clear_update()}
+        )
+        _SUSP.invalidate(agent_id)
+        _SUSP.invalidate(previous.get("agent_id"))
+        logger.info("Agent suspension expired — resumed automatically", agent_id=agent_id)
+
     logger.debug("Agent heartbeat", agent_id=agent_id, timestamp=heartbeat_time.isoformat())
     return {
         "status": "success",
@@ -800,6 +839,176 @@ async def delete_agent(
 
     logger.info("Agent soft-deleted", agent_id=agent_id, user=actor)
     return None
+
+
+class AgentSuspendRequest(BaseModel):
+    """Pause an endpoint for a bounded window."""
+
+    duration_minutes: Optional[int] = Field(
+        None,
+        description=(
+            "How long to stay paused. Omit or send null to pause until an "
+            "admin explicitly resumes."
+        ),
+    )
+    reason: Optional[str] = Field(
+        None, max_length=500, description="Why — shown on the Agents page and written to the audit log"
+    )
+
+
+class AgentSuspendResponse(BaseModel):
+    agent_id: str
+    is_suspended: bool
+    suspended_until: Optional[datetime] = None
+    suspended_at: Optional[datetime] = None
+    suspended_by: Optional[str] = None
+    suspend_reason: Optional[str] = None
+    suspension_seconds_remaining: Optional[float] = None
+
+
+def _actor_email(current_user: Any) -> Optional[str]:
+    if isinstance(current_user, dict):
+        return current_user.get("email")
+    return getattr(current_user, "email", None)
+
+
+def _actor_id(current_user: Any) -> Any:
+    if isinstance(current_user, dict):
+        return current_user.get("id")
+    return getattr(current_user, "id", None)
+
+
+@router.post("/{agent_id}/suspend", response_model=AgentSuspendResponse)
+async def suspend_agent(
+    agent_id: str,
+    body: AgentSuspendRequest,
+    current_user: dict = Depends(require_role("admin")),
+) -> AgentSuspendResponse:
+    """
+    Temporarily switch an agent off (admin action — "Pause" in the UI).
+
+    While paused the endpoint receives an empty policy bundle and inert
+    channel policies, live evaluations return ``allow``, and its events are
+    discarded on arrival. See ``app.core.agent_suspension`` for why that
+    combination turns the agent off at the source rather than merely muting
+    it here.
+
+    The agent keeps heartbeating and stays listed, so the machine remains
+    visible while its protection is off — and picks the resume up on its
+    next poll without any push channel.
+
+    Distinct from DELETE: this is reversible, self-expiring, and does not
+    hide the agent.
+    """
+    duration = body.duration_minutes
+    if duration is not None:
+        if duration <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="duration_minutes must be a positive number of minutes (omit it to pause indefinitely)",
+            )
+        if duration > _SUSP.MAX_DURATION_MINUTES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"duration_minutes may not exceed {_SUSP.MAX_DURATION_MINUTES} "
+                    "(90 days). Remove the agent instead of pausing it for longer."
+                ),
+            )
+
+    db = get_mongodb()
+    agents_collection = db["agents"]
+    actor = _actor_email(current_user)
+
+    update = _SUSP.suspend_update(
+        duration_minutes=duration, actor=actor, reason=body.reason
+    )
+
+    # Match a rolled UUID too, so a reinstalled endpoint still carrying its old
+    # local id cannot slip out from under an active pause.
+    updated = await agents_collection.find_one_and_update(
+        {"$or": [{"agent_id": agent_id}, {"previous_agent_ids": agent_id}]},
+        {"$set": update},
+        return_document=_ReturnDocument.AFTER,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {agent_id} not found",
+        )
+
+    # Both ids: the caller may have addressed a rolled UUID, and the cache is
+    # keyed by whatever the agent actually sends.
+    _SUSP.invalidate(agent_id)
+    _SUSP.invalidate(updated.get("agent_id"))
+
+    try:
+        from app.services.audit_service import audit_log
+        await audit_log(
+            _actor_id(current_user),
+            "agent.suspend",
+            {
+                "agent_id": agent_id,
+                "duration_minutes": duration,
+                "suspended_until": update["suspended_until"].isoformat() if update["suspended_until"] else None,
+                "reason": update["suspend_reason"],
+            },
+        )
+    except Exception as e:  # noqa: BLE001 — never block the response on audit
+        logger.warning("Failed to record agent.suspend audit log", error=str(e))
+
+    state = _SUSP.resolve(updated)
+    logger.info(
+        "Agent suspended",
+        agent_id=agent_id,
+        duration_minutes=duration,
+        indefinite=duration is None,
+        user=actor,
+    )
+    return AgentSuspendResponse(agent_id=updated.get("agent_id", agent_id), **state)
+
+
+@router.post("/{agent_id}/resume", response_model=AgentSuspendResponse)
+async def resume_agent(
+    agent_id: str,
+    current_user: dict = Depends(require_role("admin")),
+) -> AgentSuspendResponse:
+    """
+    Lift a suspension early (admin action — "Resume" in the UI).
+
+    Idempotent: resuming an agent that is not paused, or whose pause has
+    already expired on its own, is a no-op that still returns 200. Clearing
+    an already-expired pause is worth doing — it tidies the stored flags so
+    the record matches what every read path already computes.
+    """
+    db = get_mongodb()
+    agents_collection = db["agents"]
+    actor = _actor_email(current_user)
+
+    updated = await agents_collection.find_one_and_update(
+        {"$or": [{"agent_id": agent_id}, {"previous_agent_ids": agent_id}]},
+        {"$set": _SUSP.clear_update()},
+        return_document=_ReturnDocument.AFTER,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {agent_id} not found",
+        )
+
+    _SUSP.invalidate(agent_id)
+    _SUSP.invalidate(updated.get("agent_id"))
+
+    try:
+        from app.services.audit_service import audit_log
+        await audit_log(_actor_id(current_user), "agent.resume", {"agent_id": agent_id})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to record agent.resume audit log", error=str(e))
+
+    logger.info("Agent resumed", agent_id=agent_id, user=actor)
+    return AgentSuspendResponse(
+        agent_id=updated.get("agent_id", agent_id), **_SUSP.resolve(updated)
+    )
 
 
 @router.post("/cleanup-stale", status_code=status.HTTP_200_OK)
@@ -985,6 +1194,53 @@ async def sync_agent_policies(
     capabilities = {k: bool(v) for k, v in capabilities.items()}
     capability_key = "-".join(sorted([k for k, v in capabilities.items() if v])) or "default"
 
+    # ── Paused endpoint: hand back an EMPTY bundle ───────────────────────────
+    #
+    # This is what actually switches the agent off, and it is worth being
+    # precise about why an empty bundle beats a "you are suspended" flag.
+    #
+    # The endpoint agent derives its own master monitoring switch from the
+    # bundle it was given: no file / clipboard / USB policies means it stops
+    # watching and stops emitting events entirely (``allowEvents`` in
+    # agent.cpp). So an empty bundle stops the work AT THE SOURCE instead of
+    # letting the endpoint keep scanning and discarding the results here. It
+    # also needs no agent-side support, so it governs binaries already
+    # deployed in the field, and the agent caches the bundle — a reboot part
+    # way through a pause comes back still paused.
+    #
+    # The version is a hash of the (empty) policy set, so it differs from the
+    # live bundle's version and the agent applies it; on resume the real
+    # version returns and the agent restores itself on its next sync. No
+    # special cases at either end.
+    #
+    # Cache is bypassed deliberately: a paused agent must neither read a
+    # populated bundle nor publish its empty one for anyone else.
+    if _SUSP.resolve(agent_doc)["is_suspended"]:
+        empty = _get_agent_policy_transformer().build_bundle(
+            [], platform, capabilities, agent_id=agent_id
+        )
+        empty_version = empty.get("version")
+        logger.info(
+            "Agent is suspended — issuing empty policy bundle",
+            agent_id=agent_id,
+            platform=platform,
+        )
+        if sync_request.installed_version and sync_request.installed_version == empty_version:
+            return AgentPolicySyncResponse(
+                status="up_to_date",
+                version=empty_version,
+                generated_at=datetime.now(timezone.utc),
+                policy_count=0,
+                policies={},
+            )
+        return AgentPolicySyncResponse(
+            status="updated",
+            version=empty_version,
+            generated_at=datetime.now(timezone.utc),
+            policy_count=0,
+            policies={},
+        )
+
     cache_service: Optional[CacheService] = None
     try:
         cache_service = CacheService(get_cache())
@@ -1168,6 +1424,22 @@ class PolicyEvaluationResponse(BaseModel):
     )
 
 
+# ── Inert responses for a paused endpoint ────────────────────────────────────
+#
+# Every channel policy the agent asks about already has an "off" shape — the
+# one it gets when no policy of that type exists. A paused agent is handed
+# exactly that shape, so it takes the code path it already takes on a fleet
+# with no policies configured. Nothing new has to be understood at the other
+# end, and there is no half-armed state where the agent thinks a control is
+# live but the server has stopped answering for it.
+#
+# These sit alongside the empty policy bundle in ``sync_agent_policies``, which
+# is what stops the agent doing the work at all. The guards here close the gap
+# between an admin clicking Pause and the agent's next sync, and cover any
+# caller that ignores its bundle.
+SUSPENDED_REASON = "Agent is suspended — monitoring and enforcement are paused"
+
+
 class DeviceAuthorizeRequest(BaseModel):
     """Device identity the agent reports when a USB storage device connects."""
     serial_number: Optional[str] = Field(None, description="USB serial number — the match key")
@@ -1272,6 +1544,17 @@ async def authorize_usb_device(
     to sanctioned devices.
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return DeviceAuthorizeResponse(
+            action="allow",
+            sanctioned=False,
+            enforced=False,
+            mode="off",
+            would_block=False,
+            reason=SUSPENDED_REASON,
+            serial_number=(request.serial_number or None),
+        )
     from sqlalchemy import select as _select
     from app.models.policy import Policy
     from app.models.sanctioned_usb_device import SanctionedUsbDevice
@@ -1408,6 +1691,15 @@ async def usb_allowlist(
     "audit" or not enforced -> do NOT block (monitor / log-only).
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return UsbAllowlistResponse(
+            enforced=False, mode="off", access_mode="read_write", read_only=False,
+            count=0, serials=[], manufacturers=[], device_ids=[], models=[], devices=[],
+            denied_serials=[], denied_manufacturers=[], denied_device_ids=[],
+            denied_models=[], denied_count=0,
+            generated_at=datetime.now(timezone.utc),
+        )
     from sqlalchemy import select as _select
     from app.models.policy import Policy
     from app.models.sanctioned_usb_device import SanctionedUsbDevice
@@ -1510,6 +1802,13 @@ async def printer_policy(
     separate, existing layer and is unaffected.
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return PrinterPolicyResponse(
+            enforced=False, mode="off", scope="none", printers=[], blocked_printers=[],
+            content_inspection=False, content_mode="off",
+            generated_at=datetime.now(timezone.utc),
+        )
     from sqlalchemy import select as _select, func
     from app.models.policy import Policy
     from app.models.sanctioned_printer import SanctionedPrinter
@@ -1615,6 +1914,13 @@ async def application_control(
     Requires X-Agent-Key (backward-compatible: no key -> allowed).
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return ApplicationControlResponse(
+            enforced=False, mode="off", applications=[], channels=[],
+            exception_applications=[], exception_users=[], exception_paths=[],
+            exception_file_types=[], generated_at=datetime.now(timezone.utc),
+        )
     from sqlalchemy import select as _select
     from app.models.policy import Policy
 
@@ -1682,6 +1988,13 @@ async def network_share_policy(
     (content_aware). Requires X-Agent-Key (backward-compatible: no key -> allowed).
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return NetworkSharePolicyResponse(
+            enforced=False, mode="off", action="audit", exception_shares=[],
+            exception_users=[], exception_paths=[], exception_file_types=[],
+            generated_at=datetime.now(timezone.utc),
+        )
     from sqlalchemy import select as _select
     from app.models.policy import Policy
 
@@ -1734,6 +2047,17 @@ class MessagingAppPolicyResponse(BaseModel):
     apps: List[str]                       # managed messaging exe names (lowercased)
     exception_users: List[str]            # users/groups exempt (lowercased)
     exempt_file_types: List[str]          # extensions never inspected (no leading dot)
+    # Typed chat text, which is a different surface from attachments: the agent
+    # holds the send keystroke, reads the composer through UI Automation and
+    # classifies it before releasing (see messaging_text_monitor.h).
+    #
+    # Defaults to FALSE — the one flag here that does not follow "on when a
+    # policy exists". Attachment control observes a file dialog; this one sits
+    # in front of the user's keyboard, and inheriting that silently from an
+    # existing policy is not a decision an operator should discover by feel.
+    # Combined with action="block" it is the only thing that ever withholds a
+    # keystroke; in alert mode the agent does not touch input at all.
+    inspect_messages: bool = False
     generated_at: datetime
 
 
@@ -1759,6 +2083,13 @@ async def messaging_app_policy(
     Requires X-Agent-Key (backward-compatible: no key -> allowed).
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return MessagingAppPolicyResponse(
+            enforced=False, action="alert", apps=[], exception_users=[],
+            exempt_file_types=[], inspect_messages=False,
+            generated_at=datetime.now(timezone.utc),
+        )
     from sqlalchemy import select as _select
     from app.models.policy import Policy
 
@@ -1773,7 +2104,7 @@ async def messaging_app_policy(
     if not policy:
         return MessagingAppPolicyResponse(
             enforced=False, action="alert", apps=[],
-            exception_users=[], exempt_file_types=[],
+            exception_users=[], exempt_file_types=[], inspect_messages=False,
             generated_at=datetime.now(timezone.utc),
         )
 
@@ -1788,6 +2119,7 @@ async def messaging_app_policy(
         enforced=True, action=action, apps=apps,
         exception_users=_lc_list(exc.get("users")),
         exempt_file_types=[str(t).strip().lower().lstrip(".") for t in (exc.get("file_types") or []) if str(t).strip()],
+        inspect_messages=bool(cfg.get("inspect_messages")),
         generated_at=datetime.now(timezone.utc),
     )
 
@@ -1818,6 +2150,13 @@ async def wireless_policy(
     Requires X-Agent-Key (backward-compatible: no key -> allowed).
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return WirelessPolicyResponse(
+            enforced=False, mode="off",
+            block_bluetooth_file_transfer=False, block_nearby_sharing=False,
+            generated_at=datetime.now(timezone.utc),
+        )
     from sqlalchemy import select as _select
     from app.models.policy import Policy
 
@@ -1889,6 +2228,17 @@ async def web_activity_policy(
     Requires X-Agent-Key (backward-compatible: no key -> allowed).
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        # An empty matrix is not "block nothing by omission" — the extension
+        # reads ``enforced``/``mode`` first and holds no gesture when off, so
+        # the browser stops feeling intercepted rather than silently failing
+        # open on a matrix it can't find a cell in.
+        return WebActivityPolicyResponse(
+            enforced=False, mode="off", matrix={}, app_overrides=[],
+            min_level=None, block_uninspectable=False, policy_names=[],
+            generated_at=datetime.now(timezone.utc),
+        )
     from sqlalchemy import select as _select
     from app.models.policy import Policy
 
@@ -2291,6 +2641,25 @@ async def evaluate_policy_realtime(
     This enables content-aware blocking based on sensitive data detection.
     """
     await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        # Allow WITHOUT classifying. Returning "allow" after a full inspection
+        # would still read the file, still run the classifier, and still leave
+        # the content in this process — none of which a paused endpoint should
+        # be paying for or exposing. should_log=False keeps the pause quiet:
+        # an operator who paused an endpoint does not want its traffic showing
+        # up as allowed-by-policy decisions.
+        return PolicyEvaluationResponse(
+            action="allow",
+            reason=SUSPENDED_REASON,
+            classification=ClassificationDetails(
+                level="Public", confidence=0.0, matched_rules=[], total_matches=0
+            ),
+            policies_triggered=[],
+            should_log=False,
+            extraction_status="readable",
+            extraction_kind="text",
+        )
 
     try:
         # 0. Resolve the text to classify. When the caller sends raw bytes we

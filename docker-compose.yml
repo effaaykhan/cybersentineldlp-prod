@@ -99,6 +99,12 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      # DEV target: skips the Cython + Nuitka compile entirely. The volume mount
+      # below shadows /app with live source anyway, so compiling here produced
+      # .so files nothing ever imported — minutes of build time thrown away on
+      # every rebuild. Production images are built from the default (last)
+      # target and are unaffected; see server/Dockerfile.
+      target: dev
     container_name: cybersentineldlp-manager
     networks:
       - cybersentinel-net
@@ -182,6 +188,9 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      # Same dev target as the manager — these share the image, so leaving them
+      # on the default target would re-trigger the compile the manager skipped.
+      target: dev
     container_name: cybersentineldlp-celery-worker
     networks:
       - cybersentinel-net
@@ -240,6 +249,9 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      # Same dev target as the manager — these share the image, so leaving them
+      # on the default target would re-trigger the compile the manager skipped.
+      target: dev
     container_name: cybersentineldlp-celery-beat
     networks:
       - cybersentinel-net

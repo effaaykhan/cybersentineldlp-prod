@@ -109,8 +109,11 @@ RUN find app -name '*.cpython-*.so' | while read -r so; do rm -f "${so%%.cpython
          find app -name '*.py' ! -name '__init__.py' >&2; exit 1; \
        fi
 
-# ─── Stage 3: minimal runtime image (compiled binaries only) ──────────
-FROM python:3.11-slim
+# ─── Stage 3: shared runtime base (deps only, no app code) ────────────
+# Split out so the dev and production images are the SAME environment and share
+# every cached layer — the only difference between them is which app tree gets
+# copied in on top.
+FROM python:3.11-slim AS runtime-base
 
 WORKDIR /app
 
@@ -132,6 +135,45 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
+EXPOSE 55100
+
+ENV UVICORN_WORKERS=${UVICORN_WORKERS:-4}
+ENV PORT=55100
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-55100} --workers ${UVICORN_WORKERS}"]
+
+# ─── Stage 3-dev (target: dev) — plain source, NO compile ─────────────
+# `docker compose build manager` on a dev box used to run the full Cython +
+# Nuitka pass, then docker-compose bind-mounted ./server over /app and shadowed
+# every .so it had just spent minutes producing. The compile was pure waste on
+# dev: nothing in the container ever imported the compiled modules.
+#
+# This target stops after the dependency stage, so a dev rebuild is
+# "pip layer from cache + copy the tree" — seconds, not minutes. Because Docker
+# only builds the stages a target actually depends on, `--target dev` never
+# enters the compiler stage at all.
+#
+# Source IS readable in this image, by design: it is a local development image
+# that never leaves the machine. The published image is the stage below, which
+# is built from the compiler stage and is the one source protection applies to.
+# CI keeps building the default (last) target, so releases are unaffected.
+FROM runtime-base AS dev
+
+COPY . /app
+
+RUN mkdir -p /app/logs /app/quarantine /app/ml/models \
+    && useradd -m -u 1000 dlpuser \
+    && chown -R dlpuser:dlpuser /app
+USER dlpuser
+
+# ─── Stage 4: minimal production image (compiled binaries only) ───────
+# LAST stage on purpose: `docker build` with no --target resolves here, so CI
+# and any plain build keep producing the compiled, source-free image.
+FROM runtime-base
+
 # Compiled application from the compiler stage. This is the ONLY place app code
 # enters the final image, and under app/ it is .so binaries plus the package
 # __init__.py import wiring — never the backend .py source.
@@ -150,13 +192,4 @@ RUN useradd -m -u 1000 dlpuser && \
     chown -R dlpuser:dlpuser /app
 USER dlpuser
 
-EXPOSE 55100
-
-ENV UVICORN_WORKERS=${UVICORN_WORKERS:-4}
-ENV PORT=55100
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
-
-# Run application (exec form so signals propagate correctly)
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-55100} --workers ${UVICORN_WORKERS}"]
+# EXPOSE / ENV / HEALTHCHECK / CMD are inherited from runtime-base.

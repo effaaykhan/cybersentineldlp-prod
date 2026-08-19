@@ -76,6 +76,13 @@ export default function Alerts() {
 
   // Filter and search alerts
   const filteredAlerts = alerts.filter((alert) => {
+    // Drop anything falsy before touching it. The counts above already guard
+    // this way; this filter did not, and with the default "all" filter and an
+    // empty search box BOTH conditions below short-circuit without reading
+    // `alert` — so a null would sail through to the render and blow up on
+    // `key={alert.id}`.
+    if (!alert) return false
+
     // Apply severity filter
     if (filter === 'high' && alert.severity !== 'high') return false
     if (filter === 'critical' && alert.severity !== 'critical') return false

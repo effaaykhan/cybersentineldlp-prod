@@ -43,6 +43,22 @@ export default function AlertDetailsModal({ alert, isOpen, onClose }: AlertDetai
     }
   }
 
+  // `alert` is null until a row is clicked, and everything below reads it
+  // directly. This guard is NOT redundant with <Modal open={isOpen}>: the
+  // header and footer are passed as JSX *props*, so React evaluates them —
+  // including `alert.id` — before Modal ever gets to look at `open`. Without
+  // this, the page threw "Cannot read properties of null (reading 'id')" on
+  // first paint and rendered nothing at all.
+  //
+  // It replaces the `if (!isOpen) return null` that guarded this component
+  // before the dialogs moved onto the shared overlay; moving `open` onto
+  // Modal dropped the guard that was also, incidentally, protecting the
+  // null `alert`. Keyed off `alert` rather than `isOpen` so it stays correct
+  // regardless of how the open state is driven.
+  //
+  // Placed after the hooks above so hook order stays stable across renders.
+  if (!alert) return null
+
   return (
     <Modal
       open={isOpen}

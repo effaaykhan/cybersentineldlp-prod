@@ -328,13 +328,13 @@ export default function Rules() {
                     </td>
                     <td>
                       <span className="text-sm num text-cs-ink-2">
-                        {rule.weight.toFixed(2)}
+                        {typeof rule.weight === 'number' ? rule.weight.toFixed(2) : '—'}
                       </span>
                     </td>
                     <td>
                       <div>
                         <div className="text-sm num font-medium text-cs-ink">
-                          {rule.match_count.toLocaleString()}
+                          {(rule.match_count ?? 0).toLocaleString()}
                         </div>
                         {rule.last_matched_at && (
                           <div className="text-xs num text-cs-muted">

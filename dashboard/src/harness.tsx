@@ -141,7 +141,7 @@ const MOCKS: Array<[RegExp, (url: string) => any]> = [
   ], 'devices')],
   [/\/printers/, () => page([{ id: 'pr1', name: 'HP LaserJet M404 (Reception)', port: 'IP_192.168.2.60', is_network: true, sanctioned: true }], 'printers')],
   [/\/rules\/stats|\/rules\/statistics/, () => ({ total: 24, enabled: 21, by_type: { regex: 14, keyword: 6, dictionary: 3, ml: 1 } })],
-  [/\/rules/, () => ([{ id: 'r1', name: 'Aadhaar number', pattern: '\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\b', classification: 'Restricted', enabled: true, priority: 100, description: 'Twelve-digit Indian identity number.', rule_type: 'regex', created_at: '2026-05-04T00:00:00Z' }])],
+  [/\/rules/, () => ([{ id: 'r1', name: 'Aadhaar number', pattern: '\\b\\d{4}\\s?\\d{4}\\s?\\d{4}\\b', classification: 'Restricted', enabled: true, priority: 100, description: 'Twelve-digit Indian identity number.', rule_type: 'regex', type: 'regex', weight: 0.9, threshold: 1, severity: 'critical', category: 'PII', match_count: 1284, created_at: '2026-05-04T00:00:00Z' }])],
   [/\/ml-classifier|\/ml\//, () => ({ model_version: '1.4.0', trained_at: '2026-07-30T04:00:00Z', accuracy: 0.94, classes: ['Public', 'Internal', 'Confidential', 'Restricted'], enabled: true })],
   [/\/data-matching|\/edm|\/fingerprint|\/sources/, () => ([{ id: 'dm1', name: 'Payroll roster', source_type: 'edm', kind: 'edm', classification: 'Restricted', record_count: 1840, records: 1840, enabled: true, created_at: '2026-06-01T00:00:00Z' }])],
   [/\/threat-intel|\/ioc|\/taxii/, () => page([{ id: 'ti1', indicator: 'evil.example.com', type: 'domain', source: 'internal', confidence: 80, added_at: '2026-08-10T00:00:00Z' }], 'indicators')],

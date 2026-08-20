@@ -2052,6 +2052,99 @@
     }
   },
   {
+    "name": "File Monitoring MacOS",
+    "description": "Watches the folders macOS users actually stage data in. Paths use ~ so they resolve per-user on any Mac (the agent expands them via expanduser; glob patterns like /Users/*/Documents are NOT supported and are silently rejected). Scoped by agent_ids to macOS endpoints only — add the agent_id of any newly enrolled Mac. Action is alert, not block.",
+    "enabled": true,
+    "priority": 110,
+    "type": "file_system_monitoring",
+    "severity": "medium",
+    "config": {
+      "monitoredPaths": [
+        "~/Documents",
+        "~/Desktop",
+        "~/Downloads"
+      ],
+      "events": {
+        "create": true,
+        "modify": true,
+        "delete": false,
+        "move": true
+      },
+      "patterns": {
+        "predefined": [
+          "credit_card",
+          "ssn",
+          "aadhaar",
+          "pan",
+          "api_key",
+          "private_key",
+          "aws_key",
+          "database_connection_string",
+          "api_key_in_code",
+          "source_code_content"
+        ],
+        "custom": []
+      },
+      "action": "alert",
+      "fileExtensions": [
+        ".txt",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".json",
+        ".env",
+        ".pem",
+        ".key"
+      ]
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "file_path",
+          "operator": "matches_any_prefix",
+          "value": [
+            "~/Documents",
+            "~/Desktop",
+            "~/Downloads"
+          ]
+        },
+        {
+          "field": "event_subtype",
+          "operator": "in",
+          "value": [
+            "file_created",
+            "file_modified",
+            "file_moved"
+          ]
+        },
+        {
+          "field": "file_extension",
+          "operator": "in",
+          "value": [
+            ".txt",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".csv",
+            ".json",
+            ".env",
+            ".pem",
+            ".key"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "alert": {}
+    }
+  },
+  {
     "name": "Block Sensitive Clipboard  MacOS",
     "description": "",
     "enabled": true,

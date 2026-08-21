@@ -87,7 +87,8 @@
         "telegram.exe",
         "slack.exe",
         "discord.exe",
-        "signal.exe"
+        "signal.exe",
+        "whatsapp.root.exe"
       ],
       "exceptions": {
         "users": [],

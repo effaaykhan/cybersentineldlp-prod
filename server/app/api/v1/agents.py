@@ -2070,8 +2070,18 @@ class MessagingAppPolicyResponse(BaseModel):
 
 # Built-in managed set used when a policy is active but names no apps of its own,
 # so the feature works out of the box. Mirrors the agent's fallback list.
+# whatsapp.root.exe is not a typo and not a duplicate. Current WhatsApp for
+# Windows is a WebView2 application: the window belongs to WhatsApp.Root.exe and
+# the UI renders inside msedgewebview2.exe. A machine running it has no
+# whatsapp.exe at all, so the old list silently covered nothing on exactly the
+# app most people name first. whatsapp.exe stays for older standalone builds.
+#
+# msedgewebview2.exe is deliberately NOT here: it hosts WebView2 content for many
+# unrelated applications, so listing it would make every one of them a managed
+# messaging app.
 _DEFAULT_MESSAGING_APPS = [
-    "teams.exe", "ms-teams.exe", "msteams.exe", "whatsapp.exe",
+    "teams.exe", "ms-teams.exe", "msteams.exe",
+    "whatsapp.exe", "whatsapp.root.exe",
     "telegram.exe", "slack.exe", "discord.exe", "signal.exe",
 ]
 

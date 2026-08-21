@@ -15,8 +15,11 @@ function fromList(list?: string[]): string {
   return (list || []).join(', ')
 }
 
+// whatsapp.root.exe is the current WhatsApp for Windows (a WebView2 app whose
+// window belongs to WhatsApp.Root.exe); whatsapp.exe covers older builds. Keep
+// in step with _DEFAULT_MESSAGING_APPS on the server.
 const DEFAULT_APPS =
-  'teams.exe, ms-teams.exe, whatsapp.exe, telegram.exe, slack.exe, discord.exe, signal.exe'
+  'teams.exe, ms-teams.exe, whatsapp.exe, whatsapp.root.exe, telegram.exe, slack.exe, discord.exe, signal.exe'
 
 // The detector types the endpoint classifier can report for a typed message,
 // strongest first. Mirrors NetworkExfilMonitor::KnownDataTypes() on the agent

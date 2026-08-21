@@ -2794,8 +2794,12 @@ if (!shouldBlock) {
              // Safety net: an enforced policy that names no apps falls back to the
              // built-in managed set, so the feature works even with a bare policy.
              if (enforced && apps.empty()) {
+                 // whatsapp.root.exe: current WhatsApp for Windows is a
+                 // WebView2 app whose window belongs to WhatsApp.Root.exe —
+                 // such a machine has no whatsapp.exe at all.
                  apps = {"teams.exe", "ms-teams.exe", "msteams.exe",
-                         "whatsapp.exe", "telegram.exe", "slack.exe",
+                         "whatsapp.exe", "whatsapp.root.exe",
+                         "telegram.exe", "slack.exe",
                          "discord.exe", "signal.exe"};
              }
              bool inspectMessages = JsonBoolTrue(response, "inspect_messages");

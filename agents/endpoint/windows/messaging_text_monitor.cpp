@@ -82,6 +82,21 @@ std::atomic<bool>      g_decisionResolved{true};
 std::atomic<long long> g_holdStartMs{0};
 std::atomic<bool>      g_holdCtrl{false};
 
+// Why an unmanaged app is worth a log line at all: the hook's silent exit for
+// "not one of ours" is correct behaviour and was also completely undebuggable.
+// When typed-message inspection appears to do nothing, the single most useful
+// fact is what the agent actually RESOLVED the foreground app to — a packaged
+// app seen through its frame host, a launcher, a webview host, or simply a name
+// the policy does not list. Without it the operator is left comparing an empty
+// log against a policy that looks correct, which is exactly where this landed.
+// Rate-limited hard, and published from the hook for the worker to write, so the
+// hook itself still does no I/O.
+std::mutex        g_probeMx;
+std::string       g_probeExe;
+bool              g_probeManaged = false;
+bool              g_probeReady   = false;
+std::atomic<long long> g_lastProbeMs{0};
+
 // Alert-mode composer snapshot (see the header: alert mode never holds input,
 // so the box is already empty by the time we get to look at it).
 std::mutex             g_snapMx;
@@ -386,11 +401,25 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid) {
     int editableSeen = 0;
 
     // 1. The focused element itself.
+    //
+    // The focused element routinely belongs to a DIFFERENT process than the
+    // window we resolved, and rejecting that outright threw away the only good
+    // signal in exactly the apps this module exists for. WhatsApp for Windows is
+    // a WebView2 app: the window belongs to WhatsApp.Root.exe and the composer
+    // the user is typing in belongs to msedgewebview2.exe. Electron, the new
+    // Teams and Outlook clients, and every other Chromium host are the same
+    // shape — the renderer is a separate process by design.
+    //
+    // A cross-process focus is therefore treated as unverified rather than
+    // wrong: it is still used, but only under the size cap, so the worst case is
+    // that a very large read is declined instead of a conversation being
+    // classified and shipped as evidence.
     IUIAutomationElement* focused = nullptr;
     if (SUCCEEDED(uia->GetFocusedElement(&focused)) && focused) {
         const DWORD fpid = ElementProcessId(focused);
-        if (pid == 0 || fpid == 0 || fpid == pid) {
-            const bool editable = ElementIsEditable(focused);
+        const bool sameProcess = (pid == 0 || fpid == 0 || fpid == pid);
+        {
+            const bool editable = ElementIsEditable(focused) && sameProcess;
             if (editable) ++editableSeen;
             std::string t = TextFromElement(focused);
             // Focus is the strongest evidence there is that this is the box the
@@ -404,7 +433,9 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid) {
                 focused->Release();
                 r.status = ReadStatus::Ok;
                 r.text   = t;
-                r.source = editable ? "focused" : "focused-unverified";
+                r.source = editable ? "focused"
+                                    : (sameProcess ? "focused-unverified"
+                                                   : "focused-crossprocess");
                 return r;
             }
             // 2. Focus may sit on a wrapper rather than the editable node.
@@ -754,15 +785,31 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
     std::string text = TrimText(read.text);
     std::string via  = read.source;
 
+    // Why the snapshot age is reported even when it was not needed: alert mode
+    // is the mode an operator switches to FIRST, to see whether any of this
+    // works before they let it touch anything. If its only visible output is an
+    // event, then "no event" means both "nothing sensitive was sent" and "this
+    // never read a single message", and there is no way to tell those apart
+    // from a dashboard. Every path below therefore says what it did.
+    std::string snapshotNote = "no snapshot";
     if (text.empty()) {
         std::lock_guard<std::mutex> lk(g_snapMx);
-        if (g_snapPid == pid && !g_snapText.empty() &&
-            NowSteadyMs() - g_snapAtMs <= 5000) {
+        const long long age = g_snapAtMs ? (NowSteadyMs() - g_snapAtMs) : -1;
+        if (g_snapPid == pid && !g_snapText.empty() && age >= 0 && age <= 5000) {
             text = TrimText(g_snapText);
             via  = "sampled";
+            snapshotNote = "snapshot " + std::to_string(age) + "ms old";
+        } else if (!g_snapText.empty()) {
+            snapshotNote = (g_snapPid != pid)
+                ? "snapshot belongs to another process"
+                : "snapshot too old (" + std::to_string(age) + "ms)";
         }
     }
     if (text.empty()) {
+        LogDbg("alert: nothing to inspect in " + exe + " (" +
+               (read.status == ReadStatus::NoComposer ? "no editable node"
+                                                      : "empty box") +
+               ", " + snapshotNote + ")");
         if (read.status == ReadStatus::NoComposer) ReportUninspectable(exe, pid);
         return;
     }
@@ -772,7 +819,10 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
     {
         const long long now = NowSteadyMs();
         std::lock_guard<std::mutex> lk(g_snapMx);
-        if (text == g_lastAuditText && now - g_lastAuditMs < 10000) return;
+        if (text == g_lastAuditText && now - g_lastAuditMs < 10000) {
+            LogDbg("alert: same text already reported for " + exe + " — suppressed");
+            return;
+        }
         g_lastAuditText = text;
         g_lastAuditMs   = now;
     }
@@ -780,7 +830,20 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
     NetworkExfilMonitor::ClassifyResult raw;
     try { raw = g_cfg.classify(text, "messaging_message"); } catch (...) {}
     const NetworkExfilMonitor::ClassifyResult cls = RestrictToTypes(raw, types);
-    if (!IsSensitive(cls)) return;
+    if (!IsSensitive(cls)) {
+        // The selected-types filter is the difference an operator most often
+        // needs to see: the classifier found something, and the policy said it
+        // did not count here.
+        std::string dropped;
+        if (!raw.labels.empty() && cls.labels.empty()) {
+            dropped = " (classifier saw [" + DescribeLabels(raw) +
+                      "], none of them selected in this policy)";
+        }
+        LogDbg("alert: message clean in " + exe + " via " + via + " — " +
+               (cls.category.empty() ? std::string("unclassified") : cls.category) +
+               dropped);
+        return;
+    }
 
     const std::string what = DescribeLabels(cls);
     const std::string severity = (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
@@ -817,6 +880,32 @@ void WorkerThread() {
             g_cv.wait_for(lk, std::chrono::milliseconds(200),
                           [] { return g_pendingWork || g_stop.load(); });
             if (g_stop.load()) break;
+        }
+        {
+            std::string probeExe;
+            bool        probeManaged = false;
+            {
+                std::lock_guard<std::mutex> lk(g_probeMx);
+                if (g_probeReady) {
+                    probeExe     = g_probeExe;
+                    probeManaged = g_probeManaged;
+                    g_probeReady = false;
+                }
+            }
+            if (!probeExe.empty()) {
+                if (probeManaged) {
+                    LogInfo("send key pressed in " + probeExe +
+                            " — it IS a managed app, but typed-message inspection is off "
+                            "for it (tick \"Also inspect typed messages\" on the policy)");
+                } else {
+                    LogInfo("send key pressed in " + probeExe +
+                            " — NOT in the policy's managed app list, so it is being ignored. "
+                            "If this is the app you meant, add " + probeExe + " to it.");
+                }
+            }
+        }
+        {
+            std::unique_lock<std::mutex> lk(g_mx);
             if (!g_pendingWork) continue;
             wnd   = g_pendingWnd;
             pid   = g_pendingPid;
@@ -949,6 +1038,18 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
         try { mv = g_cfg.messagingPolicy(t.exe, g_cfg.username); } catch (...) {}
     }
     if (!mv.managed || !mv.inspectMessages) {
+        const long long now = NowSteadyMs();
+        const long long last = g_lastProbeMs.load();
+        if (last == 0 || now - last > 30000) {
+            g_lastProbeMs.store(now);
+            {
+                std::lock_guard<std::mutex> lk(g_probeMx);
+                g_probeExe     = t.exe;
+                g_probeManaged = mv.managed;
+                g_probeReady   = true;
+            }
+            g_cv.notify_one();
+        }
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
 

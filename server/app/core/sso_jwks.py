@@ -33,6 +33,7 @@ refused, never accepted unverified.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -85,7 +86,28 @@ def reset_cache() -> None:
 async def _fetch(url: str) -> List[Dict[str, Any]]:
     import httpx
 
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+    # TLS verification is never disabled here, only re-pointed. See
+    # SIEM_JWKS_CA_BUNDLE in config for why: this document is the trust anchor
+    # for every RS256 login, so whoever can spoof this response can mint SSO
+    # tokens the DLP will accept.
+    from app.core.config import settings
+
+    ca_bundle = (getattr(settings, "SIEM_JWKS_CA_BUNDLE", "") or "").strip()
+    verify: Any = True
+    if ca_bundle:
+        if os.path.isfile(ca_bundle):
+            verify = ca_bundle
+        else:
+            # Failing closed on a misconfigured path is deliberate: falling back
+            # to the system store would silently restore the very failure the
+            # operator set this to fix, and they would not find out until an
+            # attacker did.
+            raise JWKSUnavailable(
+                f"SIEM_JWKS_CA_BUNDLE points at {ca_bundle}, which does not exist "
+                "inside the container — check the volume mount"
+            )
+
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, verify=verify) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         body = resp.json()

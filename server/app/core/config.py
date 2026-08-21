@@ -57,6 +57,26 @@ class Settings(BaseSettings):
     # retire symmetric signing entirely, clear DLP_SSO_SECRET — HS256 tokens
     # are then rejected outright rather than quietly still accepted.
     SIEM_JWKS_URL: str = Field(default="")
+    # PEM used to verify the JWKS host's TLS certificate. Empty = the system
+    # trust store, which is right for a publicly-issued certificate.
+    #
+    # A SIEM on an internal network usually presents a self-signed certificate,
+    # and the fetch then fails closed — correctly. It is worth being explicit
+    # about why the obvious shortcut is not offered here: the JWKS IS the trust
+    # anchor for every RS256 login. Skipping verification does not merely
+    # silence a warning, it means anyone who can answer for that address serves
+    # their own public key and thereafter mints SSO tokens the DLP accepts as
+    # genuine — turning "needs the SIEM's private key" into "needs to be on the
+    # network path". So the escape hatch is a pinned certificate, not a
+    # disabled check.
+    #
+    # Point this at the SIEM's own certificate (a self-signed leaf works: it is
+    # its own issuer) or at the CA that signed it. The certificate must still
+    # match the host in SIEM_JWKS_URL, so it needs that name or IP in its SAN.
+    # Trade-off worth knowing: the DLP now stops trusting the SIEM when that
+    # certificate is rotated. That is the point — but put its expiry in a
+    # calendar, because the failure mode is "SSO stopped working".
+    SIEM_JWKS_CA_BUNDLE: str = Field(default="")
     # How long a fetched JWKS is trusted before refetching. A token whose kid
     # is not in the cache forces one early refetch (rate-limited), so a key
     # rotation is picked up in seconds rather than at the end of this window.

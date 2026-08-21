@@ -147,6 +147,7 @@ services:
       # DLP_SSO_SECRET. Clear DLP_SSO_SECRET to finish the cutover and refuse
       # symmetric tokens outright.
       - SIEM_JWKS_URL=${SIEM_JWKS_URL:-}
+      - SIEM_JWKS_CA_BUNDLE=${SIEM_JWKS_CA_BUNDLE:-}
       - SSO_JWKS_CACHE_SECONDS=${SSO_JWKS_CACHE_SECONDS:-600}
       # Audience the exchange token must be addressed to. Mandatory on RS256;
       # on HS256 checked only when the token carries the claim.
@@ -181,6 +182,11 @@ services:
     volumes:
       - ./server:/app
       - ./config:/etc/cybersentinel
+      # Trust anchors for outbound TLS the DLP initiates — today the SIEM's JWKS
+      # host, which on an internal network is usually self-signed. Same
+      # container path in dev and prod on purpose, so SIEM_JWKS_CA_BUNDLE is one
+      # value that is copied between servers unchanged.
+      - ./certs:/etc/cybersentineldlp/certs:ro
       - ./ml/models:/app/ml/models
       - ./quarantine:/app/quarantine
       - manager_logs:/var/log/cybersentinel

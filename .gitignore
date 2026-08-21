@@ -291,3 +291,10 @@ update-summary.md
 # automatically. The blanket *.pem rule above covers it if it is ever copied in.
 !server/extension_dist/
 !server/extension_dist/**
+
+# Trust anchors for outbound TLS (see certs/README.md). The mechanism is shared
+# across servers; the certificates are not — each deployment pins its own SIEM.
+# Certificates are public and safe to commit, but committing one ships a trust
+# anchor for somebody else's host to every deployment that pulls this repo.
+certs/*
+!certs/README.md

@@ -18,10 +18,47 @@ function fromList(list?: string[]): string {
 const DEFAULT_APPS =
   'teams.exe, ms-teams.exe, whatsapp.exe, telegram.exe, slack.exe, discord.exe, signal.exe'
 
+// The detector types the endpoint classifier can report for a typed message,
+// strongest first. Mirrors NetworkExfilMonitor::KnownDataTypes() on the agent
+// and _MESSAGING_DATA_TYPES on the server; all three lists have to agree.
+const MESSAGE_DATA_TYPES: { id: string; name: string; example: string }[] = [
+  { id: 'CREDIT_CARD',     name: 'Credit card',       example: '4111 1111 1111 1111 (Luhn-checked)' },
+  { id: 'AADHAAR',         name: 'Aadhaar',           example: '1234 5678 9012' },
+  { id: 'PAN',             name: 'PAN',               example: 'ABCDE1234F' },
+  { id: 'SSN',             name: 'US SSN',            example: '123-45-6789' },
+  { id: 'INDIAN_PASSPORT', name: 'Indian passport',   example: 'A1234567' },
+  { id: 'AWS_KEY',         name: 'AWS access key',    example: 'AKIA…' },
+  { id: 'PRIVATE_KEY',     name: 'Private key',       example: '-----BEGIN PRIVATE KEY-----' },
+  { id: 'JWT_TOKEN',       name: 'JWT / bearer token', example: 'eyJhbGciOi…' },
+  { id: 'IFSC',            name: 'IFSC code',         example: 'HDFC0001234' },
+  { id: 'UPI_ID',          name: 'UPI ID',            example: 'name@okhdfcbank' },
+  { id: 'INDIAN_PHONE',    name: 'Indian mobile',     example: '+91 98765 43210' },
+]
+
+// Matches the server's _DEFAULT_MESSAGE_DATA_TYPES. A phone number is the most
+// ordinary thing anyone sends over a chat app, so it starts unticked; an
+// operator who wants it can say so.
+const DEFAULT_MESSAGE_DATA_TYPES = MESSAGE_DATA_TYPES
+  .map((t) => t.id)
+  .filter((id) => id !== 'INDIAN_PHONE')
+
 export default function MessagingAppControlForm({ config, onChange }: Props) {
   const action = config.action || 'alert'
   const inspectMessages = !!config.inspect_messages
   const exceptions = config.exceptions || {}
+
+  // Undefined means "never chosen" and takes the same default the server
+  // applies; an explicit [] is a real choice and stays empty.
+  const dataTypes = config.message_data_types ?? DEFAULT_MESSAGE_DATA_TYPES
+  const allSelected = dataTypes.length === MESSAGE_DATA_TYPES.length
+
+  const toggleDataType = (id: string) =>
+    onChange({
+      ...config,
+      message_data_types: dataTypes.includes(id)
+        ? dataTypes.filter((t) => t !== id)
+        : [...dataTypes, id],
+    })
 
   const setExc = (key: keyof NonNullable<MessagingAppControlConfig['exceptions']>, value: string) =>
     onChange({ ...config, exceptions: { ...exceptions, [key]: toList(value) } })
@@ -60,12 +97,83 @@ export default function MessagingAppControlForm({ config, onChange }: Props) {
                 <AlertTriangle className="h-4 w-4 shrink-0 mt-px" />
                 <span>
                   Set the action to <strong>Block</strong> below for this to stop anything. On
-                  Alert the agent never touches the keyboard, so messages are recorded but still sent.
+                  Alert the agent never touches the keyboard: it samples the message box while the
+                  app is in front and records what was sent, so a message typed and sent inside the
+                  same half-second can be missed. Block reads the box at the moment of sending and
+                  has no such gap.
                 </span>
               </p>
             )}
           </div>
         </label>
+
+        {/* Which detections count. Separate from the attachment path on purpose:
+            the same finding means different things in a file and in a chat box. */}
+        {inspectMessages && (
+          <div className="mt-4 border-t border-cs-hair pt-4">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <label className="text-sm font-semibold text-cs-ink">
+                Data types that make a message sensitive
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({
+                    ...config,
+                    message_data_types: allSelected ? [] : MESSAGE_DATA_TYPES.map((t) => t.id),
+                  })
+                }
+                className="text-xs font-medium text-cs-indigo hover:underline shrink-0"
+              >
+                {allSelected ? 'Clear all' : 'Select all'}
+              </button>
+            </div>
+            <p className="text-xs text-cs-muted mb-3">
+              Applies to typed messages only — attachments keep the blanket
+              Confidential / Restricted rule. <strong>Indian mobile</strong> is off by default:
+              a phone number is the most ordinary thing anyone sends over a chat app, and
+              blocking on it stops most normal conversation.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {MESSAGE_DATA_TYPES.map((t) => {
+                const isSelected = dataTypes.includes(t.id)
+                return (
+                  <div
+                    key={t.id}
+                    onClick={() => toggleDataType(t.id)}
+                    className={`p-3 rounded-cs-sm border-2 cursor-pointer transition-all ${
+                      isSelected
+                        ? 'border-cs-indigo bg-cs-indigo-faint'
+                        : 'border-cs-hair bg-cs-panel-2 hover:border-cs-hair-2'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        readOnly
+                        className="mt-1 h-4 w-4 shrink-0 accent-[var(--cs-indigo)]"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm text-cs-ink">{t.name}</div>
+                        <div className="text-xs mt-1 font-mono text-cs-muted truncate">{t.example}</div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {dataTypes.length === 0 && (
+              <p className="mt-2 flex items-start gap-1.5 text-xs text-cs-high">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-px" />
+                <span>
+                  Nothing selected — typed-message inspection is off. Attachment control is
+                  unaffected and still applies.
+                </span>
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Remaining gaps, stated plainly. An operator who believes a control covers

@@ -1910,6 +1910,21 @@ int NxTypeSeverity(const std::string& type) {   // 0=Public, 3=Restricted
 
 } // anonymous namespace
 
+// Public wrappers over the private severity table. Kept as thin forwards so
+// there is exactly one place where "how sensitive is an AADHAAR" is written
+// down; a second copy would be wrong within a release.
+int TypeSeverity(const std::string& type) { return NxTypeSeverity(type); }
+
+std::vector<std::string> KnownDataTypes() {
+    // Strongest first — the order the dashboard lists them in.
+    return {
+        "CREDIT_CARD", "AADHAAR", "PAN", "SSN", "INDIAN_PASSPORT",
+        "AWS_KEY", "PRIVATE_KEY",
+        "JWT_TOKEN", "IFSC", "UPI_ID", "INDIAN_PHONE",
+        "US_PHONE", "EMAIL",
+    };
+}
+
 ClassifyResult ClassifyNetworkContent(const std::string& content) {
     ClassifyResult out;
     std::vector<NxItem> items = NxDetectAll(content);

@@ -123,8 +123,16 @@ export interface MessagingAppControlConfig {
   // send keystroke, reads the composer and classifies it before releasing.
   // Off unless explicitly turned on: attachment control watches a file dialog,
   // this sits in front of the keyboard, and that is a separate decision.
-  // Only takes effect together with action: 'block'.
+  // Enforcement (holding the send keystroke) additionally requires action:
+  // 'block'; on 'alert' the agent samples the composer and records what was
+  // sent without ever touching the keyboard.
   inspect_messages?: boolean
+  // Which detector types make a typed message sensitive, e.g. ['CREDIT_CARD',
+  // 'AADHAAR']. Undefined = the server's default, which is every type except
+  // INDIAN_PHONE — a phone number is the most ordinary thing anyone sends over
+  // a chat app, and treating it as a leak by default trains users to see the
+  // agent as broken. Attachments are unaffected and keep the blanket rule.
+  message_data_types?: string[]
 }
 
 export interface WirelessTransferControlConfig {

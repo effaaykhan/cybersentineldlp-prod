@@ -34,9 +34,11 @@
 #include <chrono>
 #include <string>
 #include <vector>
+#include <map>
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cwchar>
 
 namespace MessagingTextMonitor {
 namespace {
@@ -49,24 +51,59 @@ HHOOK       g_hook       = nullptr;
 DWORD       g_hookThread = 0;
 std::thread g_hookThreadObj;
 std::thread g_workerObj;
+std::thread g_samplerObj;
+std::thread g_watchdogObj;
 
 // ── Hook -> worker handoff ────────────────────────────────────────────────
 // The hook must never block, so it publishes the bare facts and wakes the
-// worker. One pending send at a time: a second Enter while a decision is in
+// worker. One pending item at a time: a second Enter while a decision is in
 // flight is passed straight through rather than queued, because queueing
 // keystrokes is how you end up delivering them in the wrong order.
 std::mutex              g_mx;
 std::condition_variable g_cv;
-bool                    g_pendingWork = false;
-HWND                    g_pendingWnd  = nullptr;
-DWORD                   g_pendingPid  = 0;
-bool                    g_pendingCtrl = false;
+bool                    g_pendingWork  = false;
+bool                    g_pendingAudit = false;   // alert mode: nothing was held
+HWND                    g_pendingWnd   = nullptr;
+DWORD                   g_pendingPid   = 0;
+bool                    g_pendingCtrl  = false;
+std::vector<std::string> g_pendingTypes;          // operator-selected detector types
 
 // True from the moment we swallow the Enter keydown until the decision is made.
 // Read by the hook to also swallow the matching keyup (an app that sees a keyup
 // with no keydown is not harmed, but it is untidy and some Electron composers
 // do watch for it).
 std::atomic<bool> g_decisionPending{false};
+
+// The held keystroke is resolved exactly once, by whichever of the worker and
+// the watchdog claims it first. Two releases would send the message twice; a
+// release after a deliberate drop would send the message the policy just
+// blocked. `true` is the resting state — nothing is held.
+std::atomic<bool>      g_decisionResolved{true};
+std::atomic<long long> g_holdStartMs{0};
+std::atomic<bool>      g_holdCtrl{false};
+
+// Alert-mode composer snapshot (see the header: alert mode never holds input,
+// so the box is already empty by the time we get to look at it).
+std::mutex             g_snapMx;
+std::string            g_snapText;
+DWORD                  g_snapPid   = 0;
+long long              g_snapAtMs  = 0;
+
+// Alert mode fires on every Enter, including the ones that resend the same
+// text; an operator does not need the same message five times.
+std::string            g_lastAuditText;
+long long              g_lastAuditMs = 0;
+
+// "UI Automation cannot see this app's composer" is a deployment fact worth
+// reporting once — it is how you discover a build of WhatsApp this cannot read
+// — but not something to raise on every Enter.
+std::mutex                       g_uninspectableMx;
+std::map<std::string, long long> g_uninspectableAt;
+
+long long NowSteadyMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 
 void LogMsg(const char* level, const std::string& m) {
     if (g_cfg.log) { try { g_cfg.log(level, "MessagingText: " + m); } catch (...) {} }
@@ -81,12 +118,20 @@ std::string ToLowerAscii(std::string s) {
     return s;
 }
 
+bool EqualsIgnoreCase(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i])) return false;
+    }
+    return true;
+}
+
 std::string WideToUtf8(const wchar_t* w) {
     if (!w) return {};
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
     if (n <= 1) return {};
     std::string out((size_t)n - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w, -1, out.data(), n, nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], n, nullptr, nullptr);
     return out;
 }
 
@@ -106,6 +151,73 @@ std::string ProcessExeName(DWORD pid) {
     return ToLowerAscii(out);
 }
 
+// ── Which app is the user actually typing into ────────────────────────────
+//
+// A packaged (MSIX/UWP) app does not own its top-level window: the foreground
+// HWND is an ApplicationFrameWindow owned by ApplicationFrameHost.exe, and the
+// app itself owns a child CoreWindow. Resolving the process from the foreground
+// window alone therefore reports the frame host, which is in no managed-app
+// list, and the whole module quietly does nothing for exactly the apps most
+// likely to be managed — the Store build of WhatsApp among them.
+//
+// The rule is simple and does not depend on knowing which apps are packaged:
+// if the foreground window belongs to the frame host, the real app is the child
+// window that belongs to somebody else.
+
+struct TargetApp {
+    HWND        wnd = nullptr;   // the window UI Automation should read from
+    DWORD       pid = 0;
+    std::string exe;             // lowercased image name
+};
+
+struct ChildProbe {
+    DWORD framePid = 0;
+    DWORD pid      = 0;
+    HWND  wnd      = nullptr;
+};
+
+BOOL CALLBACK FrameChildProc(HWND h, LPARAM lp) {
+    ChildProbe* p = (ChildProbe*)lp;
+    DWORD cpid = 0;
+    GetWindowThreadProcessId(h, &cpid);
+    if (!cpid || cpid == p->framePid) return TRUE;   // frame chrome, keep looking
+
+    wchar_t cls[128] = {0};
+    GetClassNameW(h, cls, 128);
+    if (wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0) {
+        p->pid = cpid; p->wnd = h;
+        return FALSE;                                 // the app itself — done
+    }
+    if (!p->pid) { p->pid = cpid; p->wnd = h; }       // fallback candidate
+    return TRUE;
+}
+
+TargetApp ResolveApp(HWND fg) {
+    TargetApp t;
+    if (!fg) return t;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (!pid || pid == GetCurrentProcessId()) return t;
+
+    t.wnd = fg;
+    t.pid = pid;
+    t.exe = ProcessExeName(pid);
+
+    if (t.exe == "applicationframehost.exe") {
+        ChildProbe p;
+        p.framePid = pid;
+        EnumChildWindows(fg, FrameChildProc, (LPARAM)&p);
+        if (p.pid) {
+            t.pid = p.pid;
+            t.wnd = p.wnd ? p.wnd : fg;
+            t.exe = ProcessExeName(p.pid);
+        }
+    }
+    return t;
+}
+
+TargetApp ResolveForegroundApp() { return ResolveApp(GetForegroundWindow()); }
+
 // ── Reading the composer ──────────────────────────────────────────────────
 
 // mingw's import libraries carry only PART of the UI Automation IID set:
@@ -124,6 +236,44 @@ std::string ProcessExeName(DWORD pid) {
 //                 0x9c,0x59, 0x3b,0x6d,0x9a,0x1e,0x9b,0x6a);
 static const GUID kIID_IUIAutomationTextPattern =
     { 0x32eba289, 0x3583, 0x42c9, { 0x9c, 0x59, 0x3b, 0x6d, 0x9a, 0x1e, 0x9b, 0x6a } };
+
+bool BoolProperty(IUIAutomationElement* el, PROPERTYID prop, bool& value) {
+    if (!el) return false;
+    VARIANT v; VariantInit(&v);
+    bool got = false;
+    if (SUCCEEDED(el->GetCurrentPropertyValue(prop, &v)) && v.vt == VT_BOOL) {
+        value = (v.boolVal == VARIANT_TRUE);
+        got = true;
+    }
+    VariantClear(&v);
+    return got;
+}
+
+DWORD ElementProcessId(IUIAutomationElement* el) {
+    if (!el) return 0;
+    int pid = 0;
+    if (SUCCEEDED(el->get_CurrentProcessId(&pid)) && pid > 0) return (DWORD)pid;
+    return 0;
+}
+
+// "Can the user type here?" — the one question that separates a composer from
+// the conversation above it. In a WebView2/Chromium app the chat history is a
+// Document node exactly like the composer is, and it is READ-ONLY; that is the
+// only reliable difference between them.
+bool ElementIsEditable(IUIAutomationElement* el) {
+    bool readOnly = false;
+    if (BoolProperty(el, UIA_ValueIsReadOnlyPropertyId, readOnly)) return !readOnly;
+    // No Value pattern at all — common for a contenteditable div. Fall back to
+    // "the caret can go here", which the history pane does not offer.
+    bool focusable = false;
+    if (BoolProperty(el, UIA_IsKeyboardFocusablePropertyId, focusable)) return focusable;
+    return false;
+}
+
+bool ElementHasFocus(IUIAutomationElement* el) {
+    bool focused = false;
+    return BoolProperty(el, UIA_HasKeyboardFocusPropertyId, focused) && focused;
+}
 
 // Pull text out of one element: ValuePattern for a plain edit, TextPattern for
 // the rich/contenteditable composers that Electron and WinUI apps actually use.
@@ -168,53 +318,135 @@ std::string TextFromElement(IUIAutomationElement* el) {
     return out;
 }
 
-// The box the user is typing in is the focused element — true by construction,
-// since they just pressed Enter into it. Falling back to a descendant sweep
-// covers apps that put focus on a wrapper rather than the editable node itself.
-std::string ReadComposerText(IUIAutomation* uia, HWND wnd) {
-    if (!uia) return {};
+enum class ReadStatus {
+    Ok,          // we read the composer
+    EmptyBox,    // we found the composer; there was nothing in it
+    NoComposer,  // UI Automation showed us no editable node at all
+};
 
-    IUIAutomationElement* focused = nullptr;
-    if (SUCCEEDED(uia->GetFocusedElement(&focused)) && focused) {
-        std::string t = TextFromElement(focused);
-        focused->Release();
-        if (!t.empty()) return t;
-    }
+struct ComposerRead {
+    ReadStatus  status = ReadStatus::NoComposer;
+    std::string text;
+    std::string source;   // for the log: which strategy found it
+};
 
-    if (!wnd) return {};
-    IUIAutomationElement* root = nullptr;
-    if (FAILED(uia->ElementFromHandle(wnd, &root)) || !root) return {};
+struct Candidate {
+    std::string text;
+    bool        focused = false;
+};
 
-    // Edit and Document are what every composer we care about reports as.
-    std::string best;
+// Every editable Edit/Document node under `root`. `sizeCap` of 0 means no cap;
+// a non-zero cap discards anything larger, which is how the window-wide sweep
+// avoids swallowing a conversation.
+void CollectEditable(IUIAutomation* uia, IUIAutomationElement* root, size_t sizeCap,
+                     std::vector<Candidate>& out, int& editableSeen) {
+    if (!uia || !root) return;
     for (int controlType : { UIA_EditControlTypeId, UIA_DocumentControlTypeId }) {
         IUIAutomationCondition* cond = nullptr;
         VARIANT v; VariantInit(&v);
         v.vt = VT_I4; v.lVal = controlType;
         if (FAILED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, v, &cond)) || !cond) {
+            VariantClear(&v);
             continue;
         }
+        VariantClear(&v);
         IUIAutomationElementArray* arr = nullptr;
         root->FindAll(TreeScope_Descendants, cond, &arr);
         if (arr) {
             int n = 0; arr->get_Length(&n);
-            for (int i = 0; i < n && best.empty(); ++i) {
+            for (int i = 0; i < n; ++i) {
                 IUIAutomationElement* el = nullptr;
                 arr->GetElement(i, &el);
                 if (!el) continue;
-                std::string t = TextFromElement(el);
-                // Longest wins: a chat window also contains the message history,
-                // but the history is not an Edit/Document the user can type into,
-                // and where it is, the composer is the one with focus above.
-                if (t.size() > best.size()) best = t;
+                if (ElementIsEditable(el)) {
+                    ++editableSeen;
+                    std::string t = TextFromElement(el);
+                    if (!t.empty() && (sizeCap == 0 || t.size() <= sizeCap)) {
+                        out.push_back({ t, ElementHasFocus(el) });
+                    }
+                }
                 el->Release();
             }
             arr->Release();
         }
         cond->Release();
     }
-    root->Release();
-    return best;
+}
+
+// The box the user is typing in is the focused element — true by construction,
+// since they just pressed Enter into it. Everything here is anchored on that
+// fact. Deliberately NOT "the longest Edit/Document in the window": in a
+// WebView2/Chromium app the longest one is the chat history, and picking it
+// blocks every send on something said last month while shipping the whole
+// conversation off the endpoint as evidence.
+ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid) {
+    ComposerRead r;
+    if (!uia) return r;
+
+    int editableSeen = 0;
+
+    // 1. The focused element itself.
+    IUIAutomationElement* focused = nullptr;
+    if (SUCCEEDED(uia->GetFocusedElement(&focused)) && focused) {
+        const DWORD fpid = ElementProcessId(focused);
+        if (pid == 0 || fpid == 0 || fpid == pid) {
+            const bool editable = ElementIsEditable(focused);
+            if (editable) ++editableSeen;
+            std::string t = TextFromElement(focused);
+            // Focus is the strongest evidence there is that this is the box the
+            // user is typing in, so a focused node is trusted even when its
+            // editability cannot be established — a web composer that reports
+            // neither a Value pattern nor keyboard-focusability would otherwise
+            // fail inspection open, which is the bug this module exists to fix.
+            // The one shape never accepted on that basis is unverifiable AND the
+            // size of a conversation, because that is what a chat history is.
+            if (!t.empty() && (editable || t.size() <= g_cfg.maxFallbackTextBytes)) {
+                focused->Release();
+                r.status = ReadStatus::Ok;
+                r.text   = t;
+                r.source = editable ? "focused" : "focused-unverified";
+                return r;
+            }
+            // 2. Focus may sit on a wrapper rather than the editable node.
+            //    Search ITS subtree, which is still nowhere near the history.
+            std::vector<Candidate> cands;
+            CollectEditable(uia, focused, 0, cands, editableSeen);
+            if (!cands.empty()) {
+                const Candidate* pick = &cands[0];
+                for (const auto& c : cands) if (c.focused) { pick = &c; break; }
+                focused->Release();
+                r.status = ReadStatus::Ok; r.text = pick->text; r.source = "focused-subtree";
+                return r;
+            }
+        }
+        focused->Release();
+    }
+
+    // 3. Last resort: the whole window. Editable nodes only, size-capped, and
+    //    it must be unambiguous — either exactly one candidate, or one that
+    //    reports keyboard focus. Guessing here is how you read a conversation.
+    if (wnd) {
+        IUIAutomationElement* root = nullptr;
+        if (SUCCEEDED(uia->ElementFromHandle(wnd, &root)) && root) {
+            std::vector<Candidate> cands;
+            CollectEditable(uia, root, g_cfg.maxFallbackTextBytes, cands, editableSeen);
+            root->Release();
+            const Candidate* pick = nullptr;
+            for (const auto& c : cands) if (c.focused) { pick = &c; break; }
+            if (!pick && cands.size() == 1) pick = &cands[0];
+            if (pick) {
+                r.status = ReadStatus::Ok; r.text = pick->text; r.source = "window-fallback";
+                return r;
+            }
+            if (!cands.empty()) {
+                LogDbg("ambiguous composer (" + std::to_string(cands.size()) +
+                       " editable candidates, none focused) — not guessing");
+            }
+        }
+    }
+
+    r.status = (editableSeen > 0) ? ReadStatus::EmptyBox : ReadStatus::NoComposer;
+    return r;
 }
 
 // ── Releasing a held keystroke ────────────────────────────────────────────
@@ -234,6 +466,24 @@ void ReleaseKeystroke(bool withCtrl) {
         in[n].ki.dwFlags = KEYEVENTF_KEYUP; ++n;
     }
     SendInput(n, in, sizeof(INPUT));
+}
+
+// Exactly one resolver wins. Returns true to the winner.
+bool ClaimDecision() { return !g_decisionResolved.exchange(true); }
+
+void ResolveRelease(bool ctrl) {
+    if (ClaimDecision()) {
+        ReleaseKeystroke(ctrl);
+        g_decisionPending.store(false);
+    }
+}
+
+bool ResolveDrop() {
+    if (ClaimDecision()) {
+        g_decisionPending.store(false);
+        return true;
+    }
+    return false;
 }
 
 // ── Events ────────────────────────────────────────────────────────────────
@@ -348,63 +598,201 @@ void ShowBlockedNotice(const std::string& appExe, const std::string& what) {
     }).detach();
 }
 
-// ── Worker ────────────────────────────────────────────────────────────────
+// ── Which detections count here ───────────────────────────────────────────
+//
+// The classifier reports everything it finds. Which of those findings should
+// stop a CHAT MESSAGE is an operator's decision, not the classifier's, and the
+// difference is not academic: a phone number is the single most ordinary thing
+// anyone sends over WhatsApp, and the shared network-exfil table rates it
+// Confidential because in an outbound curl it is a different proposition
+// entirely. Blocking on it by default would train users to see the agent as
+// broken within an afternoon.
+//
+// An empty selection means "everything the classifier considers sensitive",
+// which is what the attachment path has always done.
+NetworkExfilMonitor::ClassifyResult RestrictToTypes(
+        const NetworkExfilMonitor::ClassifyResult& in,
+        const std::vector<std::string>& selected) {
+    if (selected.empty()) return in;
 
-void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl) {
-    const std::string exe = ProcessExeName(pid);
-
-    std::string text;
-    try { text = ReadComposerText(uia, wnd); } catch (...) {}
-
-    if (text.size() > g_cfg.maxTextBytes) text.resize(g_cfg.maxTextBytes);
-
-    // Trim — a composer that "contains" only a newline is empty.
-    const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
-    auto b = std::find_if(text.begin(), text.end(), notSpace);
-    auto e = std::find_if(text.rbegin(), text.rend(), notSpace).base();
-    text = (b < e) ? std::string(b, e) : std::string();
-
-    if (text.empty()) {
-        // Nothing readable. Could be an empty box, could be an app whose composer
-        // UI Automation cannot see. Either way the user's Enter is not ours to
-        // keep — release it. See the header on why this fails open.
-        LogDbg("no composer text for " + exe + " — releasing keystroke");
-        ReleaseKeystroke(withCtrl);
-        return;
+    NetworkExfilMonitor::ClassifyResult out;
+    int best = 0, topSev = -1;
+    for (const auto& label : in.labels) {
+        bool wanted = false;
+        for (const auto& s : selected) {
+            if (EqualsIgnoreCase(label, s)) { wanted = true; break; }
+        }
+        if (!wanted) continue;
+        out.labels.push_back(label);
+        const int sev = NetworkExfilMonitor::TypeSeverity(label);
+        if (sev > best)   best = sev;
+        if (sev > topSev) { topSev = sev; out.matchedRule = label; }
     }
-
-    NetworkExfilMonitor::ClassifyResult cls;
-    try { cls = g_cfg.classify(text, "messaging_message"); } catch (...) {}
-
-    const std::string cat = ToLowerAscii(cls.category);
-    const bool sensitive = (cat == "confidential" || cat == "restricted");
-
-    if (!sensitive) {
-        LogDbg("message clean (" + (cls.category.empty() ? std::string("unclassified") : cls.category) +
-               ") in " + exe + " — releasing");
-        ReleaseKeystroke(withCtrl);
-        return;
+    switch (best) {
+        case 3: out.category = "Restricted";   out.score = 0.95; break;
+        case 2: out.category = "Confidential"; out.score = 0.85; break;
+        case 1: out.category = "Internal";     out.score = 0.50; break;
+        default: out.category = "Public";      out.score = 0.00; break;
     }
+    return out;
+}
 
+std::string DescribeLabels(const NetworkExfilMonitor::ClassifyResult& cls) {
     std::string what;
     for (const auto& l : cls.labels) {
         if (!what.empty()) what += ", ";
         what += l;
     }
     if (what.empty()) what = cls.matchedRule;
+    return what;
+}
 
-    const std::string severity = (cat == "restricted") ? "critical" : "high";
-    EmitEvent(exe, pid, "BLOCK", severity, cls,
-              "Blocked sensitive message in " + exe + " (" + cls.category + ")", text);
-    LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
-            " detected=[" + what + "]");
-    ShowBlockedNotice(exe, what);
-    // Deliberately no ReleaseKeystroke: dropping the held Enter IS the block.
-    // The text stays in the box so the user can edit and resend.
+bool IsSensitive(const NetworkExfilMonitor::ClassifyResult& cls) {
+    const std::string cat = ToLowerAscii(cls.category);
+    return cat == "confidential" || cat == "restricted";
+}
+
+std::string TrimText(std::string text) {
+    if (text.size() > g_cfg.maxTextBytes) text.resize(g_cfg.maxTextBytes);
+    const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+    auto b = std::find_if(text.begin(), text.end(), notSpace);
+    auto e = std::find_if(text.rbegin(), text.rend(), notSpace).base();
+    return (b < e) ? std::string(b, e) : std::string();
+}
+
+// Report an app whose composer UI Automation cannot see — once per app per
+// cooldown. This is the difference between "the policy is working and nobody
+// typed anything sensitive" and "this build of the app is invisible to us",
+// and from a dashboard those two look identical without it.
+void ReportUninspectable(const std::string& exe, DWORD pid) {
+    const long long now = NowSteadyMs();
+    {
+        std::lock_guard<std::mutex> lk(g_uninspectableMx);
+        auto it = g_uninspectableAt.find(exe);
+        if (it != g_uninspectableAt.end() &&
+            now - it->second < (long long)g_cfg.uninspectableCooldownSec * 1000) {
+            return;
+        }
+        g_uninspectableAt[exe] = now;
+    }
+    NetworkExfilMonitor::ClassifyResult none;
+    EmitEvent(exe, pid, "ALLOW", "medium", none,
+              "Typed-message inspection could not read the composer in " + exe +
+              " — messages in this app are being sent uninspected", "");
+    LogWarn("composer unreadable in " + exe + " — typed messages are NOT being inspected");
+}
+
+// ── Worker ────────────────────────────────────────────────────────────────
+
+// BLOCK mode. The keystroke is being held right now; every path through here
+// must resolve it exactly once.
+void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
+                  const std::vector<std::string>& types) {
+    const std::string exe = ProcessExeName(pid);
+
+    ComposerRead read;
+    try { read = ReadComposer(uia, wnd, pid); } catch (...) {}
+
+    const std::string text = TrimText(read.text);
+
+    if (text.empty()) {
+        // Nothing readable. Could be an empty box, could be an app whose composer
+        // UI Automation cannot see. Either way the user's Enter is not ours to
+        // keep — release it. See the header on why this fails open.
+        LogDbg("no composer text for " + exe + " (" +
+               (read.status == ReadStatus::NoComposer ? "no editable node" : "empty box") +
+               ") — releasing keystroke");
+        ResolveRelease(withCtrl);
+        if (read.status == ReadStatus::NoComposer) ReportUninspectable(exe, pid);
+        return;
+    }
+
+    NetworkExfilMonitor::ClassifyResult raw;
+    try { raw = g_cfg.classify(text, "messaging_message"); } catch (...) {}
+    const NetworkExfilMonitor::ClassifyResult cls = RestrictToTypes(raw, types);
+
+    if (!IsSensitive(cls)) {
+        LogDbg("message clean (" + (cls.category.empty() ? std::string("unclassified") : cls.category) +
+               ") in " + exe + " via " + read.source + " — releasing");
+        ResolveRelease(withCtrl);
+        return;
+    }
+
+    const std::string what = DescribeLabels(cls);
+    const std::string severity = (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
+
+    // Dropping the held Enter IS the block — but only if we still own it. If the
+    // watchdog gave up on us first the message has already gone, and saying
+    // "blocked" then would be a lie in the one record an analyst will trust.
+    if (ResolveDrop()) {
+        EmitEvent(exe, pid, "BLOCK", severity, cls,
+                  "Blocked sensitive message in " + exe + " (" + cls.category + ")", text);
+        LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
+                " detected=[" + what + "] via=" + read.source);
+        ShowBlockedNotice(exe, what);
+        // The text stays in the box so the user can edit and resend.
+    } else {
+        EmitEvent(exe, pid, "ALERT", severity, cls,
+                  "Sensitive message sent in " + exe + " (" + cls.category +
+                  ") — inspection did not finish before the send was released", text);
+        LogWarn("MESSAGING_TEXT_LATE exe=" + exe + " category=" + cls.category +
+                " detected=[" + what + "] — verdict arrived after the watchdog released the keystroke");
+    }
+}
+
+// ALERT mode. Nothing was held and nothing may be touched; the send has already
+// happened or is happening. Report it.
+void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
+                 const std::vector<std::string>& types) {
+    const std::string exe = ProcessExeName(pid);
+
+    // We are racing the app's own handling of the Enter. Sometimes we win and
+    // the text is still in the box; when we lose, the sampler's last snapshot is
+    // what was there a moment ago.
+    ComposerRead read;
+    try { read = ReadComposer(uia, wnd, pid); } catch (...) {}
+    std::string text = TrimText(read.text);
+    std::string via  = read.source;
+
+    if (text.empty()) {
+        std::lock_guard<std::mutex> lk(g_snapMx);
+        if (g_snapPid == pid && !g_snapText.empty() &&
+            NowSteadyMs() - g_snapAtMs <= 5000) {
+            text = TrimText(g_snapText);
+            via  = "sampled";
+        }
+    }
+    if (text.empty()) {
+        if (read.status == ReadStatus::NoComposer) ReportUninspectable(exe, pid);
+        return;
+    }
+
+    // Enter pressed twice, or a send that left the text in place — either way
+    // the operator does not need the same message again.
+    {
+        const long long now = NowSteadyMs();
+        std::lock_guard<std::mutex> lk(g_snapMx);
+        if (text == g_lastAuditText && now - g_lastAuditMs < 10000) return;
+        g_lastAuditText = text;
+        g_lastAuditMs   = now;
+    }
+
+    NetworkExfilMonitor::ClassifyResult raw;
+    try { raw = g_cfg.classify(text, "messaging_message"); } catch (...) {}
+    const NetworkExfilMonitor::ClassifyResult cls = RestrictToTypes(raw, types);
+    if (!IsSensitive(cls)) return;
+
+    const std::string what = DescribeLabels(cls);
+    const std::string severity = (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
+    EmitEvent(exe, pid, "ALERT", severity, cls,
+              "Sensitive message sent in " + exe + " (" + cls.category +
+              ") — policy is in alert mode, the message was not stopped", text);
+    LogWarn("MESSAGING_TEXT_ALERT exe=" + exe + " category=" + cls.category +
+            " detected=[" + what + "] via=" + via);
 }
 
 void WorkerThread() {
-    // MTA: UI Automation is called from here and nowhere else.
+    // MTA: UI Automation is called from here and nowhere else on this thread.
     HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool comOk = SUCCEEDED(hrCom);
 
@@ -419,31 +807,104 @@ void WorkerThread() {
     }
 
     while (!g_stop.load()) {
-        HWND  wnd  = nullptr;
-        DWORD pid  = 0;
-        bool  ctrl = false;
+        HWND  wnd   = nullptr;
+        DWORD pid   = 0;
+        bool  ctrl  = false;
+        bool  audit = false;
+        std::vector<std::string> types;
         {
             std::unique_lock<std::mutex> lk(g_mx);
             g_cv.wait_for(lk, std::chrono::milliseconds(200),
                           [] { return g_pendingWork || g_stop.load(); });
             if (g_stop.load()) break;
             if (!g_pendingWork) continue;
-            wnd = g_pendingWnd; pid = g_pendingPid; ctrl = g_pendingCtrl;
+            wnd   = g_pendingWnd;
+            pid   = g_pendingPid;
+            ctrl  = g_pendingCtrl;
+            audit = g_pendingAudit;
+            types = g_pendingTypes;
             g_pendingWork = false;
         }
 
         try {
-            if (uia) {
-                DecideAndAct(uia, wnd, pid, ctrl);
+            if (audit) {
+                if (uia) AuditAndAct(uia, wnd, pid, types);
+            } else if (uia) {
+                DecideAndAct(uia, wnd, pid, ctrl, types);
             } else {
                 // We swallowed a keystroke we now cannot adjudicate. Give it back.
-                ReleaseKeystroke(ctrl);
+                ResolveRelease(ctrl);
             }
         } catch (...) {
             LogWarn("decision threw — releasing keystroke");
-            try { ReleaseKeystroke(ctrl); } catch (...) {}
+            if (!audit) { try { ResolveRelease(ctrl); } catch (...) {} }
         }
-        g_decisionPending.store(false);
+    }
+
+    if (uia) uia->Release();
+    if (comOk) CoUninitialize();
+}
+
+// ── Watchdog ──────────────────────────────────────────────────────────────
+// The worker cannot time itself out: when UI Automation wedges, the worker is
+// inside that call. Somebody outside it has to give the keystroke back.
+void WatchdogThread() {
+    while (!g_stop.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (g_decisionResolved.load()) continue;
+        const long long started = g_holdStartMs.load();
+        if (!started) continue;
+        if (NowSteadyMs() - started < (long long)g_cfg.decisionTimeoutMs) continue;
+
+        const bool ctrl = g_holdCtrl.load();
+        if (ClaimDecision()) {
+            ReleaseKeystroke(ctrl);
+            g_decisionPending.store(false);
+            LogWarn("inspection exceeded " + std::to_string(g_cfg.decisionTimeoutMs) +
+                    "ms — keystroke released UNINSPECTED (the message was sent)");
+        }
+    }
+}
+
+// ── Sampler ───────────────────────────────────────────────────────────────
+// Alert mode only. Keeps the last thing seen in the composer of a managed app,
+// because alert mode never holds the Enter and so has nothing left to read by
+// the time it is asked.
+void SamplerThread() {
+    HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool comOk = SUCCEEDED(hrCom);
+
+    IUIAutomation* uia = nullptr;
+    if (comOk) {
+        CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+                         IID_IUIAutomation, (void**)&uia);
+    }
+
+    const unsigned interval = g_cfg.sampleIntervalMs ? g_cfg.sampleIntervalMs : 500;
+    while (!g_stop.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+        if (!uia || g_stop.load()) continue;
+
+        try {
+            const TargetApp t = ResolveForegroundApp();
+            if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
+
+            NetworkExfilMonitor::MessagingVerdict mv;
+            try { mv = g_cfg.messagingPolicy(t.exe, g_cfg.username); } catch (...) { continue; }
+            // Block mode reads at send time and does not need — or want — a
+            // sampler second-guessing it.
+            if (!mv.managed || !mv.inspectMessages || mv.block) continue;
+
+            ComposerRead r = ReadComposer(uia, t.wnd, t.pid);
+            if (r.status != ReadStatus::Ok) continue;
+            const std::string text = TrimText(r.text);
+            if (text.empty()) continue;
+
+            std::lock_guard<std::mutex> lk(g_snapMx);
+            g_snapText  = text;
+            g_snapPid   = t.pid;
+            g_snapAtMs  = NowSteadyMs();
+        } catch (...) {}
     }
 
     if (uia) uia->Release();
@@ -480,40 +941,55 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
 
-    HWND fg = GetForegroundWindow();
-    if (!fg) return CallNextHookEx(g_hook, nCode, wParam, lParam);
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
-    if (!pid || pid == GetCurrentProcessId()) {
-        return CallNextHookEx(g_hook, nCode, wParam, lParam);
-    }
-
-    const std::string exe = ProcessExeName(pid);
-    if (exe.empty()) return CallNextHookEx(g_hook, nCode, wParam, lParam);
+    const TargetApp t = ResolveForegroundApp();
+    if (t.exe.empty()) return CallNextHookEx(g_hook, nCode, wParam, lParam);
 
     NetworkExfilMonitor::MessagingVerdict mv;
     if (g_cfg.messagingPolicy) {
-        try { mv = g_cfg.messagingPolicy(exe, g_cfg.username); } catch (...) {}
+        try { mv = g_cfg.messagingPolicy(t.exe, g_cfg.username); } catch (...) {}
     }
-    // Hold ONLY for a managed app, with typed-message inspection on, in block
-    // mode. In alert mode we never touch input — see the header.
-    if (!mv.managed || !mv.inspectMessages || !mv.block) {
+    if (!mv.managed || !mv.inspectMessages) {
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
 
     const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 
-    g_decisionPending.store(true);
+    // ALERT: never touch input. Ask the worker to record what was sent and let
+    // the keystroke through untouched.
+    if (!mv.block) {
+        {
+            std::lock_guard<std::mutex> lk(g_mx);
+            if (!g_pendingWork) {          // worker busy? drop this one, never queue
+                g_pendingWnd   = t.wnd;
+                g_pendingPid   = t.pid;
+                g_pendingCtrl  = false;
+                g_pendingAudit = true;
+                g_pendingTypes = mv.messageDataTypes;
+                g_pendingWork  = true;
+            }
+        }
+        g_cv.notify_one();
+        return CallNextHookEx(g_hook, nCode, wParam, lParam);
+    }
+
+    // BLOCK: hold it. Order matters — the watchdog acts on g_decisionResolved,
+    // so that flag is set last, once everything it will read is in place.
     {
         std::lock_guard<std::mutex> lk(g_mx);
-        g_pendingWnd  = fg;
-        g_pendingPid  = pid;
-        g_pendingCtrl = ctrl;
-        g_pendingWork = true;
+        g_pendingWnd   = t.wnd;
+        g_pendingPid   = t.pid;
+        g_pendingCtrl  = ctrl;
+        g_pendingAudit = false;
+        g_pendingTypes = mv.messageDataTypes;
+        g_pendingWork  = true;
     }
+    g_holdCtrl.store(ctrl);
+    g_holdStartMs.store(NowSteadyMs());
+    g_decisionPending.store(true);
+    g_decisionResolved.store(false);
     g_cv.notify_one();
 
-    return 1;   // hold it; the worker releases or drops it
+    return 1;   // hold it; the worker or the watchdog resolves it
 }
 
 void HookThread() {
@@ -550,9 +1026,13 @@ bool Start(const Config& cfg) {
     g_cfg = cfg;
     g_stop.store(false);
     g_decisionPending.store(false);
+    g_decisionResolved.store(true);
+    g_holdStartMs.store(0);
     g_running.store(true);
 
-    g_workerObj    = std::thread(WorkerThread);
+    g_workerObj     = std::thread(WorkerThread);
+    g_watchdogObj   = std::thread(WatchdogThread);
+    g_samplerObj    = std::thread(SamplerThread);
     g_hookThreadObj = std::thread(HookThread);
 
     // Give the hook a moment to report failure so Start() reflects reality.
@@ -567,6 +1047,15 @@ void Stop() {
     g_cv.notify_all();
     if (g_hookThreadObj.joinable()) g_hookThreadObj.join();
     if (g_workerObj.joinable())     g_workerObj.join();
+    if (g_watchdogObj.joinable())   g_watchdogObj.join();
+    if (g_samplerObj.joinable())    g_samplerObj.join();
+
+    // Both resolvers have now exited. If a keystroke was still held when the
+    // stop came, nobody is left to give it back — and quietly eating the user's
+    // Enter on agent shutdown is the same failure this module refuses
+    // everywhere else, just at a moment nobody would think to test.
+    ResolveRelease(g_holdCtrl.load());
+
     g_running.store(false);
 }
 

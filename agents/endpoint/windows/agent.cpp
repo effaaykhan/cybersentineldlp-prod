@@ -2120,6 +2120,11 @@ static ClassificationResult Classify(const std::string& content,
     // policy says otherwise, because holding keystrokes in a chat app is a
     // bigger commitment than inspecting an attachment and must be chosen.
     bool messagingInspectMessages = false;
+    // Detector types that make a TYPED message sensitive, e.g. CREDIT_CARD.
+    // Empty = every Confidential/Restricted type, the attachment path's rule.
+    // Kept separate from attachments on purpose: the same detection means
+    // different things in a chat box than in a file (see messaging_text_monitor).
+    std::vector<std::string> messagingDataTypes;
     std::set<std::string> messagingApps;                // managed messaging exe names
     std::set<std::string> messagingExceptUsers;         // users exempt
     std::vector<std::string> messagingExemptTypes;      // extensions, no leading dot
@@ -2794,9 +2799,16 @@ if (!shouldBlock) {
                          "discord.exe", "signal.exe"};
              }
              bool inspectMessages = JsonBoolTrue(response, "inspect_messages");
+             // Uppercased to match the classifier's canonical labels.
+             auto dataTypes = ParseJsonStrArray(response, "message_data_types");
+             for (auto& t : dataTypes) {
+                 std::transform(t.begin(), t.end(), t.begin(),
+                                [](unsigned char c) { return (char)std::toupper(c); });
+             }
              {
                  std::lock_guard<std::mutex> lock(messagingMutex);
                  messagingInspectMessages = inspectMessages;
+                 messagingDataTypes   = dataTypes;
                  messagingAction      = action;
                  messagingApps        = std::set<std::string>(apps.begin(), apps.end());
                  messagingExceptUsers = std::set<std::string>(exUsers.begin(), exUsers.end());
@@ -2806,7 +2818,9 @@ if (!shouldBlock) {
              logger.Info("Messaging app control: enforced=" +
                          std::string(enforced ? "true" : "false") +
                          " action=" + action + " apps=" + std::to_string(apps.size()) +
-                         " typed_messages=" + std::string(inspectMessages ? "inspected" : "off"));
+                         " typed_messages=" + std::string(inspectMessages ? "inspected" : "off") +
+                         " message_data_types=" +
+                         (dataTypes.empty() ? std::string("all") : std::to_string(dataTypes.size())));
          } catch (...) {
              logger.Error("FetchMessagingAppPolicy failed");
          }
@@ -2828,6 +2842,7 @@ if (!shouldBlock) {
              v.block            = (messagingAction == "block");
              v.exemptExtensions = messagingExemptTypes;
              v.inspectMessages  = messagingInspectMessages;
+             v.messageDataTypes = messagingDataTypes;
          }
          return v;
      }

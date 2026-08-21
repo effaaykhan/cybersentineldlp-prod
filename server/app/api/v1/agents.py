@@ -2058,6 +2058,13 @@ class MessagingAppPolicyResponse(BaseModel):
     # Combined with action="block" it is the only thing that ever withholds a
     # keystroke; in alert mode the agent does not touch input at all.
     inspect_messages: bool = False
+    # Which detector types make a TYPED message sensitive. Attachments keep the
+    # blanket "anything Confidential or Restricted" rule; typed chat does not,
+    # because the same detection means different things in the two places. A
+    # phone number inside a document being uploaded is worth a second look; a
+    # phone number typed into WhatsApp is the most ordinary message there is,
+    # and blocking on it teaches users that the agent is broken.
+    message_data_types: List[str] = []
     generated_at: datetime
 
 
@@ -2067,6 +2074,35 @@ _DEFAULT_MESSAGING_APPS = [
     "teams.exe", "ms-teams.exe", "msteams.exe", "whatsapp.exe",
     "telegram.exe", "slack.exe", "discord.exe", "signal.exe",
 ]
+
+# Every type the endpoint classifier can report, so the API rejects a typo in a
+# policy rather than silently narrowing what gets inspected to nothing.
+# Mirrors NetworkExfilMonitor::KnownDataTypes().
+_MESSAGING_DATA_TYPES = [
+    "CREDIT_CARD", "AADHAAR", "PAN", "SSN", "INDIAN_PASSPORT",
+    "AWS_KEY", "PRIVATE_KEY",
+    "JWT_TOKEN", "IFSC", "UPI_ID", "INDIAN_PHONE",
+]
+
+# What a policy that has not chosen gets: everything above EXCEPT INDIAN_PHONE.
+# Not a blanket default, and deliberately so — the endpoint treats an empty list
+# as "every Confidential/Restricted type", which on a chat app means blocking
+# every message that carries a mobile number. Naming the default here rather
+# than leaving the list empty is what keeps that from being the out-of-the-box
+# behaviour on the one channel where phone numbers are the point.
+_DEFAULT_MESSAGE_DATA_TYPES = [t for t in _MESSAGING_DATA_TYPES if t != "INDIAN_PHONE"]
+
+
+def _message_data_types(cfg: dict) -> List[str]:
+    raw = cfg.get("message_data_types")
+    if raw is None:
+        return list(_DEFAULT_MESSAGE_DATA_TYPES)
+    known = {t: t for t in _MESSAGING_DATA_TYPES}
+    picked = [known[t] for t in (str(x).strip().upper() for x in raw) if t in known]
+    # An explicit empty selection is a real choice, and it is honoured — see
+    # inspect_messages below for how, because "" and "everything" must not be
+    # able to mean the same thing on the wire.
+    return picked
 
 
 @router.get("/{agent_id}/messaging-app-policy", response_model=MessagingAppPolicyResponse)
@@ -2087,7 +2123,7 @@ async def messaging_app_policy(
     if await _SUSP.is_suspended(agent_id):
         return MessagingAppPolicyResponse(
             enforced=False, action="alert", apps=[], exception_users=[],
-            exempt_file_types=[], inspect_messages=False,
+            exempt_file_types=[], inspect_messages=False, message_data_types=[],
             generated_at=datetime.now(timezone.utc),
         )
     from sqlalchemy import select as _select
@@ -2105,10 +2141,19 @@ async def messaging_app_policy(
         return MessagingAppPolicyResponse(
             enforced=False, action="alert", apps=[],
             exception_users=[], exempt_file_types=[], inspect_messages=False,
-            generated_at=datetime.now(timezone.utc),
+            message_data_types=[], generated_at=datetime.now(timezone.utc),
         )
 
     cfg = policy.config or {}
+    data_types = _message_data_types(cfg)
+    # An empty selection has to be resolved HERE, because the endpoint cannot
+    # tell "the operator picked nothing" from "this server is too old to send
+    # the field" — both arrive as an absent/empty JSON array, and the endpoint
+    # reads that as "every Confidential/Restricted type", the exact opposite of
+    # what unticking every box asks for. So an empty selection is expressed the
+    # one way that cannot be misread: typed-message inspection is off. Nothing
+    # is sensitive and nothing is inspected are the same instruction.
+    inspect_messages = bool(cfg.get("inspect_messages")) and bool(data_types)
     # Default to alert so enabling a policy never terminates an app until opted in.
     action = (cfg.get("action") or "alert").lower()
     if action not in ("alert", "block"):
@@ -2119,7 +2164,8 @@ async def messaging_app_policy(
         enforced=True, action=action, apps=apps,
         exception_users=_lc_list(exc.get("users")),
         exempt_file_types=[str(t).strip().lower().lstrip(".") for t in (exc.get("file_types") or []) if str(t).strip()],
-        inspect_messages=bool(cfg.get("inspect_messages")),
+        inspect_messages=inspect_messages,
+        message_data_types=data_types,
         generated_at=datetime.now(timezone.utc),
     )
 

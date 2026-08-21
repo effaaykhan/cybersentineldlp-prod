@@ -72,6 +72,13 @@ struct MessagingVerdict {
     // fleet without the agent holding keystrokes in it — that is a bigger step,
     // and it should be one they take on purpose rather than inherit.
     bool inspectMessages = false;
+    // Which detector types count as "sensitive" for a TYPED message, e.g.
+    // {"CREDIT_CARD","AADHAAR"}. Chosen by the operator per policy, because the
+    // right answer is channel-specific: a phone number in a chat app is the
+    // most ordinary message there is, and the same number in an outbound curl
+    // is not. Empty means "every Confidential/Restricted type", which is what
+    // the attachment path has always done.
+    std::vector<std::string> messageDataTypes;
 };
 using MessagingPolicyFn = std::function<MessagingVerdict(const std::string& exeLower,
                                                          const std::string& userName)>;
@@ -127,6 +134,17 @@ bool IsRunning();
 // UPI_ID) so the dashboard displays the right data type.
 // -----------------------------------------------------------------------------
 ClassifyResult ClassifyNetworkContent(const std::string& content);
+
+// Severity of one detector type on the same 0-3 scale ClassifyNetworkContent
+// uses (0=Public, 1=Internal, 2=Confidential, 3=Restricted). Exposed so a
+// caller that only cares about SOME types can rebuild the verdict from the
+// subset it selected, instead of re-deriving a second severity table that
+// would immediately drift from this one.
+int TypeSeverity(const std::string& type);
+
+// Every type the detectors can emit, strongest first. The dashboard renders the
+// operator's checkbox list from the same names.
+std::vector<std::string> KnownDataTypes();
 
 // -----------------------------------------------------------------------------
 // Read the visible/accessible text of a window via UI Automation.

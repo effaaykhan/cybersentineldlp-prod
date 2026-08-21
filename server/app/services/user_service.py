@@ -83,6 +83,17 @@ class UserService:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def get_user_by_siem_sub(self, siem_sub: str) -> Optional[User]:
+        """Look up the account belonging to a SIEM identity.
+
+        This is the SSO lookup key. Email is a display attribute people change;
+        ``sub`` is the SIEM's own id for the human and does not.
+        """
+        result = await self.db.execute(
+            select(User).where(User.siem_sub == siem_sub)
+        )
+        return result.scalar_one_or_none()
+
     async def create_user(
         self,
         email: str,
@@ -95,6 +106,7 @@ class UserService:
         username: Optional[str] = None,
         sso_managed: bool = False,
         sso_source_role: Optional[str] = None,
+        siem_sub: Optional[str] = None,
     ) -> User:
         """
         Create a new user
@@ -143,6 +155,7 @@ class UserService:
             # app/core/sso_roles.py.
             sso_managed=sso_managed,
             sso_source_role=sso_source_role,
+            siem_sub=siem_sub,
         )
 
         self.db.add(user)
@@ -162,6 +175,9 @@ class UserService:
         clearance_level: Optional[int] = None,
         sso_managed: Optional[bool] = None,
         sso_source_role: Optional[str] = None,
+        siem_sub: Optional[str] = None,
+        email: Optional[str] = None,
+        username: Optional[str] = None,
     ) -> Optional[User]:
         """
         Update user details
@@ -196,6 +212,12 @@ class UserService:
             user.sso_managed = sso_managed
         if sso_source_role is not None:
             user.sso_source_role = sso_source_role
+        if siem_sub is not None:
+            user.siem_sub = siem_sub
+        if email is not None:
+            user.email = email
+        if username is not None:
+            user.username = username
 
         user.updated_at = datetime.utcnow()
 

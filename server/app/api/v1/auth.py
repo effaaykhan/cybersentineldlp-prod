@@ -33,6 +33,12 @@ from app.services.blacklist_service import TokenBlacklistService
 from app.services.audit_service import audit_log
 from app.services.user_dept_cache import DEFAULT_DEPARTMENT
 from app.core.sso_roles import resolve as resolve_sso_identity
+from app.core.sso_verify import (
+    SSOTokenError,
+    SSOUnavailable,
+    sso_configured,
+    verify_exchange_token,
+)
 from app.models.user import User
 
 logger = structlog.get_logger()
@@ -289,12 +295,16 @@ async def refresh_token(
                 detail="User not found",
             )
 
-        # Create new tokens
+        # Create new tokens. An SSO-vouched session stays SSO-vouched across
+        # refreshes — dropping the claim here would silently re-gate the
+        # session behind the IP allowlist mid-session.
+        is_sso = bool(payload.get("sso"))
         access_token = create_access_token(
             data={
                 "sub": str(user.id),
                 "email": user.email,
                 "role": user.role,
+                **({"sso": True} if is_sso else {}),
             }
         )
 
@@ -302,6 +312,7 @@ async def refresh_token(
             data={
                 "sub": str(user.id),
                 "email": user.email,
+                **({"sso": True} if is_sso else {}),
             }
         )
 
@@ -462,14 +473,26 @@ async def check_user_exists(
 # DLP database, and issues standard DLP access+refresh tokens signed
 # with SECRET_KEY. The exchange token is NOT the same as a DLP token.
 #
-# Two distinct secrets:
-#   DLP_SSO_SECRET  →  verify exchange token from SIEM (never used to issue)
+# Key material — three roles, never interchangeable:
+#   SIEM_JWKS_URL   →  the SIEM's PUBLIC keys, verify RS256 tokens (preferred:
+#                      the DLP can then verify but not forge a SIEM token)
+#   DLP_SSO_SECRET  →  shared secret, verify HS256 tokens (migration fallback;
+#                      clear it to retire symmetric signing)
 #   SECRET_KEY      →  issue DLP tokens (never used to verify SIEM tokens)
+#
+# The token's own signed ``alg`` header routes which is used — see
+# app/core/sso_verify.py for why that is safe here.
 #
 # Exchange token claim contract
 # ─────────────────────────────
-# Required : purpose="sso_exchange", iss="cybersentineldlp-siem", nonce, email
-# Optional : username, full_name, organization
+# Required : purpose="sso_exchange", iss="cybersentineldlp-siem", nonce, exp
+#            sub    the SIEM's immutable user id — the key an account is
+#                   matched on. email is accepted as a fallback key so
+#                   accounts predating this are found and adopt their sub.
+#            aud    "cybersentinel-dlp" (SSO_AUDIENCE). Mandatory on RS256;
+#                   on HS256 checked only when present, so a SIEM build that
+#                   predates the claim is not locked out by a DLP upgrade.
+# Optional : username, full_name, organization, email
 # Optional : role             "Administrator" | "L1" | "L2" | "L3"
 #            access           "read-write" | "read-only"   (absent ⇒ read-only)
 #            department       ABAC department
@@ -484,6 +507,30 @@ async def check_user_exists(
 
 class SSOExchangeRequest(BaseModel):
     token: str
+
+
+def _nonce_ttl_seconds(payload: dict) -> int:
+    """How long to remember a consumed nonce.
+
+    Must outlive the token: retention shorter than the signature's validity
+    leaves a gap in which a captured token is replayable. Derived from the
+    token's own ``exp`` plus the clock leeway we granted it, floored at
+    SSO_NONCE_TTL_SECONDS and capped so a token claiming a year-long expiry
+    cannot pin an entry in Redis for a year.
+    """
+    from datetime import datetime, timezone
+
+    floor = max(60, int(getattr(settings, "SSO_NONCE_TTL_SECONDS", 300) or 300))
+    leeway = max(0, int(getattr(settings, "SSO_CLOCK_LEEWAY_SECONDS", 60) or 0))
+    ttl = floor
+    exp = payload.get("exp")
+    if exp:
+        try:
+            remaining = int(exp) - int(datetime.now(timezone.utc).timestamp())
+            ttl = max(ttl, remaining + leeway + 10)
+        except (TypeError, ValueError):
+            pass
+    return min(ttl, 3600)
 
 
 @router.post("/sso/exchange", response_model=TokenResponse)
@@ -501,30 +548,32 @@ async def sso_exchange(
     """
 
     # ── Guard: SSO must be configured ────────────────────────────────
-    if not settings.DLP_SSO_SECRET:
+    # Either signing scheme counts. During the RS256 cutover both are set;
+    # afterwards DLP_SSO_SECRET is cleared and only the JWKS remains.
+    if not sso_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="SSO is not configured",
         )
 
-    # ── Decode + verify exchange token ───────────────────────────────
+    # ── Verify exchange token (RS256 via JWKS, or HS256 fallback) ────
     try:
-        payload = jose_jwt.decode(
-            body.token,
-            settings.DLP_SSO_SECRET,
-            algorithms=["HS256"],
+        payload, token_alg = await verify_exchange_token(body.token)
+    except SSOUnavailable as e:
+        # We could not obtain the key material. That is our problem, not a
+        # bad token, and 401 would send the SIEM chasing a signature fault
+        # that does not exist.
+        logger.error("SSO exchange: verification unavailable", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="SSO verification is temporarily unavailable",
         )
-    except ExpiredSignatureError:
-        logger.warning("SSO exchange: token expired")
+    except SSOTokenError as e:
+        logger.warning("SSO exchange: token rejected",
+                       error=e.detail, expired=e.expired)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Exchange token has expired",
-        )
-    except JWTError as e:
-        logger.warning("SSO exchange: invalid token", error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid exchange token",
+            detail=e.detail,
         )
 
     # ── Validate required claims ─────────────────────────────────────
@@ -560,9 +609,20 @@ async def sso_exchange(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Exchange token already used",
             )
-        # Mark nonce as consumed. TTL = 60s (double the token's 30s lifetime
-        # to account for clock skew).
-        await cache.set(nonce_key, "1", ex=60)
+        # Mark the nonce consumed for LONGER than the token can possibly
+        # remain valid.
+        #
+        # This used to be a flat 60s chosen as "double the 30s TTL". Clock
+        # leeway broke that arithmetic silently: with 60s of leeway a 30s
+        # token stays signature-valid for ~90s, so between t=60s and t=90s
+        # the nonce had expired while the token had not — a replay window
+        # opened by a change made for availability, in a different file,
+        # with nothing connecting the two.
+        #
+        # Deriving it from the token's own exp means the window cannot
+        # reopen: raise leeway, lower the TTL, shorten the token, and the
+        # retention still covers the whole of the token's life.
+        await cache.set(nonce_key, "1", ex=_nonce_ttl_seconds(payload))
     except HTTPException:
         raise
     except Exception:
@@ -570,12 +630,25 @@ async def sso_exchange(
         # expiry still protect us). Log so ops can investigate.
         logger.warning("SSO exchange: Redis unavailable for nonce check")
 
-    # ── Look up user in DLP database ─────────────────────────────────
-    email = payload.get("email", "").strip().lower()
-    if not email:
+    # ── Identify the human ───────────────────────────────────────────
+    # Keyed on the SIEM's ``sub``, not on email.
+    #
+    # Email is a display attribute that changes — surname changes, domain
+    # migrations, typo fixes. Keyed on email, any of those orphans the DLP
+    # account: the next login finds nothing, provisions a SECOND account, and
+    # the original's history and role belong to a user who can no longer reach
+    # them. Nothing errors, so it surfaces weeks later as "why is my history
+    # empty". ``sub`` is the SIEM's own id for the person and does not change.
+    #
+    # Email is still accepted as the fallback key so existing accounts — every
+    # one of which predates siem_sub — are found on their next login and adopt
+    # their sub then. No migration, no coordinated cutover.
+    siem_sub = str(payload.get("sub") or "").strip() or None
+    email = str(payload.get("email") or "").strip().lower()
+    if not siem_sub and not email:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Exchange token missing email claim",
+            detail="Exchange token identifies no user (no sub, no email)",
         )
 
     # ── Translate the SIEM's role/access pair into a DLP role ────────
@@ -590,17 +663,70 @@ async def sso_exchange(
         )
 
     user_service = UserService(db)
-    user = await user_service.get_user_by_email(email)
+
+    user = None
+    matched_by = ""
+    if siem_sub:
+        user = await user_service.get_user_by_siem_sub(siem_sub)
+        if user:
+            matched_by = "siem_sub"
+    if not user and email:
+        user = await user_service.get_user_by_email(email)
+        if user:
+            matched_by = "email"
+
+    # ── Reconcile the identity we matched with the one on the token ──
+    if user:
+        updates: Dict = {}
+        if siem_sub and not getattr(user, "siem_sub", None):
+            # Backfill: this account existed before sub-keying, or was created
+            # locally and is now claimed by its SIEM identity. From here on it
+            # is found by sub and survives an email change.
+            updates["siem_sub"] = siem_sub
+        if matched_by == "siem_sub" and email and user.email != email:
+            # The rename this whole mechanism exists to survive. Only trusted
+            # when the match came from sub — an email-matched row tells us
+            # nothing new about its own email.
+            existing = await user_service.get_user_by_email(email)
+            if existing is not None and str(existing.id) != str(user.id):
+                # Another account already holds it. Renaming into a collision
+                # would fail the whole login for something cosmetic.
+                logger.warning("SSO exchange: email already held by another account",
+                               siem_sub=siem_sub, email=email)
+            else:
+                updates["email"] = email
+        if updates:
+            try:
+                user = await user_service.update_user(str(user.id), **updates)
+            except Exception as e:  # noqa: BLE001 — identity upkeep, never fatal
+                logger.warning("SSO exchange: identity reconcile failed",
+                               error=str(e), siem_sub=siem_sub)
+            else:
+                await audit_log(user.id, "auth.sso_identity_reconcile", {
+                    "matched_by": matched_by, **updates,
+                })
 
     # ── Just-in-time provisioning ────────────────────────────────────
     # Without this the SIEM has to hold DLP admin credentials purely to
     # pre-register people, and every unregistered login dead-ends at 401.
     if not user:
         if not settings.SSO_JIT_PROVISION:
-            logger.warning("SSO exchange: user not found", email=email)
+            logger.warning("SSO exchange: user not found",
+                           email=email, siem_sub=siem_sub)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found in DLP system",
+            )
+        if not email:
+            # A DLP account is keyed on email in every other part of the
+            # product (it is the unique column, and what ABAC and the audit
+            # log display). We can FIND a user by sub alone, but we cannot
+            # invent one without an address.
+            logger.warning("SSO exchange: cannot provision without an email",
+                           siem_sub=siem_sub)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Exchange token missing email claim",
             )
 
         siem_username = (payload.get("username") or "").strip() or None
@@ -641,10 +767,15 @@ async def sso_exchange(
                 username=siem_username,
                 sso_managed=True,
                 sso_source_role=f"{identity.siem_role}:{identity.siem_access}"[:64],
+                siem_sub=siem_sub,
             )
         except ValueError:
-            # Lost a race with a concurrent SSO login for the same email.
-            user = await user_service.get_user_by_email(email)
+            # Lost a race with a concurrent SSO login for the same person.
+            user = None
+            if siem_sub:
+                user = await user_service.get_user_by_siem_sub(siem_sub)
+            if not user:
+                user = await user_service.get_user_by_email(email)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -700,11 +831,17 @@ async def sso_exchange(
         )
 
     # ── Issue DLP tokens (signed with SECRET_KEY, not DLP_SSO_SECRET) ─
+    # The ``sso`` claim marks the session as vouched for by the SIEM. The IP
+    # allowlist honours it (SSO_ALLOWLIST_BYPASS) so an off-network analyst
+    # does not get a successful login attached to a console that 403s on every
+    # request — which reads as the DLP being broken, not restricted. Password
+    # sessions carry no such claim and stay gated.
     access_token = create_access_token(
         data={
             "sub": str(user.id),
             "email": user.email,
             "role": user.role,
+            "sso": True,
         }
     )
 
@@ -712,6 +849,9 @@ async def sso_exchange(
         data={
             "sub": str(user.id),
             "email": user.email,
+            # Carried so a refresh from off-network does not silently produce a
+            # gated session and log the user out at the next request.
+            "sso": True,
         }
     )
 

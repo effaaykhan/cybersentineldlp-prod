@@ -59,6 +59,13 @@ class User(Base):
     # unexpected DLP role can be traced back to what the SIEM actually sent.
     sso_managed = Column(Boolean, default=False, nullable=False, server_default="false")
     sso_source_role = Column(String(64), nullable=True)
+    # siem_sub is the SIEM's own immutable user id (the token's ``sub``), and
+    # is the key an SSO login is matched on. Email is a display attribute that
+    # people change: keyed on email, a rename orphans the account and the next
+    # login silently provisions a SECOND one, leaving the original's history
+    # attached to nobody. Nullable because locally-created accounts have no
+    # SIEM identity, and backfilled on the first login that presents a sub.
+    siem_sub = Column(String(255), unique=True, nullable=True, index=True)
 
     # ── Native TOTP MFA (opt-in, self-service) ───────────────────────────
     # mfa_secret holds the Fernet-encrypted base32 TOTP secret (see

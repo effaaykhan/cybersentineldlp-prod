@@ -43,6 +43,69 @@ class Settings(BaseSettings):
     # its own tokens signed with SECRET_KEY.
     DLP_SSO_SECRET: str = Field(default="")
 
+    # ── Asymmetric SSO verification (RS256 via the SIEM's JWKS) ──────────
+    # With HS256 the DLP holds a secret that can FORGE SIEM tokens, not just
+    # verify them — and with JIT provisioning on, forging one mints a DLP
+    # account at a role of the forger's choosing. With RS256 the DLP holds
+    # only a public key: a compromise of this config can read nothing and
+    # sign nothing, and the SIEM can rotate keys without a flag day because
+    # the token's ``kid`` selects which key verifies it.
+    #
+    # Empty (the default) = unchanged behaviour: HS256 with DLP_SSO_SECRET.
+    # Set it and the token's own signed ``alg`` header routes verification:
+    # RS*/ES*/PS* -> JWKS, HS256 -> DLP_SSO_SECRET. To complete a cutover and
+    # retire symmetric signing entirely, clear DLP_SSO_SECRET — HS256 tokens
+    # are then rejected outright rather than quietly still accepted.
+    SIEM_JWKS_URL: str = Field(default="")
+    # How long a fetched JWKS is trusted before refetching. A token whose kid
+    # is not in the cache forces one early refetch (rate-limited), so a key
+    # rotation is picked up in seconds rather than at the end of this window.
+    SSO_JWKS_CACHE_SECONDS: int = Field(default=600)
+
+    # Audience the exchange token must be addressed to. Without this check a
+    # token the SIEM minted for a DIFFERENT consumer of the same key is
+    # accepted here as though it were meant for the DLP.
+    #
+    # Enforced strictly for asymmetric tokens (the new contract). For HS256 it
+    # is enforced only when the token actually carries an ``aud`` claim, so a
+    # SIEM build predating this cannot be locked out by upgrading the DLP —
+    # and gets the check automatically the moment it starts sending one.
+    SSO_AUDIENCE: str = Field(default="cybersentinel-dlp")
+
+    # Clock skew tolerance when validating exp/nbf on an exchange token.
+    # The token's TTL is ~30s, so two boxes a minute apart make every login
+    # fail with nothing in either log to explain it. Read together with
+    # SSO_NONCE_TTL_SECONDS below — leeway EXTENDS how long a token stays
+    # valid, so the replay window has to be extended to match.
+    SSO_CLOCK_LEEWAY_SECONDS: int = Field(default=60)
+    # Reject a token with no exp claim rather than treating it as eternal.
+    # python-jose does not require exp by default.
+    SSO_REQUIRE_EXP: bool = Field(default=True)
+    # How long a consumed nonce is remembered. MUST exceed the maximum time a
+    # token can stay valid (its TTL + SSO_CLOCK_LEEWAY_SECONDS) or a replay
+    # window opens between the nonce expiring and the signature going stale.
+    # The exchange derives the actual TTL from the token's own exp and uses
+    # this as the floor, so raising leeway cannot silently outrun it.
+    SSO_NONCE_TTL_SECONDS: int = Field(default=300)
+    # Longest validity window an exchange token may claim. The SIEM issues 30s
+    # tokens; this refuses one that asserts far more.
+    #
+    # It exists to keep the nonce guarantee airtight. Nonce retention is
+    # derived from the token's exp but capped, so that a token claiming a
+    # year-long expiry cannot pin a Redis entry for a year — and that cap would
+    # otherwise reopen the replay window it was meant to close, just further
+    # out. Bounding the token's lifetime instead means retention always covers
+    # the whole of it, with no cap ever being reached.
+    SSO_MAX_TOKEN_AGE_SECONDS: int = Field(default=600)
+
+    # An SSO-authenticated session is not IP-gated.
+    # The SIEM vouches for the human; gating the session by source IP as well
+    # means an off-network analyst logs in successfully and then gets 403 on
+    # every API call — a working login attached to a dead console, which reads
+    # as the DLP being broken rather than restricted. Password logins stay
+    # gated, which is where the network control earns its keep.
+    SSO_ALLOWLIST_BYPASS: bool = Field(default=True)
+
     # ── SSO role/attribute propagation (app/core/sso_roles.py) ───────────
     # The SIEM can carry its own role ("Administrator"/"L1"/"L2"/"L3"),
     # access mode ("read-write"/"read-only") and ABAC attributes on the
@@ -59,12 +122,16 @@ class Settings(BaseSettings):
     # what every SSO account already got, so it is also the no-op default.
     SSO_DEFAULT_ROLE: str = Field(default="VIEWER")
     # Create the DLP account on first SSO login instead of 401-ing.
-    # OFF by default: the SIEM already seeds accounts itself (it exchanges an
-    # SSO token for an admin session and calls POST /api/v1/users), so
-    # /auth/sso/exchange stays a pure login and behaves exactly as it always
-    # has — unknown email ⇒ 401. Turn this on only if you want the DLP to
-    # provision on first login instead.
-    SSO_JIT_PROVISION: bool = Field(default=False)
+    # ON: the alternative is the SIEM holding DLP admin credentials purely to
+    # pre-register people, which is both a standing privileged credential and
+    # the reason its service account needed an MFA exemption. Provisioning
+    # from the token removes the admin round-trip entirely.
+    #
+    # This raises the stakes on token forgery — a forged token no longer just
+    # impersonates an existing user, it MINTS one at a role of its choosing —
+    # so it is bounded by SSO_MAX_ROLE, and RS256 (SIEM_JWKS_URL above)
+    # removes the DLP's ability to forge one at all.
+    SSO_JIT_PROVISION: bool = Field(default=True)
     # Re-apply the SIEM's role/department/clearance on every SSO login, so a
     # promotion or transfer in the SIEM follows the user into the DLP. Only
     # ever touches accounts the DLP itself provisioned via SSO

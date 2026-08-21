@@ -142,6 +142,24 @@ services:
       - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
       # SSO shared secret for SIEM integration (empty = SSO disabled)
       - DLP_SSO_SECRET=${DLP_SSO_SECRET:-}
+      # RS256 verification via the SIEM's JWKS. Set this and the token's own
+      # signed alg header routes verification: RS*/ES*/PS* -> JWKS, HS256 ->
+      # DLP_SSO_SECRET. Clear DLP_SSO_SECRET to finish the cutover and refuse
+      # symmetric tokens outright.
+      - SIEM_JWKS_URL=${SIEM_JWKS_URL:-}
+      - SSO_JWKS_CACHE_SECONDS=${SSO_JWKS_CACHE_SECONDS:-600}
+      # Audience the exchange token must be addressed to. Mandatory on RS256;
+      # on HS256 checked only when the token carries the claim.
+      - SSO_AUDIENCE=${SSO_AUDIENCE:-cybersentinel-dlp}
+      # Clock skew tolerance on a ~30s token, and the replay window that has to
+      # outlive it. Nonce TTL is derived from the token's own exp with this as
+      # the floor, so leeway can never outrun the nonce.
+      - SSO_CLOCK_LEEWAY_SECONDS=${SSO_CLOCK_LEEWAY_SECONDS:-60}
+      - SSO_REQUIRE_EXP=${SSO_REQUIRE_EXP:-true}
+      - SSO_NONCE_TTL_SECONDS=${SSO_NONCE_TTL_SECONDS:-300}
+      - SSO_MAX_TOKEN_AGE_SECONDS=${SSO_MAX_TOKEN_AGE_SECONDS:-600}
+      # An SSO-vouched session is not IP-gated; password sessions still are.
+      - SSO_ALLOWLIST_BYPASS=${SSO_ALLOWLIST_BYPASS:-true}
       # SSO role/attribute propagation (app/core/sso_roles.py). The SIEM may
       # carry role/access/department/clearance_level on the exchange token, and
       # may seed accounts with siem_role+access via POST /api/v1/users.
@@ -149,7 +167,7 @@ services:
       # DLP_SSO_SECRET is shared with the SIEM, so this bounds a forged token.
       - SSO_MAX_ROLE=${SSO_MAX_ROLE:-ADMIN}
       - SSO_DEFAULT_ROLE=${SSO_DEFAULT_ROLE:-VIEWER}
-      - SSO_JIT_PROVISION=${SSO_JIT_PROVISION:-false}
+      - SSO_JIT_PROVISION=${SSO_JIT_PROVISION:-true}
       - SSO_SYNC_ON_LOGIN=${SSO_SYNC_ON_LOGIN:-true}
       - SSO_ROLE_MAP=${SSO_ROLE_MAP:-}
       # TAXII 2.1 IOC-sharing credentials (empty password = sharing disabled)

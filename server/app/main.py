@@ -254,6 +254,20 @@ async def _auto_init_schema_and_admin():
             ):
                 await conn.execute(text(_stmt))
 
+        # users.siem_sub — the SIEM's immutable user id, which SSO logins are
+        # keyed on instead of email (see alembic 029_sso_siem_sub). Applied here
+        # as well as in the migration because deployments upgrade by pulling a
+        # new image and restarting; an SSO login against a database without the
+        # column fails at the lookup, which is a hard outage of the only way
+        # some tenants log in at all.
+        async with _db.postgres_engine.begin() as conn:
+            for _stmt in (
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS siem_sub VARCHAR(255)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_siem_sub "
+                "ON users (siem_sub) WHERE siem_sub IS NOT NULL",
+            ):
+                await conn.execute(text(_stmt))
+
         # sanctioned_printers (printer-control allowlist, matched on printer name).
         async with _db.postgres_engine.begin() as conn:
             await conn.execute(text(

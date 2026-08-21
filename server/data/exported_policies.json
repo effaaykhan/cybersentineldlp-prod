@@ -71,6 +71,39 @@
     }
   },
   {
+    "name": "Messaging App Attachment Control",
+    "description": "Alert on sensitive files attached in Teams/WhatsApp/Telegram/Slack/Discord/Signal. Endpoint inspects the file before the app encrypts it (alert-first; flip action to block to terminate the app on a sensitive attachment).",
+    "enabled": true,
+    "priority": 100,
+    "type": "messaging_app_control",
+    "severity": "high",
+    "config": {
+      "action": "block",
+      "apps": [
+        "teams.exe",
+        "ms-teams.exe",
+        "msteams.exe",
+        "whatsapp.exe",
+        "telegram.exe",
+        "slack.exe",
+        "discord.exe",
+        "signal.exe"
+      ],
+      "exceptions": {
+        "users": [],
+        "file_types": []
+      },
+      "inspect_messages": true
+    },
+    "conditions": {
+      "match": "all",
+      "rules": []
+    },
+    "actions": {
+      "log": {}
+    }
+  },
+  {
     "name": "application control policy",
     "description": "",
     "enabled": false,

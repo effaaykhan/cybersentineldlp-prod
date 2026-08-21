@@ -240,6 +240,15 @@ class EventCreate(BaseModel):
     # Why the decision went the way it did, and what it did. An event that says
     # "masked" and nothing else is a verdict with the reasoning thrown away.
     policy_reason: Optional[str] = Field(None, description="The rule/policy sentence behind the verdict")
+    # Attribution, NOT enforcement — deliberately separate from matched_policies.
+    # matched_policies drives the severity/action override below ("the policy
+    # blocked this"), and a web-activity policy that examined a prompt and let
+    # it through must never relabel the event with its configured block action.
+    # Carries the full cell detail (which cell, which threshold, enforced or
+    # not) so the log can say why an allowed event was allowed.
+    governing_policies: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Policies that governed this activity, enforcing or not"
+    )
     matched_rules: Optional[List[str]] = Field(None, description="Names of the classification rules that fired")
     # Redaction evidence. TYPES AND COUNTS ONLY — the values are the thing that
     # was removed, and writing them into the event would put them back.
@@ -681,6 +690,13 @@ async def create_event(
         event_doc.setdefault(
             "classification_rules_matched", [{"rule_name": r} for r in event.matched_rules]
         )
+        # WHAT was found — "Indian Aadhaar Number", "Credit Card Number". These
+        # are the server's own rule names from the evaluate call the caller made
+        # before it acted, and they drive the dashboard's "Detected Sensitive
+        # Data" card. Without them a blocked Aadhaar and a blocked card number
+        # were the same event with a different timestamp.
+        if not event_doc.get("classification_labels"):
+            event_doc["classification_labels"] = list(event.matched_rules)
     if event.mask_summary:
         event_doc["mask_summary"] = event.mask_summary
     if event.masked_text:
@@ -748,6 +764,55 @@ async def create_event(
                         "log": "logged",
                     }.get(winning, winning)
 
+    # Attribute a web-activity event to the policy that governed it.
+    #
+    # A web_activity_control policy is a category x activity matrix with a
+    # sensitivity threshold, so "GenAI / Post is set to block for Confidential
+    # content" inspects every GenAI post and lets the ones below the threshold
+    # through. Those allowed posts arrived here with policy_id: null and no
+    # explanation — the log said a prompt went to ChatGPT and was "Logged",
+    # while the Policies page plainly showed a rule blocking GenAI, and nothing
+    # in the event connected the two.
+    #
+    # Derived here rather than only echoed from the extension so the log stops
+    # lying immediately, on the builds already deployed. An extension that sends
+    # its own attribution wins — it reports the policy that ACTUALLY decided,
+    # including when it fell back to its cached matrix — and this never runs.
+    #
+    # Attribution only: it deliberately does NOT touch severity or action_taken.
+    # "This policy looked at the event" is not "this policy blocked the event",
+    # and conflating them would relabel every allowed prompt with the policy's
+    # configured block action.
+    derived_matches: List[Dict[str, Any]] = []
+    if not resolved_matches:
+        # What the caller was actually told at decision time beats re-deriving
+        # it: it names the policy that DECIDED, and it is still right when the
+        # extension fell back to its cached matrix because the server was
+        # unreachable.
+        derived_matches = [
+            p for p in (event.governing_policies or [])
+            if isinstance(p, dict) and p.get("policy_id")
+        ]
+        if not derived_matches and event_doc.get("app_category") and event_doc.get("activity"):
+            from app.services import web_activity_policy as _WAP
+            derived_matches = await _WAP.attribute(
+                agent_id=event_doc.get("agent_id") or "",
+                category=event_doc.get("app_category"),
+                activity=event_doc.get("activity"),
+                app_id=event_doc.get("app_id"),
+                app_name=event_doc.get("app_name"),
+                classification_level=event_doc.get("classification_level"),
+            )
+        if derived_matches:
+            event_doc["matched_policies"] = derived_matches
+            event_doc["policy_id"] = derived_matches[0].get("policy_id")
+            # The winning policy's sentence explains an allowed event too
+            # ("...set to block for Confidential content — allowed because this
+            # content classified as Public"), which is the whole question an
+            # analyst has when they open one.
+            if not event_doc.get("policy_reason") and derived_matches[0].get("reason"):
+                event_doc["policy_reason"] = derived_matches[0]["reason"]
+
     # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
     result = await events_collection.update_one(
         {"id": event.event_id},
@@ -769,6 +834,13 @@ async def create_event(
     # classify_event stage won't override the policy-derived severity.
     if resolved_matches:
         payload["matched_policies"] = resolved_matches
+    # Kept separate from matched_policies: this is attribution, and putting it
+    # there would make the processor treat the event as agent-attributed and
+    # suppress its own severity and classification work.
+    if derived_matches:
+        payload["attribution_policies"] = derived_matches
+    if event_doc.get("classification_labels") and not payload.get("classification_labels"):
+        payload["classification_labels"] = event_doc["classification_labels"]
     background_tasks.add_task(
         _process_event_background,
         event_id=event.event_id,
@@ -845,6 +917,26 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                     update_fields["classification_level"] = cm["classification_level"]
                 if cm.get("confidence_score") is not None:
                     update_fields["classification_score"] = cm["confidence_score"]
+
+            # WHAT was detected, not just how sensitive it was.
+            #
+            # The processor has already built this: each entry names the rule
+            # that fired ("Indian Aadhaar Number") and its category ("PII").
+            # None of it was ever written to the event — _merge_processed_event
+            # assembles exactly this shape and nothing in the codebase calls it —
+            # so classification came out null, classification_labels came out
+            # empty, and the "Detected Sensitive Data" card had nothing to
+            # render. An analyst could see that something was blocked and how
+            # sensitive it was, but never what kind of data it actually was.
+            if processed.get("classification") and not agent_outcome_allowed:
+                detections = [c for c in processed["classification"] if isinstance(c, dict)]
+                if detections:
+                    update_fields["classification"] = detections
+                    labels = [c["label"] for c in detections if c.get("label")]
+                    # The caller's own detection wins when it reported one: it
+                    # inspected the content in place, we only see what was sent.
+                    if labels and not (payload.get("classification_labels") or []):
+                        update_fields["classification_labels"] = list(dict.fromkeys(labels))
             if processed.get("matched_policies"):
                 # If the server-side evaluator also matched policies
                 # (conditions.rules-based), union them with the agent's
@@ -863,7 +955,15 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                             seen.add(sm.get("policy_id"))
                     update_fields["matched_policies"] = merged
                 else:
-                    update_fields["matched_policies"] = server_matches
+                    # Union with the web-activity attribution rather than
+                    # replacing it — otherwise a rule-based match landing later
+                    # would wipe out the only record of which matrix policy
+                    # governed the activity.
+                    attribution = payload.get("attribution_policies") or []
+                    seen = {m.get("policy_id") for m in attribution}
+                    update_fields["matched_policies"] = list(attribution) + [
+                        sm for sm in server_matches if sm.get("policy_id") not in seen
+                    ]
             if processed.get("metadata"):
                 update_fields["metadata"] = processed["metadata"]
 

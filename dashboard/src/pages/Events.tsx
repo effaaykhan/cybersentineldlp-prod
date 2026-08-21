@@ -679,6 +679,12 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
               <div className="flex flex-wrap gap-2">
                 {classificationLabels.map((label: string, idx: number) => {
                   const conf = classification[idx]?.confidence || event.classification_score || 1.0
+                  // "Indian Aadhaar Number" says what it is; "PII" says what
+                  // kind. Both are already on the detection — showing only the
+                  // rule name makes two very different findings ("Credit Card
+                  // Number", "Medical Terms") read as the same kind of thing.
+                  const category = classification[idx]?.sensitive_data?.category
+                  const count = classification[idx]?.sensitive_data?.count
                   return (
                     <span
                       key={idx}
@@ -686,6 +692,8 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
                     >
                       <Shield className="w-4 h-4" />
                       {label}
+                      {category && <span className="text-xs opacity-75">{category}</span>}
+                      {count > 1 && <span className="text-xs opacity-75 font-mono tabular-nums">x{count}</span>}
                       {conf < 1.0 && <span className="text-xs opacity-75 font-mono tabular-nums">({Math.round(conf * 100)}%)</span>}
                     </span>
                   )
@@ -707,6 +715,23 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <p className="text-cs-ink font-semibold">{policy.policy_name || 'Unknown Policy'}</p>
+                        {/*
+                          A policy that examined this activity and let it
+                          through is listed here too — it is the answer to "why
+                          was this allowed?". Saying so explicitly matters: the
+                          badge on the right shows the POLICY's severity, so a
+                          high-severity rule sitting on a low-severity allowed
+                          event reads as though it fired unless the card says
+                          plainly that it did not.
+                        */}
+                        {policy.enforced === false && (
+                          <span className="mt-1 inline-flex items-center gap-1.5 rounded-cs-sm bg-cs-hair-2 px-2 py-0.5 text-xs text-cs-muted">
+                            Considered — did not act
+                          </span>
+                        )}
+                        {policy.reason && (
+                          <p className="mt-2 text-xs leading-relaxed text-cs-ink-2">{policy.reason}</p>
+                        )}
                         {policy.matched_rules && policy.matched_rules.length > 0 && (
                           <div className="mt-2 space-y-1">
                             <p className="text-xs text-cs-muted">Matched Rules:</p>

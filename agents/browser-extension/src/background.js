@@ -704,6 +704,12 @@ async function evaluateOne(cfg, item, ctx) {
     matchedRules: ((data.classification || {}).matched_rules || [])
       .map((r) => r && (r.rule_name || r.name))
       .filter(Boolean),
+    // The policies that GOVERNED this activity — including ones that examined
+    // it and let it through. Without this the event named no policy at all, so
+    // a prompt allowed because it fell below a Confidential threshold looked
+    // identical to one no rule had ever covered, and the log could not answer
+    // the first question anyone asks of it: which rule decided this?
+    policies: (data.policies_triggered || []).filter((p) => p && p.policy_id),
     level,
     reason: data.reason || "",
     severity: data.alert_severity || null,
@@ -780,6 +786,10 @@ async function evaluateActivity(payload) {
   let verdict = null;
   let anyServerAnswer = false;
   let worst = { action: "allow", level: null, reason: "", severity: null };
+  // Accumulated across every item, not taken from the winner: a Send carrying
+  // both a prompt and an attachment is governed by whatever addressed either of
+  // them, and the attachment's policy is no less real for having been outranked.
+  const governing = new Map();
 
   if (cfg.serverUrl) {
     await ensureRegistered();
@@ -788,6 +798,11 @@ async function evaluateActivity(payload) {
       const one = await evaluateOne(fresh, item, ctx);
       if (!one) continue;
       anyServerAnswer = true;
+      for (const p of one.policies || []) {
+        // Keep the enforcing record when the same policy shows up twice.
+        const prev = governing.get(p.policy_id);
+        if (!prev || (!prev.enforced && p.enforced)) governing.set(p.policy_id, p);
+      }
       if (self.CSDLPPolicy.ACTION_RANK[one.action] > self.CSDLPPolicy.ACTION_RANK[worst.action]) {
         worst = one;
       } else if (!worst.level && one.level) {
@@ -799,7 +814,12 @@ async function evaluateActivity(payload) {
     if (anyServerAnswer) {
       verdict = {
         action: worst.action, level: worst.level, reason: worst.reason, source: "server",
-        maskedText: worst.maskedText || null, maskSummary: worst.maskSummary || []
+        maskedText: worst.maskedText || null, maskSummary: worst.maskSummary || [],
+        policies: Array.from(governing.values()),
+        // Collected by evaluateOne but never carried onto the verdict, so
+        // matched_rules arrived null on every event the server had classified —
+        // the exact gap the field was added to close.
+        matchedRules: worst.matchedRules || []
       };
 
       /*
@@ -987,6 +1007,12 @@ async function reportActivity(payload, verdict) {
     // reasoning, which is the difference between a record and a log line.
     policy_reason: verdict.reason || null,
     matched_rules: verdict.matchedRules || null,
+    // Attribution only — deliberately NOT matched_policies, which the server
+    // reads as "this policy enforced" and uses to override severity and action.
+    // An allowed prompt must not inherit its policy's configured "block".
+    // Omitted on the cached-policy fallback, where the server re-derives it.
+    governing_policies: (verdict.policies && verdict.policies.length)
+      ? verdict.policies : null,
     mask_summary: verdict.action === "mask" ? (verdict.maskSummary || []) : null,
     masked_text: verdict.action === "mask" ? (verdict.maskedText || null) : null
   };

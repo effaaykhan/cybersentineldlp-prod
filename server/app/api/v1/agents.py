@@ -2391,231 +2391,20 @@ async def _match_file_identity(
         return (False, False, "")
 
 
-# Policy type carrying the category x activity matrix. See
-# app/core/web_activity.py for the vocabulary and the dashboard's
-# WebActivityMatrix editor for the shape of ``config``.
-_WEB_ACTIVITY_TYPE = "web_activity_control"
+# Web-activity matching lives in services/web_activity_policy.py so the event
+# INGEST path can attribute an event to its governing policy without importing
+# this router. Re-exported under the original private names because the rest of
+# this module (and the evaluate endpoint below) reads them.
+from app.services.web_activity_policy import (  # noqa: E402
+    WEB_ACTIVITY_TYPE as _WEB_ACTIVITY_TYPE,
+    level_rank as _level_rank,
+    matrix_cell as _matrix_cell,
+    app_override as _app_override,
+    decide as _web_activity_decision,
+    match as _match_web_activity,
+)
 
 _LEVEL_RANK = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
-
-
-def _level_rank(level: Optional[str]) -> int:
-    return _LEVEL_RANK.get(str(level or "").strip().lower(), 0)
-
-
-def _matrix_cell(config: Dict[str, Any], category: str, activity: str):
-    """The (action, min_level) a policy defines for one category/activity cell.
-
-    A cell may be written as a bare action string ("block") or as an object
-    ({"action": "block", "minLevel": "Restricted"}) when one activity needs a
-    different threshold from the rest of the policy. Returns (None, None) when
-    the policy says nothing about this cell — which is NOT the same as "allow":
-    a policy that doesn't mention GenAI must leave other policies free to.
-    """
-    matrix = config.get("matrix") or {}
-    row = matrix.get(category)
-    if not isinstance(row, dict):
-        return (None, None)
-    cell = row.get(activity)
-    if cell is None:
-        return (None, None)
-    if isinstance(cell, dict):
-        action = _WA.normalize_action(cell.get("action"), default=_WA.ACTION_LOG)
-        return (action, cell.get("minLevel") or config.get("minLevel"))
-    return (_WA.normalize_action(cell, default=_WA.ACTION_LOG), config.get("minLevel"))
-
-
-def _app_override(config: Dict[str, Any], category: str, activity: str, app_id: Optional[str]):
-    """Per-app exception, which beats the category row.
-
-    This is what makes "GenAI is blocked, except the Copilot we pay for"
-    expressible without splitting the estate across two policies. An entry may
-    scope itself by app_id, by category, by activity, or any combination; the
-    most specific match wins, so a broad rule can be carved out by a narrow one
-    regardless of the order they sit in the list.
-
-    SPECIFICITY IS WEIGHTED, not a count of populated fields. Naming an app
-    narrows the rule to ONE destination out of the whole catalog; naming a
-    category and an activity still covers dozens of apps. Counting fields made
-    "GenAI downloads are alerted" (two fields) beat "Copilot is allowed" (one
-    field) — so an operator who had explicitly exempted the AI vendor they pay
-    for still got alerts from it, which reads as the product ignoring them.
-    Weights: app 4, activity 2, category 1.
-    """
-    best = None
-    best_specificity = -1
-    for entry in (config.get("appOverrides") or []):
-        if not isinstance(entry, dict):
-            continue
-        e_app = (entry.get("app_id") or entry.get("appId") or "").strip().lower()
-        e_cat = _WA.normalize_category(entry.get("category"))
-        e_act = _WA.normalize_activity(entry.get("activity"))
-
-        app_pinned = bool(e_app) and e_app not in ("*", "any")
-        if app_pinned and e_app != (app_id or "").lower():
-            continue
-        if e_cat and e_cat != category:
-            continue
-        if e_act and e_act != activity:
-            continue
-
-        specificity = (4 if app_pinned else 0) + (2 if e_act else 0) + (1 if e_cat else 0)
-        if specificity > best_specificity:
-            best_specificity = specificity
-            best = entry
-    if not best:
-        return (None, None)
-    return (
-        _WA.normalize_action(best.get("action"), default=_WA.ACTION_LOG),
-        best.get("minLevel") or config.get("minLevel"),
-    )
-
-
-def _web_activity_decision(
-    cfg: Dict[str, Any],
-    category: str,
-    activity: str,
-    app_id: Optional[str],
-    app_name: Optional[str],
-    classification_level: Optional[str],
-    extraction_status: str,
-    policy_name: str = "web activity control",
-):
-    """One policy's verdict for one activity: (action, reason).
-
-    Pure — no database, no request. Split out from _match_web_activity so the
-    decision can be tested directly against the browser extension's JavaScript
-    mirror of it (src/policy.js). Those two implementations decide the same
-    question on opposite sides of the wire, and the only way to know they agree
-    is to run both over the same table; that is impossible while the logic is
-    welded to a DB query.
-    """
-    action, min_level = _app_override(cfg, category, activity, app_id)
-    source = "app rule"
-    if action is None:
-        action, min_level = _matrix_cell(cfg, category, activity)
-        source = "matrix"
-    if action is None or action == _WA.ACTION_ALLOW:
-        return (_WA.ACTION_ALLOW, "")
-
-    # A stored policy can still carry an action this activity cannot perform —
-    # written before the capability table existed, or imported from another
-    # deployment. Resolve it to the nearest action that CAN be performed, never
-    # to a weaker one: whoever asked for redaction wanted the data not to leave
-    # un-redacted, so blocking honours that where logging would not.
-    clamped = _WA.clamp_action(activity, action)
-    if clamped != action:
-        logger.info(
-            "Web-activity action clamped to what the endpoint can do",
-            activity=activity, asked=action, using=clamped,
-        )
-        action = clamped
-
-    # Threshold. An action fires only once the content is at least this
-    # sensitive; below it the activity is ordinary work. Absent threshold means
-    # "any content", which is how a blanket "no GenAI at all" rule is written.
-    threshold = str(min_level or "").strip()
-    if threshold and activity in _WA.ACTIVITIES_WITHOUT_CONTENT:
-        # The browser hands a download straight to disk; the extension never
-        # sees the bytes, so there is nothing to classify and no threshold to
-        # meet. Applying one silently would mean a cell reading "block
-        # Confidential and above" blocked everything instead — which is what it
-        # used to do.
-        threshold = ""
-    if threshold:
-        meets = _level_rank(classification_level) >= _level_rank(threshold)
-        # Uninspectable content is NOT clean. A password-protected archive or an
-        # OCR-proof scan classifies as Public, so without this the documented way
-        # to bypass a threshold rule is to zip the file with a password.
-        if not meets and cfg.get("blockUninspectable", True) and extraction_status in (
-            "unreadable", "too_large"
-        ):
-            meets = True
-            threshold = f"{threshold} (content could not be inspected)"
-        if not meets:
-            return (_WA.ACTION_ALLOW, "")
-
-    # Audit mode never blocks — it reports what enforcement WOULD have done, so a
-    # matrix can be rolled out and observed before it starts stopping work.
-    mode = str(cfg.get("mode") or "enforce").strip().lower()
-    if mode == "audit" and action == _WA.ACTION_BLOCK:
-        action = _WA.ACTION_ALERT
-
-    where = app_name or app_id or category
-    reason = (
-        f"{_WA.ACTIVITY_LABELS.get(activity, activity)} to {where} "
-        f"({_WA.CATEGORY_LABELS.get(category, category)}) is set to {action} "
-        f"by {source} in policy '{policy_name}'"
-    )
-    if threshold:
-        reason += f" for {threshold} content"
-    return (action, reason)
-
-
-async def _match_web_activity(
-    db: AsyncSession,
-    agent_id: str,
-    category: Optional[str],
-    activity: Optional[str],
-    app_id: Optional[str],
-    app_name: Optional[str],
-    classification_level: Optional[str],
-    extraction_status: str,
-):
-    """Apply every active ``web_activity_control`` policy to one web activity.
-
-    Evaluated here rather than through DatabasePolicyEvaluator for the same
-    reason the USB/print denylists are: the generic policy shape carries ONE
-    actions dict per policy, and a category x activity matrix needs a different
-    action per cell. Expressing this as conditions would take 24 separate
-    policies to say what one matrix row says.
-
-    Returns (action, reason) where action is one of allow/log/alert/mask/block.
-    Says nothing — ("allow", "") — when no policy addresses this cell, which is
-    the deliberate default: an activity nobody wrote a rule for is allowed, so
-    deploying the extension does not silently start blocking work.
-
-    This used to return (should_block, should_alert, reason). Two booleans
-    cannot express a third enforcement outcome, and collapsing "mask" into
-    either of them would have made a redaction indistinguishable from a block
-    at the call site.
-    """
-    try:
-        cat = _WA.normalize_category(category)
-        act = _WA.normalize_activity(activity)
-        if not cat or not act:
-            return (_WA.ACTION_ALLOW, "")
-        if not _WA.is_valid_pair(cat, act):
-            # e.g. "ai_response on webmail" — a caller confusion, not a policy
-            # decision. Matching it would let a nonsense pair inherit whatever
-            # the operator set for a real one.
-            return (_WA.ACTION_ALLOW, "")
-
-        policies = await PolicyService(db).get_all_policies(skip=0, limit=1000, enabled_only=True)
-
-        strongest = _WA.ACTION_ALLOW
-        reason = ""
-        for p in policies:
-            if getattr(p, "type", None) != _WEB_ACTIVITY_TYPE:
-                continue
-            scope = getattr(p, "agent_ids", None) or []
-            if scope and agent_id not in scope:
-                continue
-            cfg = getattr(p, "config", None) or {}
-
-            action, why = _web_activity_decision(
-                cfg, cat, act, app_id, app_name,
-                classification_level, extraction_status,
-                getattr(p, "name", "web activity control"),
-            )
-            if _WA.ACTION_RANK.get(action, 0) > _WA.ACTION_RANK.get(strongest, 0):
-                strongest = action
-                reason = why
-
-        return (strongest, reason)
-    except Exception as e:  # never let matching break evaluation
-        logger.warning("Web-activity match failed (non-fatal)", error=str(e))
-        return (_WA.ACTION_ALLOW, "")
 
 
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
@@ -2951,11 +2740,33 @@ async def evaluate_policy_realtime(
         # upload / download / attach / send / post / ai_response). Independent
         # of the generic evaluator because a matrix needs a different action per
         # cell; see _match_web_activity.
-        _wa_action, _wa_reason = await _match_web_activity(
+        _wa_action, _wa_reason, _wa_governing = await _match_web_activity(
             db, agent_id, request.app_category, request.activity,
             request.app_id, request.app_name,
             classification_result.classification, extraction_status,
         )
+        # Attribution, not enforcement. A matrix policy that examined this
+        # activity and let it through is still the policy that governs it, and
+        # the caller echoes these back on the event so the log can name the rule
+        # instead of showing an unexplained "Logged". Strongest first, and ahead
+        # of the rule-based matches because a matrix cell is the more specific
+        # statement about this activity.
+        if _wa_governing:
+            # The rule-based evaluator can match the SAME policy (its generic
+            # conditions fire on the content), and its record carries only
+            # id/name/severity/priority. Merging matrix-first keeps the cell
+            # detail — which cell, which threshold, enforced or not — instead of
+            # letting the thinner record win by arriving first.
+            _by_id = {g.get("policy_id"): dict(g) for g in _wa_governing}
+            _rest = []
+            for t in triggered_policies:
+                pid = t.get("policy_id")
+                if pid in _by_id:
+                    merged = {**t, **_by_id[pid]}
+                    _by_id[pid] = merged
+                else:
+                    _rest.append(t)
+            triggered_policies = [_by_id[g.get("policy_id")] for g in _wa_governing] + _rest
 
         # A mask verdict has to be turned into an actual redaction here, and if
         # that cannot be done it becomes a block. Masking is the only action
@@ -3030,6 +2841,22 @@ async def evaluate_policy_realtime(
         # configured, and what the end user needs to read on the block banner —
         # far more actionable than a classification summary.
         if _wa_reason:
+            # Name the data, not just the rule that stopped it. The web-activity
+            # sentence REPLACES the classification summary here, and that summary
+            # was the only thing that said "Detected: Indian Aadhaar Number" — so
+            # the block banner the user reads, and the policy_reason stored on the
+            # event, told them a policy stopped them but never what they had
+            # typed that triggered it.
+            _detected = list(dict.fromkeys(
+                (f"{r['rule_name']} ({r['category']})" if r.get("category") else r["rule_name"])
+                for r in (classification_result.matched_rules or [])
+                if isinstance(r, dict) and r.get("rule_name")
+            ))
+            if _detected:
+                shown = ", ".join(_detected[:5])
+                if len(_detected) > 5:
+                    shown += f" and {len(_detected) - 5} more"
+                _wa_reason = f"{_wa_reason} — detected: {shown}"
             reason = (f"BLOCKED - {_wa_reason}" if _wa_action == _WA.ACTION_BLOCK else _wa_reason)
 
         logger.info(

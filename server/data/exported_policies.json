@@ -1,5 +1,48 @@
 [
   {
+    "name": "Network Exfiltration MacOS",
+    "description": "Watches outbound bulk-transfer processes (scp/sftp/curl/wget/rsync/netcat/cloud CLIs/smbclient). monitoredMethods is omitted on purpose: the agent treats that as all methods. Browser uploads are NOT visible to this channel. Alert, not block.",
+    "enabled": true,
+    "priority": 95,
+    "type": "network_exfiltration_prevention",
+    "severity": "high",
+    "config": {
+      "patterns": {
+        "predefined": [
+          "credit_card",
+          "ssn",
+          "aadhaar",
+          "pan",
+          "api_key",
+          "private_key",
+          "aws_key",
+          "database_connection_string",
+          "api_key_in_code",
+          "source_code_content"
+        ],
+        "custom": []
+      },
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "network_exfil",
+            "network_transfer",
+            "network_upload"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "alert": {}
+    }
+  },
+  {
     "name": "Log All Clipboard Activity",
     "description": "Log all clipboard activity for audit purposes",
     "enabled": false,
@@ -105,6 +148,45 @@
     }
   },
   {
+    "name": "USB File Transfer MacOS",
+    "description": "Classifies files copied to removable media on macOS. Scoped by agent_ids to Macs; action is alert, not block.",
+    "enabled": true,
+    "priority": 100,
+    "type": "usb_file_transfer_monitoring",
+    "severity": "high",
+    "config": {
+      "patterns": {
+        "predefined": [
+          "credit_card",
+          "ssn",
+          "aadhaar",
+          "pan",
+          "api_key",
+          "private_key",
+          "aws_key",
+          "database_connection_string",
+          "api_key_in_code",
+          "source_code_content"
+        ],
+        "custom": []
+      },
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "destination_type",
+          "operator": "equals",
+          "value": "removable_drive"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {}
+    }
+  },
+  {
     "name": "application control policy",
     "description": "",
     "enabled": false,
@@ -125,6 +207,39 @@
     },
     "actions": {
       "log": {}
+    }
+  },
+  {
+    "name": "USB Device Monitoring MacOS",
+    "description": "Records removable media attach/detach on macOS endpoints. Scoped by agent_ids to Macs; action is alert, never eject.",
+    "enabled": true,
+    "priority": 105,
+    "type": "usb_device_monitoring",
+    "severity": "medium",
+    "config": {
+      "patterns": {
+        "predefined": [
+          "credit_card",
+          "ssn",
+          "aadhaar",
+          "pan",
+          "api_key",
+          "private_key",
+          "aws_key",
+          "database_connection_string",
+          "api_key_in_code",
+          "source_code_content"
+        ],
+        "custom": []
+      },
+      "action": "alert"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": []
+    },
+    "actions": {
+      "alert": {}
     }
   },
   {

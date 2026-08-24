@@ -211,27 +211,12 @@
   },
   {
     "name": "USB Device Monitoring MacOS",
-    "description": "Records removable media attach/detach on macOS endpoints. Scoped by agent_ids to Macs; action is alert, never eject.",
+    "description": "Switches on the macOS agent's USB device channel: every removable volume attach/detach is recorded. This policy carries NO content patterns on purpose — the agent's usb.py never reads this policy's config, and a device connect has no file to inspect. Whether a device is allowed comes from the separate device-control surface (GET /agents/{id}/usb-allowlist and POST /agents/{id}/device/authorize), not from here. Content on a stick is handled by the usb_file_transfer_monitoring policy instead.",
     "enabled": true,
     "priority": 105,
     "type": "usb_device_monitoring",
     "severity": "medium",
     "config": {
-      "patterns": {
-        "predefined": [
-          "credit_card",
-          "ssn",
-          "aadhaar",
-          "pan",
-          "api_key",
-          "private_key",
-          "aws_key",
-          "database_connection_string",
-          "api_key_in_code",
-          "source_code_content"
-        ],
-        "custom": []
-      },
       "action": "alert"
     },
     "conditions": {
@@ -302,6 +287,98 @@
             "~/Desktop",
             "~/Downloads"
           ]
+        },
+        {
+          "field": "event_subtype",
+          "operator": "in",
+          "value": [
+            "file_created",
+            "file_modified",
+            "file_moved"
+          ]
+        },
+        {
+          "field": "file_extension",
+          "operator": "in",
+          "value": [
+            ".txt",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".csv",
+            ".json",
+            ".env",
+            ".pem",
+            ".key"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "alert": {}
+    }
+  },
+  {
+    "name": "Google Drive Local MacOS",
+    "description": "Watches the local Google Drive mount on macOS. The path is a pattern because Drive mounts at ~/Library/CloudStorage/GoogleDrive-<account>, so the account address is part of the path and no literal value works for two users. Alert, not block.",
+    "enabled": true,
+    "priority": 115,
+    "type": "google_drive_local_monitoring",
+    "severity": "high",
+    "config": {
+      "monitoredPaths": [
+        "~/Library/CloudStorage/GoogleDrive-*"
+      ],
+      "events": {
+        "create": true,
+        "modify": true,
+        "delete": false,
+        "move": true
+      },
+      "patterns": {
+        "predefined": [
+          "credit_card",
+          "ssn",
+          "aadhaar",
+          "pan",
+          "api_key",
+          "private_key",
+          "aws_key",
+          "database_connection_string",
+          "api_key_in_code",
+          "source_code_content"
+        ],
+        "custom": []
+      },
+      "action": "alert",
+      "fileExtensions": [
+        ".txt",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".json",
+        ".env",
+        ".pem",
+        ".key"
+      ]
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "file_path",
+          "operator": "starts_with",
+          "value": "G:\\My Drive\\"
+        },
+        {
+          "field": "source",
+          "operator": "equals",
+          "value": "google_drive_local"
         },
         {
           "field": "event_subtype",

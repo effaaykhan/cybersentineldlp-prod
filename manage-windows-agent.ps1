@@ -48,6 +48,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   $SELF_URL    = "$RAW_BASE/manage-windows-agent.ps1"                                   # for self-elevation re-fetch
   $EXE_URL     = "$RAW_BASE/agents/endpoint/windows/cybersentineldlp_agent.exe"         # agent binary artifact
   $SUM_URL     = "$EXE_URL.sha256"                                                      # its checksum sidecar
+  $VER_URL     = "$EXE_URL.version"                                                     # the version that binary IS
 
   $INSTALL_DIR = 'C:\Program Files\CyberSentinelDLP'
   $DATA_DIR    = 'C:\ProgramData\CyberSentinelDLP'
@@ -246,10 +247,25 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       } catch {}
     }
 
-    $exeHash = $null; $exeSize = $null
+    $exeHash = $null; $exeSize = $null; $exeVersion = $null; $exeWritten = $null
     if ($exeExists) {
       try { $exeHash = (Get-FileHash -Algorithm SHA256 -Path $curExe).Hash.ToUpper() } catch {}
       try { $exeSize = [math]::Round((Get-Item $curExe).Length / 1MB, 1) } catch {}
+      # Stamped into the binary by build.sh from agents/endpoint/windows/VERSION.
+      # Empty for any build made before versioning existed.
+      try {
+        $pv = (Get-Item $curExe).VersionInfo.ProductVersion
+        if ($pv) { $exeVersion = $pv.Trim() }
+      } catch {}
+      try { $exeWritten = (Get-Item $curExe).LastWriteTime } catch {}
+    }
+
+    # Replacing the exe while the old process survives leaves a machine that
+    # hashes as up to date and behaves exactly as it did before the fix. That
+    # has cost real debugging time, so it is called out rather than inferred.
+    $procStale = $false
+    if ($proc -and $exeWritten) {
+      try { $procStale = ($proc.StartTime -lt $exeWritten) } catch {}
     }
 
     $installed = $dirExists -or $exeExists -or [bool]$proc -or [bool]$task -or $isLegacy
@@ -286,6 +302,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     [PSCustomObject]@{
       Installed = $installed; IsLegacy = $isLegacy; Health = $health; HealthColor = $healthColor
       InstallDir = $INSTALL_DIR; ExeExists = $exeExists; ExeHash = $exeHash; ExeSize = $exeSize
+      ExeVersion = $exeVersion; ExeWritten = $exeWritten; ProcStale = $procStale
       ConfigExists = (Test-Path $curCfg); AgentId = $agentId; ServerUrl = $serverUrl; AgentName = $agentName
       TaskExists = [bool]$task; TaskName = $taskName; TaskState = $taskState
       ProcRunning = [bool]$proc; ProcId = $procId
@@ -295,7 +312,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   }
 
   function Show-Status {
-    param($s, $remoteHash)
+    param($s, $remoteHash, $remoteVersion)
     Hr '-' 'DarkCyan'
     Write-Host -NoNewline '   STATUS  : '
     Write-Host $s.Health -ForegroundColor $s.HealthColor
@@ -307,15 +324,34 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if ($s.AgentId)   { Field 'ID'    $s.AgentId }
       if ($s.ServerUrl) { Field 'Server' $s.ServerUrl }
       if ($s.ExeExists -and $s.ExeHash) {
-        Field 'Binary' ("{0} MB  sha {1}..." -f $s.ExeSize, $s.ExeHash.Substring(0,12))
+        $ver = if ($s.ExeVersion) { "v$($s.ExeVersion)" } else { 'unversioned build' }
+        Field 'Binary' ("{0}  {1} MB  sha {2}..." -f $ver, $s.ExeSize, $s.ExeHash.Substring(0,12))
+      }
+      if ($s.ProcStale) {
+        Field 'WARNING' 'the running process started BEFORE this binary was written' 'Red'
+        Write-Host '             it is still executing the OLD code - restart the task' -ForegroundColor DarkYellow
       }
       if ($s.TaskExists) { Field 'Task' ("{0} [{1}]" -f $s.TaskName, $s.TaskState) }
       else { Field 'Task' '(none - agent will NOT auto-start)' 'Red' }
 
       if ($s.ExeExists -and $s.ExeHash) {
         if ($remoteHash) {
-          if ($remoteHash -eq $s.ExeHash) { Field 'Update' 'up to date' 'Green' }
-          else { Field 'Update' ("AVAILABLE (latest sha {0}...) - use [2]" -f $remoteHash.Substring(0,12)) 'Yellow' }
+          if ($remoteHash -eq $s.ExeHash) {
+            $upto = if ($remoteVersion) { "up to date (v$remoteVersion)" } else { 'up to date' }
+            Field 'Update' $upto 'Green'
+          }
+          else {
+            # Name the versions when both are known; a sha prefix tells an
+            # operator only that two files differ, never which is newer.
+            $what = if ($remoteVersion -and $s.ExeVersion) {
+                      "AVAILABLE - v{0} (this device is on v{1}) - use [2]" -f $remoteVersion, $s.ExeVersion
+                    } elseif ($remoteVersion) {
+                      "AVAILABLE - v{0} - use [2]" -f $remoteVersion
+                    } else {
+                      "AVAILABLE (latest sha {0}...) - use [2]" -f $remoteHash.Substring(0,12)
+                    }
+            Field 'Update' $what 'Yellow'
+          }
         } else {
           Field 'Update' 'could not check (offline / GitHub unreachable)' 'DarkGray'
         }
@@ -708,7 +744,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
     Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
     if (-not $replaced) { Err "Could not replace $exePath (file locked). Agent is stopped - retry or reboot."; return }
-    Ok "Binary replaced (previous kept as $EXE_NAME.bak)"
+    $newVer = $null
+    try { $newVer = (Get-Item $exePath).VersionInfo.ProductVersion } catch {}
+    if ($newVer) { Ok "Binary replaced with v$($newVer.Trim()) (previous kept as $EXE_NAME.bak)" }
+    else         { Ok "Binary replaced (previous kept as $EXE_NAME.bak)" }
 
     Invoke-AgentReconcile -ExePath $exePath -SkipStart
     Info 'Restarting the agent...'
@@ -725,7 +764,14 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
     }
     Blank
-    if ($proc) { Ok "Update complete - agent running (PID $($proc.Id))." }
+    if ($proc) {
+      # The version is read back from the process's own image, so this line says
+      # what is RUNNING rather than what was copied a moment ago.
+      $runVer = $null
+      try { $runVer = (Get-Item $proc.Path).VersionInfo.ProductVersion } catch {}
+      if ($runVer) { Ok "Update complete - agent v$($runVer.Trim()) running (PID $($proc.Id))." }
+      else         { Ok "Update complete - agent running (PID $($proc.Id))." }
+    }
     else { Warn "Agent not detected yet - start it with: Start-ScheduledTask -TaskName '$TASK_NAME'" }
   }
 
@@ -2379,17 +2425,22 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     $first = $false
 
     $s = Get-AgentStatus
-    $remoteHash = $null
+    $remoteHash = $null; $remoteVersion = $null
     if ($s.ExeExists -and $s.ExeHash) {
-      $remoteHash = Invoke-Spinner -Text 'Checking for the latest agent build' -ArgumentList @($SUM_URL) -Work {
-        param($u)
-        try {
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          ((Invoke-WebRequest -Uri $u -UseBasicParsing -ErrorAction Stop).Content).Trim().Split()[0].ToUpper()
-        } catch { }
+      # One spinner, both sidecars: the sha decides whether an update exists, the
+      # version says what it is called. The .version file is absent on builds
+      # made before versioning, so a missing one is not an error.
+      $remote = Invoke-Spinner -Text 'Checking for the latest agent build' -ArgumentList @($SUM_URL, $VER_URL) -Work {
+        param($sumUrl, $verUrl)
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $h = $null; $v = $null
+        try { $h = ((Invoke-WebRequest -Uri $sumUrl -UseBasicParsing -ErrorAction Stop).Content).Trim().Split()[0].ToUpper() } catch { }
+        try { $v = ((Invoke-WebRequest -Uri $verUrl -UseBasicParsing -ErrorAction Stop).Content).Trim() } catch { }
+        [PSCustomObject]@{ Hash = $h; Version = $v }
       }
+      if ($remote) { $remoteHash = $remote.Hash; $remoteVersion = $remote.Version }
     }
-    Show-Status $s $remoteHash
+    Show-Status $s $remoteHash $remoteVersion
 
     Blank
     Write-Host '   [1] Install    ' -ForegroundColor Green  -NoNewline; Write-Host '- set up the agent on this device'

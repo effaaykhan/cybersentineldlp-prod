@@ -203,14 +203,41 @@ along with a SHA-256 sidecar so endpoint installs can verify integrity.
   pacman -S --needed mingw-w64-x86_64-gcc git
   ```
 
+### Versioning
+
+`agents/endpoint/windows/VERSION` holds the agent's version — one line,
+`MAJOR.MINOR.PATCH`. **Bump it in the same commit as any agent source
+change.** `build.sh` compiles it into the binary and stamps it into the
+exe's Win32 VERSIONINFO resource, so a deployed endpoint can always be tied
+back to the build it came from:
+
+```powershell
+# on the endpoint - no need to run the agent or hash anything
+(Get-Item "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe").VersionInfo.ProductVersion
+```
+
+The version is also reported to the server (shown on the Agents page) and
+written as the fourth line of every agent startup — which is the *running*
+version, not the one on disk. Those differ whenever a binary was replaced
+while the old process kept running, and that machine hashes as up to date
+while behaving exactly as it did before.
+
+CI refuses to build twice from the same version, so forgetting the bump
+fails the build rather than producing two different binaries that both
+claim to be the same one.
+
 ### Compile
+
+Normally you don't: CI builds the agent on every push that touches
+`agents/endpoint/windows/`, regenerates the `.sha256` and `.version`
+sidecars, and commits them back. Build locally only to test before pushing.
 
 ```bash
 # In MSYS2 MinGW 64-bit terminal
 cd /c/cybersentineldlp-prod
 git pull origin main
 cd agents/endpoint/windows
-./build.sh
+./build.sh          # reads ./VERSION, prints it, compiles it in
 ```
 
 `build.sh` runs:

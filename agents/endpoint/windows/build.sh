@@ -22,6 +22,67 @@ if [ -f "cybersentineldlp_agent.exe" ]; then
     echo ""
 fi
 
+# ── Version ───────────────────────────────────────────────────────────────
+# One number, set by hand in ./VERSION, compiled into the binary and reported to
+# the server as the agent version. Bump it in the same commit as any agent
+# source change; CI fails the build if you forget, so a version number always
+# names exactly one binary.
+VERSION_FILE="VERSION"
+if [ ! -f "$VERSION_FILE" ]; then
+    echo "ERROR: $VERSION_FILE not found — the agent version has no source of truth."
+    exit 1
+fi
+AGENT_VER="$(tr -d ' \t\r\n' < "$VERSION_FILE")"
+case "$AGENT_VER" in
+    [0-9]*.[0-9]*.[0-9]*) : ;;
+    *) echo "ERROR: VERSION must be MAJOR.MINOR.PATCH, got '${AGENT_VER}'"; exit 1 ;;
+esac
+
+echo "Version: ${AGENT_VER}"
+echo ""
+
+# Win32 VERSIONINFO, so File Properties -> Details and
+# (Get-Item agent.exe).VersionInfo.ProductVersion report the version WITHOUT
+# running the agent — the question an admin asks about a file on disk.
+# FILEVERSION wants four comma-separated numbers, so pad the semver with a 0.
+VER_COMMAS="$(echo "$AGENT_VER" | tr '.' ',')",0
+RC_OBJ=""
+if command -v windres >/dev/null 2>&1; then
+    cat > version.rc <<RC
+1 VERSIONINFO
+FILEVERSION    ${VER_COMMAS}
+PRODUCTVERSION ${VER_COMMAS}
+FILEOS      0x40004L
+FILETYPE    0x1L
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName",      "CyberSentinel"
+      VALUE "FileDescription",  "CyberSentinel DLP Endpoint Agent"
+      VALUE "FileVersion",      "${AGENT_VER}"
+      VALUE "InternalName",     "cybersentineldlp_agent"
+      VALUE "OriginalFilename", "cybersentineldlp_agent.exe"
+      VALUE "ProductName",      "CyberSentinel DLP Agent"
+      VALUE "ProductVersion",   "${AGENT_VER}"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+RC
+    if windres version.rc -O coff -o version.o 2>/dev/null; then
+        RC_OBJ="version.o"
+    else
+        echo "WARNING: windres failed — exe will carry no file-properties version"
+    fi
+else
+    echo "WARNING: windres not found — exe will carry no file-properties version"
+fi
+
 echo "Compiling agent..."
 echo "This may take 30-60 seconds..."
 echo ""
@@ -39,18 +100,21 @@ echo ""
 # (agent.cpp, Log()). mingw-w64 supplies the WinMain shim, so main() is
 # untouched.
 g++ -std=c++17 -O2 -mwindows \
+    -DAGENT_VERSION_STR="\"${AGENT_VER}\"" \
     agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
-    messaging_text_monitor.cpp \
+    messaging_text_monitor.cpp ${RC_OBJ} \
     -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \
     -luiautomationcore -lpsapi -lmpr -lwtsapi32 -static
 
 # Check if compilation was successful
-if [ $? -eq 0 ]; then
+BUILD_RC=$?
+rm -f version.rc version.o
+if [ $BUILD_RC -eq 0 ]; then
     echo ""
     echo "=========================================="
-    echo "✓ Compilation successful!"
+    echo "✓ Compilation successful! (v${AGENT_VER})"
     echo "=========================================="
     echo ""
 

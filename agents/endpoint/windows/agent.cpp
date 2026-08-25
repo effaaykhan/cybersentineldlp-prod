@@ -176,7 +176,23 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
  
  // Single source of truth for the DLP agent build version reported to the
  // server at registration/heartbeat and shown on the Agents page.
- static const char* AGENT_VERSION = "1.0.0";
+ //
+ // The value is NOT written here. It comes from agents/endpoint/windows/VERSION,
+ // which build.sh compiles in and CI refuses to build twice without a bump, so
+ // one version number means one binary — for good.
+ //
+ // WHY: this was hardcoded "1.0.0" through every build ever shipped. When a fix
+ // went out and the symptom persisted, nothing — not the dashboard, not the log,
+ // not the endpoint — could say whether the box was running the fix or the build
+ // before it, and ruling that out by hand cost a full test cycle every time.
+ //
+ // The same string is also stamped into the exe's Win32 VERSIONINFO resource by
+ // build.sh, so File Properties -> Details and (Get-Item ...).VersionInfo answer
+ // the question without running the agent or hashing anything.
+ #ifndef AGENT_VERSION_STR
+ #define AGENT_VERSION_STR "0.0.0-dev"
+ #endif
+ static const char* AGENT_VERSION = AGENT_VERSION_STR;
 
 /**
  * Run a command line without ever showing a window.
@@ -4254,6 +4270,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      
      void Start() {
          logger.Info("Starting CyberSentinel DLP Agent...");
+         // The version of the code that is RUNNING, which is not always the
+         // version of the exe on disk: replacing the file while the old process
+         // survives leaves a machine that hashes as updated and behaves as it
+         // did before. This line is the only place that distinction is visible.
+         logger.Info("Agent version: " + std::string(AGENT_VERSION));
          logger.Info("Server URL: " + config.serverUrl);
          logger.Info("Agent ID: " + config.agentId);
          

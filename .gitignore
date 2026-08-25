@@ -236,6 +236,11 @@ cybersentineldlp-dlp-server/
 # Agent build backups (build.sh writes cybersentineldlp_agent.exe.backup.<ts>)
 agents/endpoint/windows/*.exe.backup.*
 
+# VERSIONINFO intermediates, generated from VERSION on every build. build.sh
+# deletes them on the way out; these keep a failed build from leaving one behind.
+agents/endpoint/windows/version.rc
+agents/endpoint/windows/version.o
+
 # Redis dumps
 dump.rdb
 

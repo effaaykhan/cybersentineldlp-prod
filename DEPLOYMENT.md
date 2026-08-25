@@ -7,6 +7,7 @@ It covers:
    Ubuntu/Debian box. Pulls pre-built images from GHCR. **No source code
    ever lands on the production host**, and the backend image itself ships
    as **compiled binaries** (see [Source protection](#source-protection)).
+   Optionally wire up [SIEM single sign-on](#siem-single-sign-on-optional).
 2. [Building the Windows agent](#2-building-the-windows-agent) — compile
    the C++ binary on a build box and publish it (with a SHA-256 sidecar)
    to the repo so endpoints can fetch a verified copy.
@@ -185,6 +186,75 @@ curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/ma
 ```
 
 See [Day-2 ops with `csdlp`](#4-day-2-ops-with-csdlp).
+
+### SIEM single sign-on (optional)
+
+Skip this if you are not integrating with the SIEM. Nothing below is
+required for the DLP to run.
+
+SSO handoff tokens are signed **RS256**: the SIEM signs with its private key,
+the DLP verifies with the public key it fetches from the SIEM's JWKS
+endpoint. That fetch is the trust anchor for every SSO login — whoever can
+answer for that URL serves their own public key and mints tokens the DLP
+would believe — so it is verified TLS, always. There is deliberately no
+skip-verify switch.
+
+On a fresh server, two things must be set:
+
+```bash
+# 1. where to fetch the SIEM's public keys
+csdlp sso-cert url https://<siem-host>:<port>/api/sso/jwks.json
+
+# 2. how to verify that host's TLS. Only needed when the SIEM's certificate
+#    is not chained to a public CA (i.e. almost every on-prem SIEM).
+csdlp sso-cert fetch <siem-host>:<port>      # takes it from the SIEM, prints its
+                                             # fingerprint to confirm, installs it
+# ...or, if you were handed the certificate:
+csdlp sso-cert install /path/to/siem.pem     # '-' reads it from stdin
+
+# 3. prove it works — this fetches the JWKS exactly the way the manager does,
+#    from inside the manager container
+csdlp sso-cert check
+```
+
+A working check looks like this:
+
+```
+== SSO trust anchor ==
+  SIEM_JWKS_URL  https://10.200.10.23:3000/api/sso/jwks.json
+  CA bundle      /etc/cybersentineldlp/certs/siem-jwks.pem
+  [ok] bundle is present inside the manager container
+  [ok] 1 key(s): cs-sso-48fecc70/RS256
+  [ok] SSO can verify tokens from this SIEM
+```
+
+`install` writes the certificate to `certs/siem-jwks.pem`, sets
+`SIEM_JWKS_CA_BUNDLE` in `.env`, and recreates the manager with
+`up -d` — **not** `restart`, which reuses the old environment and would
+never see the new value. `./certs` is mounted read-only at the same path in
+dev and prod, so `.env` copies between servers unchanged.
+
+**Which certificate to pin** matters more than how you install it:
+
+| The SIEM's certificate is… | What to do |
+|---|---|
+| issued by a public CA, real hostname | leave `SIEM_JWKS_CA_BUNDLE` empty — the system store already trusts it |
+| issued by an internal/corporate CA | pin the **CA**, not the server's certificate. A CA outlives what it issues, so the SIEM can renew without anyone touching the DLP |
+| self-signed | pin it, and reinstall it at **every** renewal |
+
+The certificate must carry the host from the JWKS URL in its **SAN**. An
+IP-based URL needs that IP as an `IP Address:` SAN entry — a matching CN is
+ignored by modern TLS stacks.
+
+> **Plan for expiry.** The JWKS fetch fails *closed*. The morning a pinned
+> certificate lapses, every SSO login stops with a TLS error while nothing
+> else on the dashboard looks wrong. `csdlp sso-cert check` prints the
+> expiry date and warns inside 30 days.
+
+If the SIEM is still on the older symmetric scheme, set `DLP_SSO_SECRET` in
+`.env` instead and leave `SIEM_JWKS_URL` empty; the DLP picks the verifier
+from the token's own algorithm. Clear `DLP_SSO_SECRET` once the cutover to
+RS256 is done, so symmetric tokens stop being accepted at all.
 
 ---
 

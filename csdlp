@@ -17,6 +17,7 @@
 #   csdlp restart [service]      restart one service or the whole stack
 #   csdlp ps                     docker compose ps
 #   csdlp secret admin-password  print the first-boot admin password (from manager logs)
+#   csdlp sso-cert <sub>         point SSO at the SIEM and trust its TLS certificate
 #   csdlp version                image tags/digests + API version
 #   csdlp self-install           copy this script to /usr/local/bin/csdlp
 #
@@ -52,6 +53,21 @@ kv()  { printf '  %-14s %s\n' "$1" "$2"; }
 dc()  { docker compose -f "$COMPOSE" "$@"; }
 # load a single key from .env without exposing the whole file
 envget() { [ -f "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -1 | tr -d '"'"'"' '; }
+# Set KEY=VALUE in .env, replacing an existing line (commented or not) in place
+# so its position and surrounding comments survive. Appends when absent.
+envset() {
+    local k="$1" v="$2"
+    [ -f "$ENVF" ] || touch "$ENVF"
+    if grep -qE "^[#[:space:]]*${k}=" "$ENVF"; then
+        local tmp; tmp="$(mktemp)"
+        awk -v k="$k" -v v="$v" '
+            !done && $0 ~ "^[#[:space:]]*" k "=" { print k "=" v; done=1; next }
+            { print }
+        ' "$ENVF" > "$tmp" && cat "$tmp" > "$ENVF" && rm -f "$tmp"
+    else
+        printf '%s=%s\n' "$k" "$v" >> "$ENVF"
+    fi
+}
 # run curl inside the manager container (works regardless of host port mapping)
 mgr_curl() { dc exec -T manager curl -sk --max-time 8 "$@" 2>/dev/null; }
 
@@ -326,6 +342,217 @@ cmd_doctor() {
     rm -f "$out"
 }
 
+
+# ── SSO trust anchor ──────────────────────────────────────────────────────
+#
+# SSO from the SIEM is verified with RS256: the SIEM signs the handoff token
+# with its PRIVATE key and the DLP verifies it with the PUBLIC key it fetches
+# from the SIEM's JWKS URL. That fetch is the whole trust anchor — anyone who
+# can impersonate the JWKS host can hand us their own public key and mint
+# tokens we would accept — so it is verified TLS, always.
+#
+# A SIEM on a private IP with a self-signed certificate is not in any public CA
+# store, so that verification fails until this machine is told which
+# certificate to expect. That is what this command does: install the SIEM's
+# certificate as a trust anchor for this one connection. There is deliberately
+# no "skip verification" option anywhere in the product.
+CERTS_DIR="$DIR/certs"
+CERT_FILE="$CERTS_DIR/siem-jwks.pem"
+CERT_IN_CONTAINER="/etc/cybersentineldlp/certs/siem-jwks.pem"
+
+_cert_summary() {
+    local f="$1"
+    command -v openssl >/dev/null 2>&1 || { warn "openssl not on this host — cannot summarise the certificate"; return 0; }
+    kv "subject"  "$(openssl x509 -in "$f" -noout -subject 2>/dev/null | sed 's/^subject=//')"
+    kv "issuer"   "$(openssl x509 -in "$f" -noout -issuer  2>/dev/null | sed 's/^issuer=//')"
+    kv "names"    "$(openssl x509 -in "$f" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ' | tr '\n' ' ')"
+    local nb na; nb="$(openssl x509 -in "$f" -noout -startdate 2>/dev/null | cut -d= -f2)"
+    na="$(openssl x509 -in "$f" -noout -enddate 2>/dev/null | cut -d= -f2)"
+    kv "valid"    "$nb  ->  $na"
+    # Expiry is the failure nobody schedules. The JWKS fetch fails CLOSED, so
+    # the morning this certificate lapses every SSO login stops with a TLS
+    # error and nothing else on the dashboard looks wrong.
+    if openssl x509 -in "$f" -noout -checkend 0 >/dev/null 2>&1; then
+        if ! openssl x509 -in "$f" -noout -checkend 2592000 >/dev/null 2>&1; then
+            warn "expires in under 30 days — SSO logins will stop when it does"
+        fi
+    else
+        err "this certificate has ALREADY EXPIRED — SSO will not work with it"
+    fi
+    if openssl x509 -in "$f" -noout -subject -issuer 2>/dev/null | awk -F'=' 'NR==1{s=$0} NR==2{i=$0} END{exit !(substr(s,9)==substr(i,8))}'; then
+        kv "type" "self-signed (pins this exact certificate; reinstall on renewal)"
+    fi
+}
+
+cmd_sso_cert() {
+    local sub="${1:-show}"; shift || true
+    mkdir -p "$CERTS_DIR"
+    case "$sub" in
+        fetch)
+            # Pull the certificate the SIEM actually presents. Better than being
+            # emailed a file: what is installed is then, by construction, what
+            # the server serves.
+            local hostport="${1:-}"
+            [ -n "$hostport" ] || { err "usage: csdlp sso-cert fetch <host:port>   (e.g. 10.200.10.23:3000)"; return 1; }
+            command -v openssl >/dev/null 2>&1 || { err "openssl is required for fetch"; return 1; }
+            hd "fetching the certificate presented by $hostport"
+            local tmp; tmp="$(mktemp)"
+            if ! openssl s_client -connect "$hostport" -servername "${hostport%%:*}" </dev/null 2>/dev/null \
+                 | openssl x509 -outform pem > "$tmp" 2>/dev/null || [ ! -s "$tmp" ]; then
+                rm -f "$tmp"; err "could not retrieve a certificate from $hostport"; return 1
+            fi
+            _cert_summary "$tmp"
+            echo
+            warn "fetched over an UNVERIFIED connection — confirm the fingerprint below with"
+            warn "whoever runs the SIEM before trusting it:"
+            kv "sha256" "$(openssl x509 -in "$tmp" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)"
+            echo
+            cmd_sso_cert install "$tmp"
+            rm -f "$tmp"
+            ;;
+        install)
+            local src="${1:-}"
+            [ -n "$src" ] || { err "usage: csdlp sso-cert install <file.pem|->   ('-' reads stdin)"; return 1; }
+            local tmp; tmp="$(mktemp)"
+            if [ "$src" = "-" ]; then cat > "$tmp"; else cp "$src" "$tmp" 2>/dev/null || { rm -f "$tmp"; err "cannot read $src"; return 1; }; fi
+
+            # A trust store holds public certificates and nothing else. Refusing
+            # a private key here is not paranoia: the SIEM's key and its
+            # certificate are usually handed over together, the file names look
+            # alike, and this directory is world-readable inside the container.
+            if grep -q "PRIVATE KEY" "$tmp"; then
+                rm -f "$tmp"
+                err "that file contains a PRIVATE KEY. Only the certificate belongs here."
+                err "Send the public certificate instead (the -----BEGIN CERTIFICATE----- block)."
+                return 1
+            fi
+            if ! grep -q "BEGIN CERTIFICATE" "$tmp"; then
+                rm -f "$tmp"; err "no PEM certificate found in that input"; return 1
+            fi
+            if command -v openssl >/dev/null 2>&1 && ! openssl x509 -in "$tmp" -noout >/dev/null 2>&1; then
+                rm -f "$tmp"; err "that is not a valid PEM certificate"; return 1
+            fi
+
+            hd "installing the SIEM JWKS trust anchor"
+            _cert_summary "$tmp"
+            cat "$tmp" > "$CERT_FILE"; chmod 0644 "$CERT_FILE"; rm -f "$tmp"
+            ok "written: $CERT_FILE"
+
+            envset SIEM_JWKS_CA_BUNDLE "$CERT_IN_CONTAINER"
+            ok "SIEM_JWKS_CA_BUNDLE=$CERT_IN_CONTAINER in $(basename "$ENVF")"
+
+            # `up -d` and not `restart`: restart reuses the old environment, so
+            # the container would come back without ever seeing the new value.
+            hd "applying to the manager"
+            dc up -d manager >/dev/null 2>&1 && ok "manager recreated with the new environment" \
+                                             || err "could not recreate the manager"
+            sleep 3
+            cmd_sso_cert check
+            ;;
+        check)
+            hd "SSO trust anchor"
+            local url bundle
+            url="$(envget SIEM_JWKS_URL)"; bundle="$(envget SIEM_JWKS_CA_BUNDLE)"
+            kv "SIEM_JWKS_URL" "${url:-<unset — SSO falls back to HS256 with DLP_SSO_SECRET>}"
+            kv "CA bundle"     "${bundle:-<unset — the system CA store is used>}"
+            [ -f "$CERT_FILE" ] && _cert_summary "$CERT_FILE"
+            if [ -n "$bundle" ]; then
+                # Branch on the ANSWER, not on the exit code. `exec` fails for
+                # reasons that have nothing to do with the file — a stopped
+                # manager, or a compose file that cannot be interpolated — and
+                # reporting every one of those as "the certificate is not
+                # mounted" sends you to fix a mount that was never broken.
+                local seen
+                seen="$(dc exec -T manager sh -c "test -f '$bundle' && echo PRESENT || echo MISSING" 2>/dev/null | tr -d '\r' | tail -1)"
+                case "$seen" in
+                    PRESENT) ok "bundle is present inside the manager container" ;;
+                    MISSING) err "the manager is running but $bundle is not there — is ./certs mounted?"; return 1 ;;
+                    *)       err "could not ask the manager (is it running? is $COMPOSE the right compose file?)"
+                             warn "on a dev box: CSDLP_COMPOSE=docker-compose.yml csdlp sso-cert check"
+                             return 1 ;;
+                esac
+            fi
+            [ -n "$url" ] || {
+                warn "no SIEM_JWKS_URL set, so there is nothing to fetch yet"
+                warn "set it with: csdlp sso-cert url https://<siem-host>:<port>/api/sso/jwks.json"
+                return 0
+            }
+
+            # Verified exactly the way the application does it, from inside the
+            # container the application runs in. A curl from the host proves
+            # nothing about either.
+            echo; hd "fetching the JWKS the way the manager will"
+            local out
+            # Reports the manager's OWN view of the settings before fetching.
+            # .env is what you edited; this is what the running container was
+            # started with, and an edit that never reached it is invisible
+            # otherwise — the display shows the new values while the failure
+            # comes from the old ones.
+            out="$(dc exec -T manager python -c "
+import asyncio
+from app.core.config import settings
+from app.core.sso_jwks import _fetch
+print('ENV_URL ' + (settings.SIEM_JWKS_URL or ''))
+print('ENV_CA ' + (settings.SIEM_JWKS_CA_BUNDLE or ''))
+try:
+    ks = asyncio.run(_fetch(settings.SIEM_JWKS_URL))
+    print('OK ' + str(len(ks)) + ' key(s): ' + ','.join(
+        (k.get('kid') or '?') + '/' + (k.get('alg') or k.get('kty') or '?') for k in ks))
+except Exception as e:
+    print('FAIL ' + type(e).__name__ + ': ' + str(e)[:300])
+" 2>/dev/null | tr -d '\r')"
+
+            local live_url live_ca stale=""
+            live_url="$(printf '%s\n' "$out" | sed -n 's/^ENV_URL //p' | head -1)"
+            live_ca="$(printf '%s\n' "$out" | sed -n 's/^ENV_CA //p'  | head -1)"
+            out="$(printf '%s\n' "$out" | grep -vE '^ENV_(URL|CA) ')"
+            if [ -n "$out" ]; then
+                [ "$live_url" = "$url" ]    || stale="SIEM_JWKS_URL"
+                [ "$live_ca"  = "$bundle" ] || stale="${stale:+$stale and }SIEM_JWKS_CA_BUNDLE"
+            fi
+            if [ -n "$stale" ]; then
+                warn "the manager is running with a DIFFERENT $stale than $(basename "$ENVF") says"
+                kv "  manager has" "${live_url:-<unset>}  |  ${live_ca:-<unset>}"
+                warn "it has not been recreated since that edit — fix with: csdlp restart manager"
+                warn "(or: docker compose -f $COMPOSE up -d manager)"
+                echo
+            fi
+            case "$out" in
+                OK*)   ok "${out#OK }" ; ok "SSO can verify tokens from this SIEM" ;;
+                FAIL*) err "${out#FAIL }"
+                       echo
+                       warn "if this is a certificate error, the SIEM is presenting something other"
+                       warn "than what is installed — re-run: csdlp sso-cert fetch <host:port>" ;;
+                *)     err "could not run the check inside the manager container"
+                       [ -n "$out" ] && echo "  $out" ;;
+            esac
+            ;;
+        url)
+            # The other half of the pair. Without it the trust anchor is
+            # installed and unused, and `check` can only say "nothing to fetch"
+            # — so setting it belongs in the same command rather than in a
+            # hand-edit of .env that is easy to skip on a new server.
+            local u="${1:-}"
+            [ -n "$u" ] || { err "usage: csdlp sso-cert url <jwks-url>   (e.g. https://10.200.10.23:3000/api/sso/jwks.json)"; return 1; }
+            case "$u" in
+                https://*) ;;
+                http://*)  err "refusing an http:// JWKS URL — this document is the trust anchor for every SSO login"; return 1 ;;
+                *)         err "that does not look like a URL"; return 1 ;;
+            esac
+            envset SIEM_JWKS_URL "$u"
+            ok "SIEM_JWKS_URL=$u in $(basename "$ENVF")"
+            dc up -d manager >/dev/null 2>&1 && ok "manager recreated with the new environment" \
+                                             || err "could not recreate the manager"
+            sleep 3
+            cmd_sso_cert check
+            ;;
+        show|"")
+            cmd_sso_cert check
+            ;;
+        *) err "unknown sso-cert subcommand: $sub"; echo "  try: url | fetch | install | check"; return 1;;
+    esac
+}
+
 cmd_self_install() {
     local dest="/usr/local/bin/csdlp"
     cp "$0" "$dest" && chmod +x "$dest" && ok "installed to $dest" || err "install failed (need root?)"
@@ -362,6 +589,13 @@ usage() {
     printf '\n%sMAINTENANCE & SETUP%s\n' "$CG" "$C0"
     printf '  %-26s %s\n' "restart [svc]" "Restart one service, or the whole stack if none given."
     printf '  %-26s %s\n' "secret admin-password" "Print the first-boot admin password (from the manager log)."
+    printf '  %-26s %s\n' "sso-cert url <jwks-url>" "Point SSO at the SIEM's JWKS endpoint (SIEM_JWKS_URL)."
+    printf '  %-26s %s\n' "sso-cert check" "Show the SSO trust anchor and fetch the SIEM's JWKS the way the"
+    printf '  %-26s %s\n' ""              "manager does — the one check that proves SSO can verify tokens."
+    printf '  %-26s %s\n' "sso-cert fetch <host:port>" "Retrieve the certificate the SIEM presents, show its"
+    printf '  %-26s %s\n' ""              "fingerprint to confirm, then install it. Use this on a new server."
+    printf '  %-26s %s\n' "sso-cert install <file|->" "Install a certificate you were given (or pipe it in),"
+    printf '  %-26s %s\n' ""              "set SIEM_JWKS_CA_BUNDLE, recreate the manager and verify."
     printf '  %-26s %s\n' "self-install"  "Copy this script to /usr/local/bin/csdlp so \`csdlp\` runs anywhere."
     printf '  %-26s %s\n' "help"          "Show this guide."
 
@@ -379,6 +613,8 @@ usage() {
     printf '  %s\n' "csdlp update sha-a1b2c3d     # roll forward/back to one exact CI build"
     printf '  %s\n' "csdlp rollback               # undo the last update (and pin the good build)"
     printf '  %s\n' "csdlp update latest          # release a pin and return to the latest images"
+    printf '  %s\n' "csdlp sso-cert fetch 10.200.10.23:3000   # trust a self-signed SIEM for SSO"
+    printf '  %s\n' "csdlp sso-cert check         # can the manager verify SSO tokens right now?"
     printf '\n%sSafety:%s update always backs up first and self-heals on failure; doctor redacts\n' "$CD" "$C0"
     printf 'secrets; no command prints a password except `secret admin-password`.\n'
 }
@@ -396,6 +632,7 @@ case "${1:-}" in
     secret)   shift; cmd_secret "$@";;
     version)  shift; cmd_version "$@";;
     doctor)   shift; cmd_doctor "$@";;
+    sso-cert) shift; cmd_sso_cert "$@";;
     self-install) shift; cmd_self_install "$@";;
     ""|-h|--help|help) usage;;
     *) err "unknown command: $1"; echo; usage; exit 1;;

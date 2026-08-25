@@ -91,11 +91,16 @@ std::atomic<bool>      g_holdCtrl{false};
 // log against a policy that looks correct, which is exactly where this landed.
 // Rate-limited hard, and published from the hook for the worker to write, so the
 // hook itself still does no I/O.
+// Every send key produces one of these, whatever the policy says about the app.
+// Rate limiting lives in the worker (per app), not here: a global limiter meant
+// pressing Enter in Notepad could hide the WhatsApp keypress tested two seconds
+// later, which is precisely the case somebody is trying to diagnose.
 std::mutex        g_probeMx;
 std::string       g_probeExe;
 bool              g_probeManaged = false;
+bool              g_probeInspect = false;
+bool              g_probeBlock   = false;
 bool              g_probeReady   = false;
-std::atomic<long long> g_lastProbeMs{0};
 
 // Alert-mode composer snapshot (see the header: alert mode never holds input,
 // so the box is already empty by the time we get to look at it).
@@ -869,6 +874,8 @@ void WorkerThread() {
                 "(keystrokes will not be held)");
     }
 
+    std::map<std::string, long long> lastProbeAt;
+
     while (!g_stop.load()) {
         HWND  wnd   = nullptr;
         DWORD pid   = 0;
@@ -883,24 +890,39 @@ void WorkerThread() {
         }
         {
             std::string probeExe;
-            bool        probeManaged = false;
+            bool probeManaged = false, probeInspect = false, probeBlock = false;
             {
                 std::lock_guard<std::mutex> lk(g_probeMx);
                 if (g_probeReady) {
                     probeExe     = g_probeExe;
                     probeManaged = g_probeManaged;
+                    probeInspect = g_probeInspect;
+                    probeBlock   = g_probeBlock;
                     g_probeReady = false;
                 }
             }
+            // Per-app, so testing one app never silences the next. Held in the
+            // worker because the hook must not own a container it might grow.
             if (!probeExe.empty()) {
-                if (probeManaged) {
-                    LogInfo("send key pressed in " + probeExe +
-                            " — it IS a managed app, but typed-message inspection is off "
-                            "for it (tick \"Also inspect typed messages\" on the policy)");
-                } else {
-                    LogInfo("send key pressed in " + probeExe +
-                            " — NOT in the policy's managed app list, so it is being ignored. "
-                            "If this is the app you meant, add " + probeExe + " to it.");
+                const long long now = NowSteadyMs();
+                auto it = lastProbeAt.find(probeExe);
+                if (it == lastProbeAt.end() || now - it->second > 30000) {
+                    lastProbeAt[probeExe] = now;
+                    if (probeExe == "(unknown)") {
+                        LogInfo("send key pressed, but the foreground window could not be "
+                                "attributed to a process — nothing to inspect");
+                    } else if (!probeManaged) {
+                        LogInfo("send key pressed in " + probeExe +
+                                " — NOT in the policy's managed app list, so it is being ignored. "
+                                "If this is the app you meant, add " + probeExe + " to it.");
+                    } else if (!probeInspect) {
+                        LogInfo("send key pressed in " + probeExe +
+                                " — it IS a managed app, but typed-message inspection is off "
+                                "for it (tick \"Also inspect typed messages\" on the policy)");
+                    } else {
+                        LogInfo("send key pressed in " + probeExe + " — managed, inspecting (" +
+                                std::string(probeBlock ? "block" : "alert") + " mode)");
+                    }
                 }
             }
         }
@@ -1031,25 +1053,31 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
     }
 
     const TargetApp t = ResolveForegroundApp();
-    if (t.exe.empty()) return CallNextHookEx(g_hook, nCode, wParam, lParam);
 
     NetworkExfilMonitor::MessagingVerdict mv;
-    if (g_cfg.messagingPolicy) {
+    if (g_cfg.messagingPolicy && !t.exe.empty()) {
         try { mv = g_cfg.messagingPolicy(t.exe, g_cfg.username); } catch (...) {}
     }
+
+    // Publish the trace BEFORE any early return, for managed and unmanaged apps
+    // alike. The previous version only traced apps the policy did not cover, so
+    // "the hook is installed and nothing whatsoever happens when I press Enter"
+    // had two indistinguishable causes — the app was not matched, or the hook
+    // was never reaching this line at all — and no way to tell them apart.
+    // Unresolvable foreground windows report as "(unknown)" rather than
+    // returning in silence, because that is a diagnosis too.
+    {
+        std::lock_guard<std::mutex> lk(g_probeMx);
+        g_probeExe     = t.exe.empty() ? std::string("(unknown)") : t.exe;
+        g_probeManaged = mv.managed;
+        g_probeInspect = mv.inspectMessages;
+        g_probeBlock   = mv.block;
+        g_probeReady   = true;
+    }
+    g_cv.notify_one();
+
+    if (t.exe.empty()) return CallNextHookEx(g_hook, nCode, wParam, lParam);
     if (!mv.managed || !mv.inspectMessages) {
-        const long long now = NowSteadyMs();
-        const long long last = g_lastProbeMs.load();
-        if (last == 0 || now - last > 30000) {
-            g_lastProbeMs.store(now);
-            {
-                std::lock_guard<std::mutex> lk(g_probeMx);
-                g_probeExe     = t.exe;
-                g_probeManaged = mv.managed;
-                g_probeReady   = true;
-            }
-            g_cv.notify_one();
-        }
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
 

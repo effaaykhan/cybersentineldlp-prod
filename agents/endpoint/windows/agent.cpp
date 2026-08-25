@@ -2835,9 +2835,20 @@ if (!shouldBlock) {
                  messagingExemptTypes = exTypes;
              }
              messagingEnforced.store(enforced);
+             // The app list is logged in full, not just counted. "apps=9" cannot
+             // answer the only question ever asked of this line — is the exe I am
+             // testing with actually in the list — and the exe name is rarely what
+             // the operator assumes (WhatsApp for Windows is whatsapp.root.exe;
+             // there is no whatsapp.exe on such a machine).
+             std::string appList;
+             for (const auto& a : apps) {
+                 if (!appList.empty()) appList += ",";
+                 appList += a;
+             }
              logger.Info("Messaging app control: enforced=" +
                          std::string(enforced ? "true" : "false") +
                          " action=" + action + " apps=" + std::to_string(apps.size()) +
+                         " [" + appList + "]" +
                          " typed_messages=" + std::string(inspectMessages ? "inspected" : "off") +
                          " message_data_types=" +
                          (dataTypes.empty() ? std::string("all") : std::to_string(dataTypes.size())));

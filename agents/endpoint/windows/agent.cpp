@@ -2857,6 +2857,35 @@ if (!shouldBlock) {
          }
      }
 
+     // Is this image one of the managed messaging apps? Exact match first, then
+     // by STEM — the part of the name before the first dot.
+     //
+     // The stem rule exists because the same product ships under more than one
+     // image name and nobody can be expected to know which one their build uses:
+     // current WhatsApp for Windows is a WebView2 app running as
+     // whatsapp.root.exe, and a machine with it installed has no whatsapp.exe at
+     // all. An operator who typed the obvious name into the policy got silence,
+     // with a policy that looked correct in the UI.
+     //
+     // Comparing whole stems, never prefixes, is what keeps this from
+     // over-matching: "slack" does not match "slackbot", and
+     // "msedgewebview2" — the renderer that must never be managed on its own —
+     // matches nothing in any list.
+     // Caller holds messagingMutex.
+     bool MessagingAppMatches(const std::string& exeLower) {
+         if (messagingApps.count(exeLower)) return true;
+         auto stem = [](const std::string& s) {
+             size_t dot = s.find('.');
+             return dot == std::string::npos ? s : s.substr(0, dot);
+         };
+         const std::string want = stem(exeLower);
+         if (want.empty()) return false;
+         for (const auto& a : messagingApps) {
+             if (stem(a) == want) return true;
+         }
+         return false;
+     }
+
      // Local verdict for the messaging-app attachment detector. Given the dialog-
      // owning process exe (lowercased) and the current user, report whether it's a
      // managed messaging app, whether to BLOCK (vs alert) on a sensitive attachment,
@@ -2868,7 +2897,7 @@ if (!shouldBlock) {
          std::lock_guard<std::mutex> lock(messagingMutex);
          std::string u = ToLower(userName);
          if (!u.empty() && messagingExceptUsers.count(u)) return v;   // user exempt
-         if (messagingApps.count(exeLower)) {
+         if (MessagingAppMatches(exeLower)) {
              v.managed          = true;
              v.block            = (messagingAction == "block");
              v.exemptExtensions = messagingExemptTypes;

@@ -494,7 +494,11 @@ void EmitEvent(const EventFields& f) {
         j << "\"classification_score\":"   << f.classificationScore     << ",";
     }
     if (!f.matchedRule.empty()) {
-        j << "\"classification_rule_matched\":\"" << EscapeJson(f.matchedRule) << "\",";
+        // Plural, and an array: classification_rules_matched is the field the
+        // server declares. The singular string this used to send was not on
+        // EventCreate at all, so it was dropped at ingest and the rule that
+        // fired never reached the event an analyst opens.
+        j << "\"classification_rules_matched\":[\"" << EscapeJson(f.matchedRule) << "\"],";
     }
     if (!f.labels.empty()) {
         j << "\"classification_labels\":[";

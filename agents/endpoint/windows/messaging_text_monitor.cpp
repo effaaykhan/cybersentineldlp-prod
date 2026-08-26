@@ -23,6 +23,7 @@
 
 #include <windows.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #include <UIAutomation.h>
 
 #include "messaging_text_monitor.h"
@@ -65,6 +66,10 @@ bool                    g_pendingWork  = false;
 bool                    g_pendingAudit = false;   // alert mode: nothing was held
 HWND                    g_pendingWnd   = nullptr;
 DWORD                   g_pendingPid   = 0;
+// The name the POLICY matched, which is not always the owner of the window:
+// a Chromium renderer owns the window, its parent owns the product. Events
+// must name the app the operator listed, not msedgewebview2.exe.
+std::string             g_pendingExe;
 bool                    g_pendingCtrl  = false;
 std::vector<std::string> g_pendingTypes;          // operator-selected detector types
 
@@ -237,6 +242,120 @@ TargetApp ResolveApp(HWND fg) {
 }
 
 TargetApp ResolveForegroundApp() { return ResolveApp(GetForegroundWindow()); }
+
+// ── Which app the POLICY should be asked about ────────────────────────────
+//
+// Stepping through the frame host above solves packaged apps. It does not solve
+// the other shape, which is now the common one: a Chromium-family app (WebView2,
+// Electron, CEF) renders its UI in a CHILD process, and when that child owns the
+// window we resolve, the name we hold is msedgewebview2.exe. That name can never
+// be put in a managed-app list — it hosts content for a dozen unrelated
+// applications, and listing it would make every one of them a managed messaging
+// app. The name that CAN be listed is the process that owns the renderer: its
+// parent.
+//
+// So when the resolved image is not managed, walk up the process tree and ask
+// again. Two hops, because a packaged Chromium app is commonly
+// launcher -> browser -> renderer. The window and pid are deliberately NOT
+// rewritten — the composer lives in the renderer and UI Automation must keep
+// reading it there; only the name the policy is asked about moves.
+
+// Walking the process tree means a Toolhelp snapshot, which is far too
+// expensive to run inside a low-level keyboard hook on every Enter the user
+// presses anywhere on the machine. It is also almost always the same answer:
+// the foreground process changes when the user alt-tabs, not when they type. So
+// the ancestry is resolved once per (pid, image) and remembered. Keying on the
+// image name as well as the pid is what makes a recycled pid safe — a new
+// process reusing the number resolves under its own name.
+std::mutex g_ancestorMx;
+struct AncestorEntry { std::string childExe; std::vector<std::string> exes; };
+std::map<DWORD, AncestorEntry> g_ancestorCache;
+
+// A parent pid recorded by the OS outlives the parent process, and Windows
+// recycles pids. Without this the walk can name whatever happens to be sitting
+// on that number now, and "managed messaging app" is a verdict that withholds a
+// keystroke — not somewhere to accept a coincidence. A real ancestor always
+// started first.
+bool StartedNoLaterThan(DWORD ancestorPid, DWORD childPid) {
+    FILETIME a{}, c{}, ignore1{}, ignore2{}, ignore3{};
+    bool gotA = false, gotC = false;
+    if (HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ancestorPid)) {
+        gotA = GetProcessTimes(h, &a, &ignore1, &ignore2, &ignore3) != 0;
+        CloseHandle(h);
+    }
+    if (HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, childPid)) {
+        gotC = GetProcessTimes(h, &c, &ignore1, &ignore2, &ignore3) != 0;
+        CloseHandle(h);
+    }
+    if (!gotA || !gotC) return true;   // cannot tell — leave the walk as it was
+    return CompareFileTime(&a, &c) <= 0;
+}
+
+std::vector<std::string> AncestorExes(DWORD pid, const std::string& childExe) {
+    {
+        std::lock_guard<std::mutex> lk(g_ancestorMx);
+        auto it = g_ancestorCache.find(pid);
+        if (it != g_ancestorCache.end() && it->second.childExe == childExe) {
+            return it->second.exes;
+        }
+    }
+
+    std::vector<std::string> out;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        std::map<DWORD, DWORD> parentOf;
+        PROCESSENTRY32W pe; pe.dwSize = sizeof(pe);
+        if (Process32FirstW(snap, &pe)) {
+            do { parentOf[pe.th32ProcessID] = pe.th32ParentProcessID; }
+            while (Process32NextW(snap, &pe));
+        }
+        CloseHandle(snap);
+
+        DWORD cur = pid;
+        for (int hop = 0; hop < 2; ++hop) {
+            auto it = parentOf.find(cur);
+            if (it == parentOf.end()) break;
+            const DWORD par = it->second;
+            if (!par || par == cur || par == GetCurrentProcessId()) break;
+            if (!StartedNoLaterThan(par, cur)) break;   // recycled pid, not our parent
+            const std::string pexe = ProcessExeName(par);
+            if (pexe.empty()) break;
+            out.push_back(pexe);
+            cur = par;
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(g_ancestorMx);
+    if (g_ancestorCache.size() > 64) g_ancestorCache.clear();
+    g_ancestorCache[pid] = AncestorEntry{ childExe, out };
+    return out;
+}
+
+NetworkExfilMonitor::MessagingVerdict AskPolicy(const std::string& exeLower) {
+    NetworkExfilMonitor::MessagingVerdict v;
+    if (g_cfg.messagingPolicy && !exeLower.empty()) {
+        try { v = g_cfg.messagingPolicy(exeLower, g_cfg.username); } catch (...) {}
+    }
+    return v;
+}
+
+// Returns the verdict, and rewrites t.exe to the name that actually matched.
+NetworkExfilMonitor::MessagingVerdict VerdictForTarget(TargetApp& t) {
+    NetworkExfilMonitor::MessagingVerdict mv = AskPolicy(t.exe);
+    if (mv.managed || t.exe.empty() || !t.pid) return mv;
+
+    for (const auto& pexe : AncestorExes(t.pid, t.exe)) {
+        if (pexe == t.exe) continue;
+        NetworkExfilMonitor::MessagingVerdict pv = AskPolicy(pexe);
+        if (pv.managed) {
+            LogDbg("foreground window belongs to " + t.exe + ", whose ancestor " + pexe +
+                   " IS a managed app — attributing the send to " + pexe);
+            t.exe = pexe;
+            return pv;
+        }
+    }
+    return mv;
+}
 
 // ── Reading the composer ──────────────────────────────────────────────────
 
@@ -485,6 +604,34 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid) {
     return r;
 }
 
+// Chromium does not build an accessibility tree until something asks it to, and
+// the ask that triggers it is the one that then returns nothing — the tree is
+// populated a beat later. A single read therefore finds NO editable node on the
+// first send into a WebView2/Electron app and finds the composer instantly on
+// the second, which is how this module came to report "composer unreadable" for
+// exactly the applications it exists to cover.
+//
+// Retried only for NoComposer. EmptyBox means the tree was there and the box was
+// empty, which is the normal alert-mode result after the app has cleared it, and
+// re-reading that would just burn the budget the watchdog is counting down.
+ComposerRead ReadComposerRetry(IUIAutomation* uia, HWND wnd, DWORD pid, unsigned budgetMs) {
+    const long long deadline = NowSteadyMs() + (long long)budgetMs;
+    ComposerRead r;
+    int attempts = 0;
+    for (;;) {
+        ++attempts;
+        try { r = ReadComposer(uia, wnd, pid); } catch (...) {}
+        if (r.status != ReadStatus::NoComposer) break;
+        if (NowSteadyMs() >= deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+    if (attempts > 1 && r.status != ReadStatus::NoComposer) {
+        LogDbg("composer appeared on attempt " + std::to_string(attempts) +
+               " (accessibility tree was still being built)");
+    }
+    return r;
+}
+
 // ── Releasing a held keystroke ────────────────────────────────────────────
 // Replay as a genuine keypress. Windows stamps it LLKHF_INJECTED, which the
 // hook checks first, so this cannot come back round to us.
@@ -593,7 +740,11 @@ void EmitEvent(const std::string& exe, DWORD pid, const std::string& action,
         j << "\"classification_score\":"   << cls.score                << ",";
     }
     if (!cls.matchedRule.empty()) {
-        j << "\"classification_rule_matched\":\"" << EscapeJson(cls.matchedRule) << "\",";
+        // Plural, and an array: classification_rules_matched is the field the
+        // server declares. The singular string this used to send was not on
+        // EventCreate at all, so it was dropped at ingest and the rule that
+        // fired never reached the event an analyst opens.
+        j << "\"classification_rules_matched\":[\"" << EscapeJson(cls.matchedRule) << "\"],";
     }
     if (!cls.labels.empty()) {
         j << "\"classification_labels\":[";
@@ -723,11 +874,14 @@ void ReportUninspectable(const std::string& exe, DWORD pid) {
 // BLOCK mode. The keystroke is being held right now; every path through here
 // must resolve it exactly once.
 void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
-                  const std::vector<std::string>& types) {
-    const std::string exe = ProcessExeName(pid);
+                  const std::vector<std::string>& types, const std::string& exeHint) {
+    const std::string exe = exeHint.empty() ? ProcessExeName(pid) : exeHint;
 
-    ComposerRead read;
-    try { read = ReadComposer(uia, wnd, pid); } catch (...) {}
+    // Two thirds of the hold budget: enough for Chromium to build its tree,
+    // with the rest left for classification so the watchdog is not what ends
+    // this decision.
+    const unsigned budget = (g_cfg.decisionTimeoutMs ? g_cfg.decisionTimeoutMs : 1200) * 2 / 3;
+    ComposerRead read = ReadComposerRetry(uia, wnd, pid, budget);
 
     const std::string text = TrimText(read.text);
 
@@ -779,14 +933,17 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
 // ALERT mode. Nothing was held and nothing may be touched; the send has already
 // happened or is happening. Report it.
 void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
-                 const std::vector<std::string>& types) {
-    const std::string exe = ProcessExeName(pid);
+                 const std::vector<std::string>& types, const std::string& exeHint) {
+    const std::string exe = exeHint.empty() ? ProcessExeName(pid) : exeHint;
 
     // We are racing the app's own handling of the Enter. Sometimes we win and
     // the text is still in the box; when we lose, the sampler's last snapshot is
     // what was there a moment ago.
-    ComposerRead read;
-    try { read = ReadComposer(uia, wnd, pid); } catch (...) {}
+    // Short budget here on purpose: alert mode is racing the app's own clearing
+    // of the box, so a long retry reads an empty composer rather than a full
+    // one. It is still worth one or two attempts, because they are also what
+    // wakes the accessibility tree for the sends that follow.
+    ComposerRead read = ReadComposerRetry(uia, wnd, pid, 200);
     std::string text = TrimText(read.text);
     std::string via  = read.source;
 
@@ -881,6 +1038,7 @@ void WorkerThread() {
         DWORD pid   = 0;
         bool  ctrl  = false;
         bool  audit = false;
+        std::string exe;
         std::vector<std::string> types;
         {
             std::unique_lock<std::mutex> lk(g_mx);
@@ -931,6 +1089,7 @@ void WorkerThread() {
             if (!g_pendingWork) continue;
             wnd   = g_pendingWnd;
             pid   = g_pendingPid;
+            exe   = g_pendingExe;
             ctrl  = g_pendingCtrl;
             audit = g_pendingAudit;
             types = g_pendingTypes;
@@ -939,9 +1098,9 @@ void WorkerThread() {
 
         try {
             if (audit) {
-                if (uia) AuditAndAct(uia, wnd, pid, types);
+                if (uia) AuditAndAct(uia, wnd, pid, types, exe);
             } else if (uia) {
-                DecideAndAct(uia, wnd, pid, ctrl, types);
+                DecideAndAct(uia, wnd, pid, ctrl, types, exe);
             } else {
                 // We swallowed a keystroke we now cannot adjudicate. Give it back.
                 ResolveRelease(ctrl);
@@ -997,11 +1156,10 @@ void SamplerThread() {
         if (!uia || g_stop.load()) continue;
 
         try {
-            const TargetApp t = ResolveForegroundApp();
+            TargetApp t = ResolveForegroundApp();
             if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
 
-            NetworkExfilMonitor::MessagingVerdict mv;
-            try { mv = g_cfg.messagingPolicy(t.exe, g_cfg.username); } catch (...) { continue; }
+            const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
             // Block mode reads at send time and does not need — or want — a
             // sampler second-guessing it.
             if (!mv.managed || !mv.inspectMessages || mv.block) continue;
@@ -1052,12 +1210,14 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
 
-    const TargetApp t = ResolveForegroundApp();
-
-    NetworkExfilMonitor::MessagingVerdict mv;
-    if (g_cfg.messagingPolicy && !t.exe.empty()) {
-        try { mv = g_cfg.messagingPolicy(t.exe, g_cfg.username); } catch (...) {}
-    }
+    // VerdictForTarget can walk the process tree, which is the one thing in this
+    // hook that is not a pointer chase. It is bounded and, in practice, already
+    // done: the sampler resolves the foreground app every 500ms and fills the
+    // same cache, so by the time anyone presses Enter the answer is a map
+    // lookup. A cold miss costs one process snapshot — single-digit
+    // milliseconds against a LowLevelHooksTimeout of 300.
+    TargetApp t = ResolveForegroundApp();
+    const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
 
     // Publish the trace BEFORE any early return, for managed and unmanaged apps
     // alike. The previous version only traced apps the policy did not cover, so
@@ -1091,6 +1251,7 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
             if (!g_pendingWork) {          // worker busy? drop this one, never queue
                 g_pendingWnd   = t.wnd;
                 g_pendingPid   = t.pid;
+                g_pendingExe   = t.exe;
                 g_pendingCtrl  = false;
                 g_pendingAudit = true;
                 g_pendingTypes = mv.messageDataTypes;
@@ -1107,6 +1268,7 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
         std::lock_guard<std::mutex> lk(g_mx);
         g_pendingWnd   = t.wnd;
         g_pendingPid   = t.pid;
+        g_pendingExe   = t.exe;
         g_pendingCtrl  = ctrl;
         g_pendingAudit = false;
         g_pendingTypes = mv.messageDataTypes;

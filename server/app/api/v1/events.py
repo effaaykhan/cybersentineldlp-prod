@@ -211,11 +211,17 @@ class EventCreate(BaseModel):
     protocol: Optional[str] = Field(None, description="Transport/app protocol (ftp, scp, https, dns, …)")
     transfer_method: Optional[str] = Field(None, description="Canonical exfil method (scp, python_http_server, curl, …)")
     process_name: Optional[str] = Field(None, description="Process that initiated the transfer")
+    process_id: Optional[str] = Field(None, description="PID of that process (string — agents send '' when unknown)")
     process_path: Optional[str] = Field(None, description="Full path of the initiating process")
     destination_host: Optional[str] = Field(None, description="Remote hostname / domain")
     destination_ip: Optional[str] = Field(None, description="Remote IP address")
     destination_port: Optional[str] = Field(None, description="Remote port (string — agent may send '' when unknown)")
     direction: Optional[str] = Field(None, description="Traffic direction (outbound/inbound)")
+    # The exfiltration channel the event belongs to (USB, PRINT, MESSAGING, …).
+    # GET /events already filters on "channel"; until it was declared here the
+    # agents that sent one had it dropped at ingest, so the filter matched
+    # nothing and the channel looked silent.
+    channel: Optional[str] = Field(None, description="Exfil channel, e.g. USB / PRINT / MESSAGING")
     bytes_transferred: Optional[str] = Field(None, description="Bytes moved (decimal string)")
     # ── Web activity context (browser extension) ─────────────────────────────
     # WHAT the user was doing and WHAT KIND of app they were doing it in. See
@@ -585,6 +591,10 @@ async def create_event(
         event_doc["event_subtype"] = event.event_subtype
     if event.description:
         event_doc["description"] = event.description
+    # Uppercased so the /events channel filter, which the dashboard drives from
+    # a fixed vocabulary, matches whatever casing an agent happens to send.
+    if event.channel:
+        event_doc["channel"] = str(event.channel).strip().upper()
     # Document/image type: keep an agent-supplied value now; otherwise the
     # background processor fills it in by classifying the captured content.
     if event.document_type:
@@ -649,6 +659,7 @@ async def create_event(
         "protocol": event.protocol,
         "transfer_method": event.transfer_method,
         "process_name": event.process_name,
+        "process_id": event.process_id,
         "process_path": event.process_path,
         "destination_host": event.destination_host,
         "destination_ip": event.destination_ip,

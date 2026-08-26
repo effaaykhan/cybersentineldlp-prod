@@ -399,15 +399,33 @@ DWORD ElementProcessId(IUIAutomationElement* el) {
 // the conversation above it. In a WebView2/Chromium app the chat history is a
 // Document node exactly like the composer is, and it is READ-ONLY; that is the
 // only reliable difference between them.
-bool ElementIsEditable(IUIAutomationElement* el) {
+// `definite` separates "this node reports it is writable" from "this node did
+// not say, so we guessed from focusability". The distinction is what tells a
+// composer from a conversation pane: a Chromium history region is commonly
+// keyboard-focusable — for scrolling and aria — and so passes the fallback,
+// which is how a read-only conversation ends up looking exactly like a message
+// box to everything downstream.
+struct Editability {
+    bool editable = false;
+    bool definite = false;   // ValueIsReadOnly answered, and answered "writable"
+};
+
+Editability ElementEditability(IUIAutomationElement* el) {
+    Editability e;
     bool readOnly = false;
-    if (BoolProperty(el, UIA_ValueIsReadOnlyPropertyId, readOnly)) return !readOnly;
+    if (BoolProperty(el, UIA_ValueIsReadOnlyPropertyId, readOnly)) {
+        e.editable = !readOnly;
+        e.definite = e.editable;
+        return e;
+    }
     // No Value pattern at all — common for a contenteditable div. Fall back to
-    // "the caret can go here", which the history pane does not offer.
+    // "the caret can go here", which is weaker and is recorded as such.
     bool focusable = false;
-    if (BoolProperty(el, UIA_IsKeyboardFocusablePropertyId, focusable)) return focusable;
-    return false;
+    if (BoolProperty(el, UIA_IsKeyboardFocusablePropertyId, focusable)) e.editable = focusable;
+    return e;
 }
+
+bool ElementIsEditable(IUIAutomationElement* el) { return ElementEditability(el).editable; }
 
 bool ElementHasFocus(IUIAutomationElement* el) {
     bool focused = false;
@@ -471,7 +489,8 @@ struct ComposerRead {
 
 struct Candidate {
     std::string text;
-    bool        focused = false;
+    bool        focused  = false;
+    bool        definite = false;   // see ElementEditability
 };
 
 // Every editable Edit/Document node under `root`. `sizeCap` of 0 means no cap;
@@ -497,11 +516,12 @@ void CollectEditable(IUIAutomation* uia, IUIAutomationElement* root, size_t size
                 IUIAutomationElement* el = nullptr;
                 arr->GetElement(i, &el);
                 if (!el) continue;
-                if (ElementIsEditable(el)) {
+                const Editability ed = ElementEditability(el);
+                if (ed.editable) {
                     ++editableSeen;
                     std::string t = TextFromElement(el);
                     if (!t.empty() && (sizeCap == 0 || t.size() <= sizeCap)) {
-                        out.push_back({ t, ElementHasFocus(el) });
+                        out.push_back({ t, ElementHasFocus(el), ed.definite });
                     }
                 }
                 el->Release();
@@ -567,18 +587,43 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid) {
             std::vector<Candidate> cands;
             CollectEditable(uia, focused, 0, cands, editableSeen);
             if (!cands.empty()) {
-                const Candidate* pick = &cands[0];
-                for (const auto& c : cands) if (c.focused) { pick = &c; break; }
-                focused->Release();
-                r.status = ReadStatus::Ok; r.text = pick->text;
-                // The count matters: with one candidate we read the only
-                // editable node under focus and cannot have read the wrong box.
-                // With several we picked the one reporting focus, or the first —
-                // and if the verdict later looks wrong, this is the number that
-                // says whether picking was even involved.
-                r.source = "focused-subtree(" + std::to_string(cands.size()) +
-                           (pick->focused ? ",focused" : ",first") + ")";
-                return r;
+                // Taking cands[0] when nothing reported focus was this module
+                // breaking its own rule on the one path where it costs the most.
+                // This sweep runs UNCAPPED, so the chat history is an eligible
+                // candidate, and in document order it comes FIRST — above the
+                // composer. The result is the conversation being classified in
+                // place of the message: a card number sitting in the box is
+                // reported "clean (Public)" and released, which is precisely the
+                // leak this module exists to stop, wearing a passing verdict.
+                //
+                // Order of evidence, strongest first:
+                const Candidate* pick = nullptr;
+                const char* how = "";
+                for (const auto& c : cands) if (c.focused) { pick = &c; how = "focused"; break; }
+                if (!pick) {
+                    // Exactly one node that POSITIVELY reports it is writable.
+                    // A history pane reaches this list only through the
+                    // focusability fallback, so it is never `definite`.
+                    const Candidate* only = nullptr; int n = 0;
+                    for (const auto& c : cands) if (c.definite) { ++n; only = &c; }
+                    if (n == 1) { pick = only; how = "sole-writable"; }
+                }
+                if (!pick && cands.size() == 1) { pick = &cands[0]; how = "sole-candidate"; }
+
+                if (pick) {
+                    focused->Release();
+                    r.status = ReadStatus::Ok; r.text = pick->text;
+                    r.source = std::string("focused-subtree(") + std::to_string(cands.size()) +
+                               "," + how + ")";
+                    return r;
+                }
+                // Genuinely ambiguous. Fall through to the window sweep, which
+                // is size-capped and demands an unambiguous answer — and if that
+                // declines too, the send is reported as uninspectable rather
+                // than silently blessed by whichever node sorted first.
+                LogDbg("focused subtree offered " + std::to_string(cands.size()) +
+                       " editable candidates, none focused and none uniquely writable"
+                       " — not guessing");
             }
         }
         focused->Release();
@@ -1351,6 +1396,28 @@ bool Start(const Config& cfg) {
         return false;
     }
     g_cfg = cfg;
+
+    // A one-line proof, on every start, that the classifier this module was
+    // handed actually detects something. Without it, "the classifier is not
+    // wired up" and "we read the wrong box" produce the identical outcome —
+    // every message reported clean — and the only way to tell them apart was to
+    // find someone willing to type a card number into a chat app and then read
+    // a log. The literal is Visa's published test PAN; it is a checksum-valid
+    // number that belongs to nobody.
+    try {
+        const NetworkExfilMonitor::ClassifyResult probe =
+            g_cfg.classify("card 4111 1111 1111 1111 end", "messaging_message");
+        if (probe.labels.empty()) {
+            LogWarn("classifier self-test FAILED — a known-good test card was not detected. "
+                    "Every typed message will be reported clean until this is fixed.");
+        } else {
+            LogInfo("classifier self-test: detected [" + DescribeLabels(probe) + "] as " +
+                    (probe.category.empty() ? std::string("(no category)") : probe.category));
+        }
+    } catch (...) {
+        LogWarn("classifier self-test THREW — typed-message inspection cannot classify anything");
+    }
+
     g_stop.store(false);
     g_decisionPending.store(false);
     g_decisionResolved.store(true);

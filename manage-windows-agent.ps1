@@ -983,6 +983,193 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Select-Object -First 1
   }
 
+  # ============================================================
+  #  Typed-message (chat) control diagnostics
+  # ============================================================
+  #
+  # "I switched the policy on, typed a card number into WhatsApp, and nothing
+  # happened" has six distinct causes and from a dashboard they look identical.
+  # The agent already writes every one of them to its log; nobody was ever going
+  # to find them by scrolling past a heartbeat every thirty seconds. This reads
+  # the log back and names the stage that stopped, in the order the agent runs
+  # them:
+  #
+  #   1. the module started       - the keyboard hook installed
+  #   2. the policy arrived       - typed-message inspection is ON, not just the
+  #                                 messaging policy being active
+  #   3. the send key was seen    - Enter reached the hook
+  #   4. the app was recognised   - the foreground app resolved to a name the
+  #                                 policy lists (this is the one that bites:
+  #                                 WhatsApp for Windows is not whatsapp.exe)
+  #   5. the composer was read    - UI Automation could see the message box
+  #   6. the text counted         - it matched a detector the policy selected
+  #
+  # Stage 4 is also answered from the live process list rather than from the
+  # log, because the exact image name is the single fact an operator needs and
+  # the one they cannot guess.
+
+  $CHAT_PROC_PATTERN = '^(whatsapp|teams|ms-teams|msteams|telegram|slack|discord|signal|skype|wechat|viber|messenger)'
+
+  function Get-ChatProcesses {
+    $out = @{}
+    foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
+      if ($p.ProcessName -notmatch $CHAT_PROC_PATTERN) { continue }
+      $exe = ($p.ProcessName + '.exe').ToLower()
+      if ($out.ContainsKey($exe)) { $out[$exe]++ } else { $out[$exe] = 1 }
+    }
+    $out.GetEnumerator() | Sort-Object Name
+  }
+
+  # Last "Messaging app control: enforced=.. action=.. apps=N [a,b,c] typed_messages=.."
+  # line the agent wrote. That line IS the policy as the endpoint received it,
+  # which is the only version of it that matters.
+  function Get-MessagingPolicyFromLog {
+    param($Lines)
+    $line = @($Lines | Where-Object { $_ -match 'Messaging app control:' } | Select-Object -Last 1)
+    if ($line.Count -eq 0) { return $null }
+    $t = $line[0]
+    $apps = @()
+    # Anchored on "apps=N [" and not just the first bracket in the line - the
+    # log prefixes every line with a bracketed timestamp, which an unanchored
+    # match happily returns as the app list.
+    if ($t -match 'apps=\d+\s*\[([^\]]*)\]') {
+      $apps = @($matches[1].Split(',') | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
+    }
+    [PSCustomObject]@{
+      Raw       = $t
+      Enforced  = ($t -match 'enforced=true')
+      Action    = $(if ($t -match 'action=(\w+)') { $matches[1] } else { 'unknown' })
+      Inspected = ($t -match 'typed_messages=inspected')
+      Apps      = $apps
+    }
+  }
+
+  function Show-MessagingDiagnostics {
+    param([string]$LogPath)
+
+    Blank
+    Header 'TYPED-MESSAGE (CHAT) CONTROL - WHY IS NOTHING HAPPENING?' 'Cyan'
+
+    if (-not $LogPath -or -not (Test-Path $LogPath)) {
+      Err 'No agent log to read - the agent has not run on this device yet.'
+      return
+    }
+
+    # Tail rather than the whole file: the policy line is rewritten on every
+    # sync, so a recent window always carries a current copy of every stage.
+    $lines = @(Get-Content -Path $LogPath -Tail 6000 -ErrorAction SilentlyContinue)
+    if ($lines.Count -eq 0) { Err 'The agent log is empty.'; return }
+
+    $ver = @($lines | Where-Object { $_ -match 'Agent version:' } | Select-Object -Last 1)
+    Hr '-' 'DarkCyan'
+    Field 'Log'   $LogPath
+    Field 'Build' $(if ($ver.Count) { ($ver[0] -replace '^.*Agent version:\s*','') } else { 'not logged (pre-1.1.0 build)' })
+    Field 'Lines' "$($lines.Count) most recent"
+
+    # ---- stage 1: did the module start? ----------------------------------
+    Blank
+    Write-Host '   STAGE 1  Module started' -ForegroundColor Cyan
+    $hookOn   = @($lines | Where-Object { $_ -match 'typed-message keyboard hook installed' }).Count -gt 0
+    $hookFail = @($lines | Where-Object { $_ -match 'SetWindowsHookEx' }) | Select-Object -Last 1
+    $uiaBad   = @($lines | Where-Object { $_ -match 'UIAutomation unavailable' }).Count -gt 0
+    if ($hookOn)        { Ok  'Keyboard hook installed.' }
+    elseif ($hookFail)  { Err "Hook could not be installed: $hookFail" }
+    else                { Err 'The typed-message monitor never started (no hook line in this window of the log).' }
+    if ($uiaBad) { Err 'UI Automation is unavailable in this session - the composer can never be read.' }
+
+    # ---- stage 2: what policy did the endpoint actually receive? ---------
+    Blank
+    Write-Host '   STAGE 2  Policy as the endpoint received it' -ForegroundColor Cyan
+    $pol = Get-MessagingPolicyFromLog $lines
+    if (-not $pol) {
+      Err 'The agent has not fetched a messaging policy in this window of the log.'
+      Hint 'Check the agent is registered and reaching the server (menu [4] -> [1]).'
+    } else {
+      Field 'Enforced'       $(if ($pol.Enforced) { 'yes' } else { 'NO - no active messaging_app_control policy' })
+      Field 'Action'         $pol.Action
+      Field 'Typed messages' $(if ($pol.Inspected) { 'INSPECTED' } else { 'OFF' })
+      Field 'Managed apps'   $(if ($pol.Apps.Count) { ($pol.Apps -join ', ') } else { '(none)' })
+      if (-not $pol.Enforced) {
+        Err 'No messaging policy is active - nothing downstream of this can fire.'
+      } elseif (-not $pol.Inspected) {
+        Err 'Typed-message inspection is OFF. Attachment control is on; the chat box is not watched.'
+        Hint 'Dashboard -> Policies -> your Messaging App Control policy -> tick "Inspect typed messages",'
+        Hint 'and make sure at least one data type is selected (an empty selection means OFF).'
+      } else {
+        Ok 'Typed-message inspection is on.'
+      }
+    }
+
+    # ---- stage 3/4: what did the hook see, and under what name? ----------
+    Blank
+    Write-Host '   STAGE 3  Send keys seen by the hook' -ForegroundColor Cyan
+    $probes = @($lines | Where-Object { $_ -match 'send key pressed in' } | Select-Object -Last 12)
+    if ($probes.Count -eq 0) {
+      Err 'No send key has reached the hook.'
+      Hint 'Press Enter inside a chat window, wait ~5 seconds, then run this again.'
+      Hint 'If it stays empty: the agent is running as a different user or session than the'
+      Hint 'one typing, or it was never started - a low-level hook only sees its own session.'
+    } else {
+      Ok "$($probes.Count) recent send key(s) traced:"
+      foreach ($l in $probes) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+    }
+
+    Blank
+    Write-Host '   STAGE 4  App names on THIS device right now' -ForegroundColor Cyan
+    $running = @(Get-ChatProcesses)
+    if ($running.Count -eq 0) {
+      Warn 'No chat application is running - start the one you are testing with, then run this again.'
+    } else {
+      foreach ($r in $running) {
+        $covered = $false
+        if ($pol -and $pol.Apps.Count) {
+          $stem = ($r.Name -split '\.')[0]
+          foreach ($a in $pol.Apps) { if ($a -eq $r.Name -or (($a -split '\.')[0]) -eq $stem) { $covered = $true; break } }
+        }
+        if ($covered) { Ok  ("{0,-26} x{1}  - in the policy" -f $r.Name, $r.Value) }
+        else          { Warn ("{0,-26} x{1}  - NOT in the policy" -f $r.Name, $r.Value) }
+      }
+      Hint 'These are the exact names the agent matches. Copy one verbatim into the policy'
+      Hint 'if it is the app you meant - WhatsApp for Windows is whatsapp.root.exe, not whatsapp.exe.'
+    }
+
+    # ---- stage 5: could the composer be read? ----------------------------
+    Blank
+    Write-Host '   STAGE 5  Reading the message box' -ForegroundColor Cyan
+    $unread = @($lines | Where-Object { $_ -match 'composer unreadable|no editable node' } | Select-Object -Last 5)
+    $readok = @($lines | Where-Object { $_ -match 'composer appeared on attempt|via (focused|window-fallback|sampled)' } | Select-Object -Last 5)
+    if ($unread.Count -gt 0) {
+      Err 'UI Automation could not see the composer on at least one send:'
+      foreach ($l in $unread) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+      Hint 'Chromium-based apps build their accessibility tree lazily; agent 1.2.0 retries for this.'
+      Hint 'If it persists on 1.2.0+, that build of the app cannot be inspected - report the exe name.'
+    }
+    if ($readok.Count -gt 0) { Ok 'The composer has been read successfully:'; foreach ($l in $readok) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') } }
+    if ($unread.Count -eq 0 -and $readok.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }
+
+    # ---- stage 6: verdicts ------------------------------------------------
+    Blank
+    Write-Host '   STAGE 6  Verdicts' -ForegroundColor Cyan
+    $verdicts = @($lines | Where-Object { $_ -match 'MESSAGING_TEXT_(BLOCKED|ALERT|LATE)' } | Select-Object -Last 10)
+    $clean    = @($lines | Where-Object { $_ -match 'message clean' } | Select-Object -Last 5)
+    if ($verdicts.Count -gt 0) {
+      Ok "$($verdicts.Count) message(s) acted on:"
+      foreach ($l in $verdicts) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+    } elseif ($clean.Count -gt 0) {
+      Warn 'Messages were read and classified as NOT sensitive:'
+      foreach ($l in $clean) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+      Hint 'A line ending "none of them selected in this policy" means the classifier DID find'
+      Hint 'something and the policy did not select that data type. Tick it, or test with a card number.'
+    } else {
+      Info 'No message has been classified yet.'
+    }
+
+    Blank
+    Hr '-' 'DarkCyan'
+    Hint 'Test text that always trips a default policy: a Visa test number, 4111 1111 1111 1111.'
+    Hint 'Phone numbers are deliberately NOT selected by default - they are ordinary chat traffic.'
+  }
+
   function Show-Logs {
     Blank
     Header 'AGENT LOGS' 'Cyan'
@@ -1008,9 +1195,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Write-Host '   [2] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Follow live         (press any key to stop)'
       Write-Host '   [3] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Errors & warnings only (recent)'
       Write-Host '   [4] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Open in Notepad'
-      Write-Host '   [5] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Back to main menu'
+      Write-Host '   [5] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Chat / typed-message control - why is nothing happening?'
+      Write-Host '   [6] ' -ForegroundColor Cyan -NoNewline; Write-Host 'Back to main menu'
       Blank
-      $c = Read-Host '   Choose (1-5)'
+      $c = Read-Host '   Choose (1-6)'
       switch ($c.Trim()) {
         '1' {
           Blank; Hr '-' 'DarkCyan'
@@ -1053,8 +1241,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
           try { Start-Process notepad.exe -ArgumentList "`"$($log.FullName)`""; Ok 'Opened in Notepad.' }
           catch { Err "Could not open Notepad: $($_.Exception.Message)" }
         }
-        '5' { return }
-        default { Warn 'Enter a number from 1 to 5.' }
+        '5' {
+          try { Show-MessagingDiagnostics -LogPath $log.FullName }
+          catch { Err "Diagnostics failed: $($_.Exception.Message)" }
+        }
+        '6' { return }
+        default { Warn 'Enter a number from 1 to 6.' }
       }
     }
   }

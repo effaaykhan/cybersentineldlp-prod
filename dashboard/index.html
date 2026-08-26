@@ -2,7 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!--
+      This pointed at /vite.svg, which has never existed in public/ — so every
+      tab showed the browser's default globe. Sizes are shipped in one .ico
+      because browsers pick different ones: 16 for the tab, 32 for the bookmark
+      bar, 48 for a Windows shortcut. The icon is cropped to the shield alone;
+      the logo's circuit "wings" span the full width but are a few pixels tall,
+      so squaring the whole artwork shrinks the shield to half the frame and it
+      turns to a smudge at 16px.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
       Content-Security-Policy is also set by nginx in dashboard/nginx.conf,

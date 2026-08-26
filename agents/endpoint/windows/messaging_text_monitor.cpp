@@ -570,7 +570,14 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid) {
                 const Candidate* pick = &cands[0];
                 for (const auto& c : cands) if (c.focused) { pick = &c; break; }
                 focused->Release();
-                r.status = ReadStatus::Ok; r.text = pick->text; r.source = "focused-subtree";
+                r.status = ReadStatus::Ok; r.text = pick->text;
+                // The count matters: with one candidate we read the only
+                // editable node under focus and cannot have read the wrong box.
+                // With several we picked the one reporting focus, or the first —
+                // and if the verdict later looks wrong, this is the number that
+                // says whether picking was even involved.
+                r.source = "focused-subtree(" + std::to_string(cands.size()) +
+                           (pick->focused ? ",focused" : ",first") + ")";
                 return r;
             }
         }
@@ -824,6 +831,23 @@ NetworkExfilMonitor::ClassifyResult RestrictToTypes(
     return out;
 }
 
+// What was read, WITHOUT putting the message into a plaintext log on the
+// endpoint. Length and character mix are enough to separate "we read the
+// composer" from "we read the placeholder, or the wrong node entirely" — a
+// 14-character all-letters read is "Type a message", not an Aadhaar number —
+// and neither is the data this module exists to protect. The message itself
+// still travels to the server on the event, where retention and read-redaction
+// apply to it.
+std::string TextProfile(const std::string& t) {
+    size_t digits = 0, letters = 0;
+    for (unsigned char c : t) {
+        if (std::isdigit(c)) ++digits;
+        else if (std::isalpha(c)) ++letters;
+    }
+    return std::to_string(t.size()) + " chars/" + std::to_string(digits) +
+           " digits/" + std::to_string(letters) + " letters";
+}
+
 std::string DescribeLabels(const NetworkExfilMonitor::ClassifyResult& cls) {
     std::string what;
     for (const auto& l : cls.labels) {
@@ -902,8 +926,20 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
     const NetworkExfilMonitor::ClassifyResult cls = RestrictToTypes(raw, types);
 
     if (!IsSensitive(cls)) {
+        // Why this says more than "clean": RestrictToTypes reports "Public" both
+        // when the classifier found nothing AND when it found something the
+        // policy did not select, so the one line an operator reads for a block
+        // that did not happen could not tell those apart. Alert mode has said
+        // this since it shipped; block mode is the mode people actually roll
+        // out, and it was the one flying blind.
+        std::string dropped;
+        if (!raw.labels.empty() && cls.labels.empty()) {
+            dropped = " (classifier saw [" + DescribeLabels(raw) +
+                      "], none of them selected in this policy)";
+        }
         LogDbg("message clean (" + (cls.category.empty() ? std::string("unclassified") : cls.category) +
-               ") in " + exe + " via " + read.source + " — releasing");
+               ") in " + exe + " via " + read.source + " [" + TextProfile(text) + "]" +
+               dropped + " — releasing");
         ResolveRelease(withCtrl);
         return;
     }
@@ -1001,7 +1037,7 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
             dropped = " (classifier saw [" + DescribeLabels(raw) +
                       "], none of them selected in this policy)";
         }
-        LogDbg("alert: message clean in " + exe + " via " + via + " — " +
+        LogDbg("alert: message clean in " + exe + " via " + via + " [" + TextProfile(text) + "] — " +
                (cls.category.empty() ? std::string("unclassified") : cls.category) +
                dropped);
         return;

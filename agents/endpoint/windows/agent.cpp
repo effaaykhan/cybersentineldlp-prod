@@ -2845,13 +2845,25 @@ if (!shouldBlock) {
                  if (!appList.empty()) appList += ",";
                  appList += a;
              }
+             // The selected detector types, by name and for the same reason as
+             // the app list above: "message_data_types=10" cannot answer the
+             // question actually being asked of this line, which is whether the
+             // type an operator just tested with is one of the ten. A message
+             // that the classifier flagged and the policy then discarded reads
+             // as "clean" everywhere downstream, so this is the only place the
+             // selection is visible on the endpoint.
+             std::string typeList;
+             for (const auto& t : dataTypes) {
+                 if (!typeList.empty()) typeList += ",";
+                 typeList += t;
+             }
              logger.Info("Messaging app control: enforced=" +
                          std::string(enforced ? "true" : "false") +
                          " action=" + action + " apps=" + std::to_string(apps.size()) +
                          " [" + appList + "]" +
                          " typed_messages=" + std::string(inspectMessages ? "inspected" : "off") +
                          " message_data_types=" +
-                         (dataTypes.empty() ? std::string("all") : std::to_string(dataTypes.size())));
+                         (dataTypes.empty() ? std::string("all") : typeList));
          } catch (...) {
              logger.Error("FetchMessagingAppPolicy failed");
          }

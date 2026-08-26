@@ -1035,12 +1035,17 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     if ($t -match 'apps=\d+\s*\[([^\]]*)\]') {
       $apps = @($matches[1].Split(',') | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
     }
+    $types = @()
+    if ($t -match 'message_data_types=([A-Za-z0-9_,]+)') {
+      $types = @($matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
     [PSCustomObject]@{
       Raw       = $t
       Enforced  = ($t -match 'enforced=true')
       Action    = $(if ($t -match 'action=(\w+)') { $matches[1] } else { 'unknown' })
       Inspected = ($t -match 'typed_messages=inspected')
       Apps      = $apps
+      Types     = $types
     }
   }
 
@@ -1057,7 +1062,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
     # Tail rather than the whole file: the policy line is rewritten on every
     # sync, so a recent window always carries a current copy of every stage.
-    $lines = @(Get-Content -Path $LogPath -Tail 6000 -ErrorAction SilentlyContinue)
+    # -Encoding UTF8: the agent writes UTF-8, and Windows PowerShell defaults to
+    # the ANSI code page, which turns every em-dash in the agent's own messages
+    # into mojibake right where an operator is trying to read a diagnosis.
+    $lines = @(Get-Content -Path $LogPath -Tail 6000 -Encoding UTF8 -ErrorAction SilentlyContinue)
     if ($lines.Count -eq 0) { Err 'The agent log is empty.'; return }
 
     $ver = @($lines | Where-Object { $_ -match 'Agent version:' } | Select-Object -Last 1)
@@ -1089,6 +1097,13 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Field 'Action'         $pol.Action
       Field 'Typed messages' $(if ($pol.Inspected) { 'INSPECTED' } else { 'OFF' })
       Field 'Managed apps'   $(if ($pol.Apps.Count) { ($pol.Apps -join ', ') } else { '(none)' })
+      # The selection is what decides whether a detection counts. A message the
+      # classifier flagged and the policy then discarded is logged as "clean",
+      # which is the single most confusing outcome this feature has.
+      Field 'Counts as sensitive' $(
+        if ($pol.Types.Count -eq 1 -and $pol.Types[0] -eq 'all') { 'every Confidential/Restricted type' }
+        elseif ($pol.Types.Count) { ($pol.Types -join ', ') }
+        else { '(not logged - agent older than 1.2.1)' })
       if (-not $pol.Enforced) {
         Err 'No messaging policy is active - nothing downstream of this can fire.'
       } elseif (-not $pol.Inspected) {
@@ -1158,8 +1173,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     } elseif ($clean.Count -gt 0) {
       Warn 'Messages were read and classified as NOT sensitive:'
       foreach ($l in $clean) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+      Hint 'Read the bracket on each line. "[19 chars/12 digits/0 letters]" is what was actually'
+      Hint 'read from the box - all letters and ~14 chars means the placeholder was read, not your text.'
       Hint 'A line ending "none of them selected in this policy" means the classifier DID find'
-      Hint 'something and the policy did not select that data type. Tick it, or test with a card number.'
+      Hint 'something and the policy did not select that type - tick it in the policy above.'
+      Hint 'Neither present? The classifier genuinely saw nothing: check the format you typed.'
+      Hint 'An Aadhaar is only detected in 4-4-4 form (1234 5678 9012), not as 12 unbroken digits.'
     } else {
       Info 'No message has been classified yet.'
     }

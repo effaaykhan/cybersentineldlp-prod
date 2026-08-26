@@ -1010,6 +1010,25 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
   $CHAT_PROC_PATTERN = '^(whatsapp|teams|ms-teams|msteams|telegram|slack|discord|signal|skype|wechat|viber|messenger)'
 
+  # Strip the log's fixed preamble but KEEP THE TIMESTAMP. Dropping everything
+  # up to "MessagingText:" made every line ageless, so a verdict from the build
+  # before last read exactly like one from thirty seconds ago - which is how a
+  # stale "message clean" got mistaken for the current build's answer.
+  function Format-MsgLine {
+    param([string]$Line)
+    '  ' + ($Line -replace '\s*-\s*CyberSentinelAgent\s*-\s*(INFO|DEBUG|WARNING|ERROR)\s*-\s*MessagingText:\s*', '  ')
+  }
+
+  # Index of the last line matching $Pattern, or -1. Used to compare WHEN things
+  # happened against WHEN this build started, without parsing timestamps.
+  function Get-LastIndex {
+    param($Lines, [string]$Pattern)
+    for ($i = $Lines.Count - 1; $i -ge 0; $i--) {
+      if ($Lines[$i] -match $Pattern) { return $i }
+    }
+    return -1
+  }
+
   function Get-ChatProcesses {
     $out = @{}
     foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
@@ -1085,6 +1104,20 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     else                { Err 'The typed-message monitor never started (no hook line in this window of the log).' }
     if ($uiaBad) { Err 'UI Automation is unavailable in this session - the composer can never be read.' }
 
+    # The classifier proves itself against a known-good test card at every start,
+    # so "the classifier is not wired up" and "we read the wrong box" stop being
+    # the same symptom - both otherwise report every message as clean.
+    $selfTest = @($lines | Where-Object { $_ -match 'classifier self-test' } | Select-Object -Last 1)
+    if ($selfTest.Count -eq 0) {
+      Info 'No classifier self-test in the log (agent older than 1.2.2).'
+    } elseif ($selfTest[0] -match 'FAILED|THREW') {
+      Err (Format-MsgLine $selfTest[0]).Trim()
+      Hint 'The classifier itself is not detecting a known-good test card. Nothing typed'
+      Hint 'into any app will ever be flagged until this line reads "detected".'
+    } else {
+      Ok ('Classifier self-test: ' + (($selfTest[0] -replace '^.*classifier self-test:\s*','')))
+    }
+
     # ---- stage 2: what policy did the endpoint actually receive? ---------
     Blank
     Write-Host '   STAGE 2  Policy as the endpoint received it' -ForegroundColor Cyan
@@ -1126,7 +1159,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Hint 'one typing, or it was never started - a low-level hook only sees its own session.'
     } else {
       Ok "$($probes.Count) recent send key(s) traced:"
-      foreach ($l in $probes) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+      foreach ($l in $probes) { Write-LogLine (Format-MsgLine $l) }
     }
 
     Blank
@@ -1151,28 +1184,44 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # ---- stage 5: could the composer be read? ----------------------------
     Blank
     Write-Host '   STAGE 5  Reading the message box' -ForegroundColor Cyan
-    $unread = @($lines | Where-Object { $_ -match 'composer unreadable|no editable node' } | Select-Object -Last 5)
+    # "(empty box)" was matched by neither list, so a read that found the nodes
+    # and no text in them produced a completely silent stage - the one outcome
+    # that looks identical to nothing having run at all.
+    $unread = @($lines | Where-Object { $_ -match 'composer unreadable|no editable node|empty box|ambiguous composer|not guessing' } | Select-Object -Last 5)
     $readok = @($lines | Where-Object { $_ -match 'composer appeared on attempt|via (focused|window-fallback|sampled)' } | Select-Object -Last 5)
     if ($unread.Count -gt 0) {
       Err 'UI Automation could not see the composer on at least one send:'
-      foreach ($l in $unread) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+      foreach ($l in $unread) { Write-LogLine (Format-MsgLine $l) }
       Hint 'Chromium-based apps build their accessibility tree lazily; agent 1.2.0 retries for this.'
       Hint 'If it persists on 1.2.0+, that build of the app cannot be inspected - report the exe name.'
     }
-    if ($readok.Count -gt 0) { Ok 'The composer has been read successfully:'; foreach ($l in $readok) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') } }
+    if ($readok.Count -gt 0) { Ok 'The composer has been read successfully:'; foreach ($l in $readok) { Write-LogLine (Format-MsgLine $l) } }
     if ($unread.Count -eq 0 -and $readok.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }
 
     # ---- stage 6: verdicts ------------------------------------------------
     Blank
     Write-Host '   STAGE 6  Verdicts' -ForegroundColor Cyan
+
+    # A restart writes a fresh "Agent version:" line. Anything the typed-message
+    # monitor said BEFORE that line was said by the previous build, and reading
+    # it as this build's answer is how an update looks like it changed nothing.
+    $startIdx = Get-LastIndex $lines 'Agent version:'
+    $actIdx   = Get-LastIndex $lines 'MESSAGING_TEXT_|message clean|no composer text|composer unreadable'
+    if ($startIdx -ge 0 -and $actIdx -lt $startIdx) {
+      Warn 'Everything shown above happened BEFORE the currently running build started.'
+      Hint 'This build has not inspected a message yet. Type into the chat app, press Enter,'
+      Hint 'wait a few seconds, then run this again - the new lines carry a [N chars/N digits]'
+      Hint 'profile that the older ones do not.'
+      Blank
+    }
     $verdicts = @($lines | Where-Object { $_ -match 'MESSAGING_TEXT_(BLOCKED|ALERT|LATE)' } | Select-Object -Last 10)
     $clean    = @($lines | Where-Object { $_ -match 'message clean' } | Select-Object -Last 5)
     if ($verdicts.Count -gt 0) {
       Ok "$($verdicts.Count) message(s) acted on:"
-      foreach ($l in $verdicts) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+      foreach ($l in $verdicts) { Write-LogLine (Format-MsgLine $l) }
     } elseif ($clean.Count -gt 0) {
       Warn 'Messages were read and classified as NOT sensitive:'
-      foreach ($l in $clean) { Write-LogLine ($l -replace '^.*MessagingText:\s*','  ') }
+      foreach ($l in $clean) { Write-LogLine (Format-MsgLine $l) }
       Hint 'Read the bracket on each line. "[19 chars/12 digits/0 letters]" is what was actually'
       Hint 'read from the box - all letters and ~14 chars means the placeholder was read, not your text.'
       Hint 'A line ending "none of them selected in this policy" means the classifier DID find'
@@ -1185,7 +1234,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
     Blank
     Hr '-' 'DarkCyan'
-    Hint 'Test text that always trips a default policy: a Visa test number, 4111 1111 1111 1111.'
+    Hint 'Test with a REAL test card number - the detector runs a Luhn checksum, so an'
+    Hint 'invented 16-digit string is correctly ignored. These pass: 4111 1111 1111 1111'
+    Hint '(Visa), 5500 0000 0000 0004 (Mastercard), 3400 0000 0000 009 (Amex).'
+    Hint 'An Aadhaar must be in 4-4-4 form (1234 5678 9012), not 12 unbroken digits.'
     Hint 'Phone numbers are deliberately NOT selected by default - they are ordinary chat traffic.'
   }
 

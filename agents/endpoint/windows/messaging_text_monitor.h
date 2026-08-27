@@ -151,7 +151,7 @@ struct Config {
     // Alert mode only: how often the composer is snapshotted while a managed
     // app is in the foreground. Costs one UIA focused-element read per tick,
     // and only inside a managed app with alert-mode inspection on.
-    unsigned sampleIntervalMs = 500;
+    unsigned sampleIntervalMs = 250;
 
     // An app whose composer UI Automation cannot read at all is reported once,
     // then not again for this long — it is a deployment fact worth surfacing,

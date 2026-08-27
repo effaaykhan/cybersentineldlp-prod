@@ -39,6 +39,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cwchar>
 
 namespace MessagingTextMonitor {
@@ -958,7 +959,7 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
         // Nothing readable. Could be an empty box, could be an app whose composer
         // UI Automation cannot see. Either way the user's Enter is not ours to
         // keep — release it. See the header on why this fails open.
-        LogDbg("no composer text for " + exe + " (" +
+        LogInfo("no composer text for " + exe + " (" +
                (read.status == ReadStatus::NoComposer ? "no editable node" : "empty box") +
                ") — releasing keystroke");
         ResolveRelease(withCtrl);
@@ -982,7 +983,7 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
             dropped = " (classifier saw [" + DescribeLabels(raw) +
                       "], none of them selected in this policy)";
         }
-        LogDbg("message clean (" + (cls.category.empty() ? std::string("unclassified") : cls.category) +
+        LogInfo("message clean (" + (cls.category.empty() ? std::string("unclassified") : cls.category) +
                ") in " + exe + " via " + read.source + " [" + TextProfile(text) + "]" +
                dropped + " — releasing");
         ResolveRelease(withCtrl);
@@ -1049,7 +1050,7 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
         }
     }
     if (text.empty()) {
-        LogDbg("alert: nothing to inspect in " + exe + " (" +
+        LogInfo("alert: nothing to inspect in " + exe + " (" +
                (read.status == ReadStatus::NoComposer ? "no editable node"
                                                       : "empty box") +
                ", " + snapshotNote + ")");
@@ -1082,7 +1083,7 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
             dropped = " (classifier saw [" + DescribeLabels(raw) +
                       "], none of them selected in this policy)";
         }
-        LogDbg("alert: message clean in " + exe + " via " + via + " [" + TextProfile(text) + "] — " +
+        LogInfo("alert: message clean in " + exe + " via " + via + " [" + TextProfile(text) + "] — " +
                (cls.category.empty() ? std::string("unclassified") : cls.category) +
                dropped);
         return;
@@ -1097,20 +1098,57 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
             " detected=[" + what + "] via=" + via);
 }
 
+// UI Automation, acquired lazily and retried for the life of the process.
+//
+// This used to be one CoCreateInstance at thread start. If it failed — COM not
+// ready yet at boot, a transient RPC fault, the service starting before anyone
+// has logged into the desktop — the pointer stayed null forever and every
+// managed send took the silent release below. Typed-message inspection was
+// then simply off until somebody restarted the agent, and the only evidence
+// was a single warning thousands of lines earlier in the log. From the outside
+// it looked exactly like the feature had never been built: the hook traced the
+// keypress, and then nothing at all happened, every time, for days.
+//
+// A retry costs one failed CoCreateInstance. Not retrying costs the feature.
+bool EnsureUia(IUIAutomation*& uia, long long& lastComplaintMs, bool complain = true) {
+    if (uia) return true;
+
+    const HRESULT hr = CoCreateInstance(CLSID_CUIAutomation, nullptr,
+                                        CLSCTX_INPROC_SERVER, IID_IUIAutomation,
+                                        (void**)&uia);
+    if (uia) {
+        LogInfo("UIAutomation acquired — the message box can be read");
+        lastComplaintMs = 0;
+        return true;
+    }
+
+    if (complain) {
+        const long long now = NowSteadyMs();
+        if (!lastComplaintMs || now - lastComplaintMs > 60000) {
+            lastComplaintMs = now;
+            char hex[16];
+            snprintf(hex, sizeof(hex), "0x%08lX", (unsigned long)hr);
+            LogWarn(std::string("UIAutomation unavailable (hr=") + hex + ") — the message "
+                    "box cannot be read, so typed messages are NOT being inspected. "
+                    "Retrying on every send.");
+        }
+    }
+    return false;
+}
+
 void WorkerThread() {
     // MTA: UI Automation is called from here and nowhere else on this thread.
     HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool comOk = SUCCEEDED(hrCom);
 
+    if (!comOk) {
+        LogWarn("COM could not be initialised on the inspection thread — typed "
+                "messages cannot be inspected on this agent run");
+    }
+
     IUIAutomation* uia = nullptr;
-    if (comOk) {
-        CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
-                         IID_IUIAutomation, (void**)&uia);
-    }
-    if (!uia) {
-        LogWarn("UIAutomation unavailable — typed-message inspection disabled "
-                "(keystrokes will not be held)");
-    }
+    long long uiaComplainedAt = 0;
+    if (comOk) EnsureUia(uia, uiaComplainedAt);
 
     std::map<std::string, long long> lastProbeAt;
 
@@ -1178,12 +1216,18 @@ void WorkerThread() {
         }
 
         try {
+            const bool haveUia = comOk && EnsureUia(uia, uiaComplainedAt);
             if (audit) {
-                if (uia) AuditAndAct(uia, wnd, pid, types, exe);
-            } else if (uia) {
+                if (haveUia) AuditAndAct(uia, wnd, pid, types, exe);
+            } else if (haveUia) {
                 DecideAndAct(uia, wnd, pid, ctrl, types, exe);
             } else {
-                // We swallowed a keystroke we now cannot adjudicate. Give it back.
+                // We swallowed a keystroke we now cannot adjudicate. Give it back —
+                // and SAY so. Releasing in silence is what made this failure
+                // indistinguishable from the feature not existing: the hook wrote
+                // "managed, inspecting", and then no line was ever written again.
+                LogWarn("released the Enter in " + exe + " UNINSPECTED — UI Automation "
+                        "is not available, so the message was sent unchecked");
                 ResolveRelease(ctrl);
             }
         } catch (...) {
@@ -1226,15 +1270,13 @@ void SamplerThread() {
     const bool comOk = SUCCEEDED(hrCom);
 
     IUIAutomation* uia = nullptr;
-    if (comOk) {
-        CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
-                         IID_IUIAutomation, (void**)&uia);
-    }
+    long long uiaComplainedAt = 0;
 
     const unsigned interval = g_cfg.sampleIntervalMs ? g_cfg.sampleIntervalMs : 500;
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(interval));
-        if (!uia || g_stop.load()) continue;
+        if (g_stop.load()) break;
+        if (!comOk) continue;
 
         try {
             TargetApp t = ResolveForegroundApp();
@@ -1244,6 +1286,11 @@ void SamplerThread() {
             // Block mode reads at send time and does not need — or want — a
             // sampler second-guessing it.
             if (!mv.managed || !mv.inspectMessages || mv.block) continue;
+
+            // Acquired here rather than at thread start, and quietly: the worker
+            // complains at the moment it matters — a real send. A sampler that
+            // cannot see the tree has nothing worth saying twice a second.
+            if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
 
             ComposerRead r = ReadComposer(uia, t.wnd, t.pid);
             if (r.status != ReadStatus::Ok) continue;

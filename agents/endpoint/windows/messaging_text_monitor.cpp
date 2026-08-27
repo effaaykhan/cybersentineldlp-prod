@@ -476,6 +476,34 @@ std::string TextFromElement(IUIAutomationElement* el) {
     return out;
 }
 
+// What UI Automation thinks the focused thing IS. Two property reads, used
+// only on a failed read: "no editable node" is a conclusion, not a diagnosis,
+// and without this there is no way to tell a composer we failed to recognise
+// from a focus that was never on the composer at all.
+// Absent from some UIAutomation headers, same reason kIID_IUIAutomationTextPattern
+// is spelled out above. 30005 is fixed by the UI Automation specification.
+const PROPERTYID kNamePropertyId = 30005;
+
+std::string ElementDescription(IUIAutomationElement* el) {
+    if (!el) return "(none)";
+    std::string out;
+    VARIANT v; VariantInit(&v);
+    if (SUCCEEDED(el->GetCurrentPropertyValue(UIA_ControlTypePropertyId, &v)) && v.vt == VT_I4)
+        out += "type=" + std::to_string((int)v.lVal);
+    VariantClear(&v);
+
+    VariantInit(&v);
+    if (SUCCEEDED(el->GetCurrentPropertyValue(kNamePropertyId, &v))
+        && v.vt == VT_BSTR && v.bstrVal) {
+        std::string n = WideToUtf8(v.bstrVal);
+        if (n.size() > 40) n = n.substr(0, 40) + "...";
+        if (!out.empty()) out += " ";
+        out += "name='" + n + "'";
+    }
+    VariantClear(&v);
+    return out.empty() ? "(opaque)" : out;
+}
+
 enum class ReadStatus {
     Ok,          // we read the composer
     EmptyBox,    // we found the composer; there was nothing in it
@@ -668,6 +696,110 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid,
 
     r.status = (editableSeen > 0) ? ReadStatus::EmptyBox : ReadStatus::NoComposer;
     return r;
+}
+
+// The ONLY read allowed while a keystroke is held.
+//
+// Everything expensive lives in one call the hold path must never make:
+// FindAll(TreeScope_Descendants). In a Chromium app the focused element's
+// subtree is the whole document - the entire chat history - and enumerating it
+// cross-process measured seven seconds on WhatsApp for Windows. It is a single
+// blocking call, so no deadline can interrupt it: the budget expired before the
+// first node was examined, which is why the read reported "no editable node"
+// while editable nodes plainly existed.
+//
+// So this asks UI Automation exactly one question - what has focus, and what is
+// in it - and accepts no for an answer. Finding the composer the hard way is
+// the sampler's job, done between keystrokes when nothing is held.
+ComposerRead ReadFocusedOnly(IUIAutomation* uia, DWORD pid) {
+    ComposerRead r;
+    if (!uia) return r;
+
+    IUIAutomationElement* focused = nullptr;
+    if (FAILED(uia->GetFocusedElement(&focused)) || !focused) return r;
+
+    const DWORD fpid = ElementProcessId(focused);
+    const bool sameProcess = (pid == 0 || fpid == 0 || fpid == pid);
+    const bool editable = ElementIsEditable(focused) && sameProcess;
+    std::string t = TextFromElement(focused);
+
+    if (!t.empty() && (editable || t.size() <= g_cfg.maxFallbackTextBytes)) {
+        r.status = ReadStatus::Ok;
+        r.text   = t;
+        r.source = editable ? "focused"
+                            : (sameProcess ? "focused-unverified" : "focused-crossprocess");
+    } else {
+        r.status = editable ? ReadStatus::EmptyBox : ReadStatus::NoComposer;
+        r.source = "focus:" + ElementDescription(focused);
+    }
+    focused->Release();
+    return r;
+}
+
+// Locate the composer ELEMENT and keep it. Called by the sampler, never while a
+// keystroke is held: this is the expensive path, and finding the box once and
+// then reading its text every cycle is the difference between a sample that is
+// a quarter of a second old and one that costs seven seconds to take.
+IUIAutomationElement* FindComposerElement(IUIAutomation* uia, HWND wnd, DWORD pid,
+                                          long long deadlineMs, int& editableSeen) {
+    if (!uia) return nullptr;
+
+    IUIAutomationElement* focused = nullptr;
+    if (SUCCEEDED(uia->GetFocusedElement(&focused)) && focused) {
+        const DWORD fpid = ElementProcessId(focused);
+        if ((pid == 0 || fpid == 0 || fpid == pid) && ElementIsEditable(focused)) {
+            ++editableSeen;
+            return focused;   // caller releases
+        }
+        focused->Release();
+    }
+
+    if (!wnd) return nullptr;
+    IUIAutomationElement* root = nullptr;
+    if (FAILED(uia->ElementFromHandle(wnd, &root)) || !root) return nullptr;
+
+    IUIAutomationElement* best = nullptr;
+    for (int controlType : { UIA_EditControlTypeId, UIA_DocumentControlTypeId }) {
+        if (best || (deadlineMs && NowSteadyMs() >= deadlineMs)) break;
+        IUIAutomationCondition* cond = nullptr;
+        VARIANT v; VariantInit(&v);
+        v.vt = VT_I4; v.lVal = controlType;
+        if (FAILED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, v, &cond)) || !cond) {
+            VariantClear(&v);
+            continue;
+        }
+        VariantClear(&v);
+        IUIAutomationElementArray* arr = nullptr;
+        root->FindAll(TreeScope_Descendants, cond, &arr);
+        if (arr) {
+            int n = 0; arr->get_Length(&n);
+            for (int i = 0; i < n; ++i) {
+                if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
+                IUIAutomationElement* el = nullptr;
+                arr->GetElement(i, &el);
+                if (!el) continue;
+                const Editability ed = ElementEditability(el);
+                if (ed.editable) ++editableSeen;
+                // Only a node that POSITIVELY reports it is writable. A history
+                // pane reaches the editable list through the focusability
+                // fallback and is never `definite`, which is what keeps the
+                // conversation from being sampled in place of the message.
+                if (ed.editable && ed.definite) {
+                    if (ElementHasFocus(el)) {          // unambiguous winner
+                        if (best) best->Release();
+                        best = el;
+                        break;
+                    }
+                    if (!best) { best = el; continue; }
+                }
+                el->Release();
+            }
+            arr->Release();
+        }
+        cond->Release();
+    }
+    root->Release();
+    return best;
 }
 
 // Chromium does not build an accessibility tree until something asks it to, and
@@ -980,7 +1112,9 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
     {
         std::lock_guard<std::mutex> lk(g_snapMx);
         const long long age = g_snapAtMs ? (NowSteadyMs() - g_snapAtMs) : -1;
-        if (g_snapPid == pid && !g_snapText.empty() && age >= 0 && age <= 5000)
+        // Widened from 5s. A sample only goes stale when the box changes, and
+        // the box does not change while the user is looking at what they typed.
+        if (g_snapPid == pid && !g_snapText.empty() && age >= 0 && age <= 15000)
             snap = TrimText(g_snapText);
     }
 
@@ -998,11 +1132,30 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
     }
 
     if (text.empty()) {
+        // Focused element only - no tree walk of any kind. Retried, because
+        // Chromium builds its accessibility tree lazily and the request that
+        // triggers the build is the one that returns nothing.
         const unsigned budget = (g_cfg.decisionTimeoutMs ? g_cfg.decisionTimeoutMs : 1200) * 2 / 3;
-        // No window sweep on this path: see ReadComposer step 3.
-        ComposerRead read = ReadComposerRetry(uia, wnd, pid, budget, false);
+        const long long deadline = NowSteadyMs() + (long long)budget;
+        const long long began = NowSteadyMs();
+        ComposerRead read;
+        int attempts = 0;
+        for (;;) {
+            ++attempts;
+            try { read = ReadFocusedOnly(uia, pid); } catch (...) {}
+            if (read.status == ReadStatus::Ok || NowSteadyMs() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        }
         text = TrimText(read.text);
         via  = read.source;
+
+        if (text.empty()) {
+            // How long it took, and what focus actually was. "No composer" is a
+            // conclusion; this is the evidence behind it.
+            LogInfo("focused read found nothing for " + exe + " after " +
+                    std::to_string(NowSteadyMs() - began) + "ms / " +
+                    std::to_string(attempts) + " attempt(s) — " + read.source);
+        }
 
         // The live read is preferred because it is current — the sampler can be
         // up to one interval behind the last characters typed. But a stale
@@ -1327,7 +1480,13 @@ void SamplerThread() {
     IUIAutomation* uia = nullptr;
     long long uiaComplainedAt = 0;
 
-    const unsigned interval = g_cfg.sampleIntervalMs ? g_cfg.sampleIntervalMs : 500;
+    // The composer, found once and then polled. See the loop below.
+    IUIAutomationElement* composer = nullptr;
+    DWORD     composerPid      = 0;
+    long long lastFindMs       = 0;
+    long long findComplainedAt = 0;
+
+    const unsigned interval = g_cfg.sampleIntervalMs ? g_cfg.sampleIntervalMs : 250;
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(interval));
         if (g_stop.load()) break;
@@ -1338,6 +1497,9 @@ void SamplerThread() {
             if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
 
             const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
+            if (!mv.managed && composer) {
+                composer->Release(); composer = nullptr; composerPid = 0;
+            }
             // Block mode used to be excluded here, on the reasoning that it reads
             // at send time and did not want a sampler second-guessing it. That
             // reasoning was backwards: block mode is the one mode that reads
@@ -1351,21 +1513,54 @@ void SamplerThread() {
             // cannot see the tree has nothing worth saying twice a second.
             if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
 
-            // Bounded even here. Nothing is held while this runs, but a read
-            // that takes seconds produces samples older than the freshness
-            // window DecideAndAct will accept — a sampler nobody can use.
-            ComposerRead r = ReadComposer(uia, t.wnd, t.pid, true, NowSteadyMs() + 1500);
-            if (r.status != ReadStatus::Ok) continue;
-            const std::string text = TrimText(r.text);
-            if (text.empty()) continue;
+            // Focus moved to another app, or another instance of one. The
+            // element we were holding belongs to a window nobody types into now.
+            if (composer && t.pid != composerPid) {
+                composer->Release(); composer = nullptr; composerPid = 0;
+            }
+
+            // Locate it the expensive way ONCE. This is the FindAll over a
+            // Chromium document that measured seven seconds — affordable here,
+            // where nothing is held, and nowhere else. Rate-limited so a window
+            // with no composer at all is not re-searched four times a second.
+            if (!composer) {
+                const long long now = NowSteadyMs();
+                if (lastFindMs && now - lastFindMs < 3000) continue;
+                lastFindMs = now;
+                int seen = 0;
+                composer = FindComposerElement(uia, t.wnd, t.pid, now + 8000, seen);
+                if (composer) {
+                    composerPid = t.pid;
+                    LogInfo("sampler locked onto the composer in " + t.exe + " after " +
+                            std::to_string(NowSteadyMs() - now) + "ms");
+                } else {
+                    if (!findComplainedAt || now - findComplainedAt > 60000) {
+                        findComplainedAt = now;
+                        LogWarn("sampler cannot find a composer in " + t.exe + " (" +
+                                std::to_string(seen) + " editable node(s) seen in " +
+                                std::to_string(NowSteadyMs() - now) + "ms) — typed "
+                                "messages in this app cannot be inspected");
+                    }
+                    continue;
+                }
+            }
+
+            // The cheap part, every cycle: one element, one or two property
+            // reads. This is what makes the sample a quarter of a second old
+            // rather than seven seconds old.
+            std::string text;
+            try { text = TrimText(TextFromElement(composer)); } catch (...) {}
 
             std::lock_guard<std::mutex> lk(g_snapMx);
+            // Stored even when empty. A sample that is never cleared would block
+            // an innocent message on a card number sent five minutes ago.
             g_snapText  = text;
             g_snapPid   = t.pid;
             g_snapAtMs  = NowSteadyMs();
         } catch (...) {}
     }
 
+    if (composer) composer->Release();
     if (uia) uia->Release();
     if (comOk) CoUninitialize();
 }

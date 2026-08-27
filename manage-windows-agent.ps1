@@ -1188,6 +1188,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # and no text in them produced a completely silent stage - the one outcome
     # that looks identical to nothing having run at all.
     $unread = @($lines | Where-Object { $_ -match 'composer unreadable|no editable node|empty box|ambiguous composer|not guessing' } | Select-Object -Last 5)
+    # A send that was HELD and then handed back is the outcome that used to be
+    # invisible: the hook traced the keypress, the message went out unchecked,
+    # and no stage here matched a single one of the lines that said so.
+    $released = @($lines | Where-Object { $_ -match 'inspection exceeded|UNINSPECTED|decision threw|COM could not be initialised' } | Select-Object -Last 5)
     $readok = @($lines | Where-Object { $_ -match 'composer appeared on attempt|via (focused|window-fallback|sampled)' } | Select-Object -Last 5)
     if ($unread.Count -gt 0) {
       Err 'UI Automation could not see the composer on at least one send:'
@@ -1195,8 +1199,15 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Hint 'Chromium-based apps build their accessibility tree lazily; agent 1.2.0 retries for this.'
       Hint 'If it persists on 1.2.0+, that build of the app cannot be inspected - report the exe name.'
     }
+    if ($released.Count -gt 0) {
+      Err 'The Enter was held and then RELEASED UNINSPECTED - those messages were sent unchecked:'
+      foreach ($l in $released) { Write-LogLine (Format-MsgLine $l) }
+      Hint 'This is the agent failing open on purpose - it will never hold your keyboard hostage.'
+      Hint '"inspection exceeded" = the read was too slow. "UIAutomation unavailable" = the'
+      Hint 'accessibility layer is not answering; 1.2.3+ retries it on every send instead of once.'
+    }
     if ($readok.Count -gt 0) { Ok 'The composer has been read successfully:'; foreach ($l in $readok) { Write-LogLine (Format-MsgLine $l) } }
-    if ($unread.Count -eq 0 -and $readok.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }
+    if ($unread.Count -eq 0 -and $readok.Count -eq 0 -and $released.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }
 
     # ---- stage 6: verdicts ------------------------------------------------
     Blank
@@ -1206,7 +1217,11 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # monitor said BEFORE that line was said by the previous build, and reading
     # it as this build's answer is how an update looks like it changed nothing.
     $startIdx = Get-LastIndex $lines 'Agent version:'
-    $actIdx   = Get-LastIndex $lines 'MESSAGING_TEXT_|message clean|no composer text|composer unreadable'
+    # Every outcome, not just the DEBUG ones. Before 1.2.3 the verdict lines were
+    # DEBUG, so on an agent logging at INFO this stage reported "nothing has been
+    # classified" while inspection was in fact running perfectly - and the three
+    # WARNING-level outcomes below were matched by nothing at all.
+    $actIdx   = Get-LastIndex $lines 'MESSAGING_TEXT_|message clean|no composer text|composer unreadable|inspection exceeded|UNINSPECTED|decision threw|alert: nothing to inspect'
     if ($startIdx -ge 0 -and $actIdx -lt $startIdx) {
       Warn 'Everything shown above happened BEFORE the currently running build started.'
       Hint 'This build has not inspected a message yet. Type into the chat app, press Enter,'
@@ -1228,8 +1243,15 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Hint 'something and the policy did not select that type - tick it in the policy above.'
       Hint 'Neither present? The classifier genuinely saw nothing: check the format you typed.'
       Hint 'An Aadhaar is only detected in 4-4-4 form (1234 5678 9012), not as 12 unbroken digits.'
+    } elseif ($released.Count -gt 0) {
+      Err 'Messages were held but never classified - see the released lines in stage 5.'
+      Hint 'Nothing was inspected, so nothing could be blocked. Fix that first.'
     } else {
       Info 'No message has been classified yet.'
+      if ($ver.Count -and ($ver[0] -notmatch '1\.2\.[3-9]|1\.[3-9]|[2-9]\.')) {
+        Hint 'On agents older than 1.2.3 the verdict lines are DEBUG, so an agent logging at'
+        Hint 'INFO shows this message even when inspection is working. Update to 1.2.3+.'
+      }
     }
 
     Blank

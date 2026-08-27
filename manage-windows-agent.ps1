@@ -1203,8 +1203,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Err 'The Enter was held and then RELEASED UNINSPECTED - those messages were sent unchecked:'
       foreach ($l in $released) { Write-LogLine (Format-MsgLine $l) }
       Hint 'This is the agent failing open on purpose - it will never hold your keyboard hostage.'
-      Hint '"inspection exceeded" = the read was too slow. "UIAutomation unavailable" = the'
-      Hint 'accessibility layer is not answering; 1.2.3+ retries it on every send instead of once.'
+      Hint '"inspection exceeded" = reading the box took longer than the whole hold budget.'
+      Hint 'On 1.2.4+ the verdict comes from what the sampler read WHILE YOU WERE TYPING, so a'
+      Hint 'slow accessibility tree no longer costs you the block - these lines should stop.'
+      Hint 'Still seeing them dated after the update? Send me the timestamps.'
     }
     if ($readok.Count -gt 0) { Ok 'The composer has been read successfully:'; foreach ($l in $readok) { Write-LogLine (Format-MsgLine $l) } }
     if ($unread.Count -eq 0 -and $readok.Count -eq 0 -and $released.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }

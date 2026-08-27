@@ -449,7 +449,7 @@ Get-Process cybersentineldlp_agent | Select-Object Id, StartTime, Path
 Get-Content "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.log" -Tail 50
 
 # Confirm the dashboard sees the agent
-# (open http://<server>:80/ in a browser → Agents page)
+# (open https://<server>:3023/ in a browser → Agents page)
 ```
 
 ### Re-install / update an existing endpoint

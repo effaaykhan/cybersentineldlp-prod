@@ -50,6 +50,7 @@ std::atomic<bool> g_running{false};
 std::atomic<bool> g_stop{false};
 
 HHOOK       g_hook       = nullptr;
+HHOOK       g_mouseHook  = nullptr;
 DWORD       g_hookThread = 0;
 std::thread g_hookThreadObj;
 std::thread g_workerObj;
@@ -114,6 +115,29 @@ std::mutex             g_snapMx;
 std::string            g_snapText;
 DWORD                  g_snapPid   = 0;
 long long              g_snapAtMs  = 0;
+// The verdict on that snapshot, decided here rather than in the mouse hook.
+// A low-level hook has a few hundred milliseconds of total budget before
+// Windows silently evicts it, so it must read a bool, never run a classifier.
+bool                   g_snapSensitive = false;
+std::string            g_snapWhat;
+// The WHOLE result, not just its category: the event schema carries the score,
+// the matched rule and the labels, and a block that reached the dashboard
+// missing all three would be visibly poorer than the same block from Enter.
+NetworkExfilMonitor::ClassifyResult g_snapCls;
+
+// ── Where the Send button is ──────────────────────────────────────────────
+// Holding Enter is only half a send. Every one of these apps also has a button,
+// and a user who watches one message get blocked reaches for the mouse — which
+// is exactly what happened in testing. The sampler keeps this rectangle fresh
+// so the mouse hook can answer "was that click on Send?" with an integer
+// comparison and nothing else.
+std::mutex g_sendMx;
+RECT       g_sendRect  = {0, 0, 0, 0};
+DWORD      g_sendPid   = 0;
+long long  g_sendAtMs  = 0;
+// A swallowed button-down must have its button-up swallowed too, or the app
+// sees a release it never saw pressed and can latch a drag.
+std::atomic<bool> g_swallowNextUp{false};
 
 // Alert mode fires on every Enter, including the ones that resend the same
 // text; an operator does not need the same message five times.
@@ -158,6 +182,17 @@ std::string WideToUtf8(const wchar_t* w) {
     if (n <= 1) return {};
     std::string out((size_t)n - 1, '\0');
     WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], n, nullptr, nullptr);
+    return out;
+}
+
+// The other direction. Needed because every string in this file is UTF-8 and
+// the only correct way to put one on screen is the wide Win32 entry point.
+std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (n <= 0) return {};
+    std::wstring out((size_t)n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], n);
     return out;
 }
 
@@ -350,7 +385,7 @@ NetworkExfilMonitor::MessagingVerdict VerdictForTarget(TargetApp& t) {
         NetworkExfilMonitor::MessagingVerdict pv = AskPolicy(pexe);
         if (pv.managed) {
             LogDbg("foreground window belongs to " + t.exe + ", whose ancestor " + pexe +
-                   " IS a managed app — attributing the send to " + pexe);
+                   " IS a managed app - attributing the send to " + pexe);
             t.exe = pexe;
             return pv;
         }
@@ -387,6 +422,21 @@ bool BoolProperty(IUIAutomationElement* el, PROPERTYID prop, bool& value) {
     }
     VariantClear(&v);
     return got;
+}
+
+// Is this element still attached to a live UI node?
+//
+// A cached element outlives the thing it points at. A dead one answers every
+// read with an empty string — which is indistinguishable from an empty message
+// box, and that ambiguity is exactly how blocking could work once and then
+// never again. UIA reports a detached node as UIA_E_ELEMENTNOTAVAILABLE on any
+// property read, so one cheap read is the whole test.
+bool ElementAlive(IUIAutomationElement* el) {
+    if (!el) return false;
+    VARIANT v; VariantInit(&v);
+    const HRESULT hr = el->GetCurrentPropertyValue(UIA_ControlTypePropertyId, &v);
+    VariantClear(&v);
+    return SUCCEEDED(hr);
 }
 
 DWORD ElementProcessId(IUIAutomationElement* el) {
@@ -483,6 +533,47 @@ std::string TextFromElement(IUIAutomationElement* el) {
 // Absent from some UIAutomation headers, same reason kIID_IUIAutomationTextPattern
 // is spelled out above. 30005 is fixed by the UI Automation specification.
 const PROPERTYID kNamePropertyId = 30005;
+// Same reason again: these are fixed by the UI Automation specification, and
+// naming them here means the file builds against a trimmed header as well as a
+// complete one. 50000 is Button; 30001 is the bounding rectangle.
+const CONTROLTYPEID kButtonControlTypeId       = 50000;
+const PROPERTYID    kBoundingRectanglePropertyId = 30001;
+
+// Where an element is on screen, in screen coordinates.
+//
+// get_CurrentBoundingRectangle is absent from some UIAutomation headers, so
+// this goes through the property instead. Note the shape of what comes back:
+// UIA hands over {left, top, WIDTH, HEIGHT} as four doubles, not a RECT — read
+// it as right/bottom and every hit test is wrong in a way that still looks
+// plausible, which is worse than failing.
+bool ElementRect(IUIAutomationElement* el, RECT& out) {
+    if (!el) return false;
+    VARIANT v; VariantInit(&v);
+    bool ok = false;
+    if (SUCCEEDED(el->GetCurrentPropertyValue(kBoundingRectanglePropertyId, &v))
+        && (v.vt & VT_ARRAY) && v.parray) {
+        SAFEARRAY* sa = v.parray;
+        LONG lb = 0, ub = 0;
+        if (SUCCEEDED(SafeArrayGetLBound(sa, 1, &lb)) &&
+            SUCCEEDED(SafeArrayGetUBound(sa, 1, &ub)) && (ub - lb + 1) == 4) {
+            double d[4] = {0, 0, 0, 0};
+            bool got = true;
+            for (LONG i = 0; i < 4 && got; ++i) {
+                LONG idx = lb + i;
+                if (FAILED(SafeArrayGetElement(sa, &idx, &d[i]))) got = false;
+            }
+            if (got && d[2] > 0 && d[3] > 0) {
+                out.left   = (LONG)d[0];
+                out.top    = (LONG)d[1];
+                out.right  = (LONG)(d[0] + d[2]);
+                out.bottom = (LONG)(d[1] + d[3]);
+                ok = true;
+            }
+        }
+    }
+    VariantClear(&v);
+    return ok;
+}
 
 std::string ElementDescription(IUIAutomationElement* el) {
     if (!el) return "(none)";
@@ -659,7 +750,7 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid,
                 // than silently blessed by whichever node sorted first.
                 LogDbg("focused subtree offered " + std::to_string(cands.size()) +
                        " editable candidates, none focused and none uniquely writable"
-                       " — not guessing");
+                       " - not guessing");
             }
         }
         focused->Release();
@@ -689,7 +780,7 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid,
             }
             if (!cands.empty()) {
                 LogDbg("ambiguous composer (" + std::to_string(cands.size()) +
-                       " editable candidates, none focused) — not guessing");
+                       " editable candidates, none focused) - not guessing");
             }
         }
     }
@@ -740,6 +831,53 @@ ComposerRead ReadFocusedOnly(IUIAutomation* uia, DWORD pid) {
 // keystroke is held: this is the expensive path, and finding the box once and
 // then reading its text every cycle is the difference between a sample that is
 // a quarter of a second old and one that costs seven seconds to take.
+// The Send button, by name. Every app in scope labels it for accessibility —
+// it has to, or a screen-reader user could not send a message — so the name is
+// the one durable handle across WhatsApp, Teams, Telegram, Slack and Signal.
+// Matched on a contained "send" so "Send", "Send message" and "Send now" all
+// hit, and deliberately NOT on position or icon, which change with every
+// redesign.
+IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
+                                     long long deadlineMs) {
+    if (!uia || !wnd) return nullptr;
+    IUIAutomationElement* root = nullptr;
+    if (FAILED(uia->ElementFromHandle(wnd, &root)) || !root) return nullptr;
+
+    IUIAutomationElement* best = nullptr;
+    VARIANT want; VariantInit(&want);
+    want.vt = VT_I4; want.lVal = kButtonControlTypeId;
+    IUIAutomationCondition* cond = nullptr;
+    if (SUCCEEDED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, want, &cond)) && cond) {
+        IUIAutomationElementArray* arr = nullptr;
+        if (SUCCEEDED(root->FindAll(TreeScope_Descendants, cond, &arr)) && arr) {
+            int n = 0; arr->get_Length(&n);
+            for (int i = 0; i < n && !best; ++i) {
+                if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
+                IUIAutomationElement* el = nullptr;
+                if (FAILED(arr->GetElement(i, &el)) || !el) continue;
+                const DWORD epid = ElementProcessId(el);
+                if (pid && epid && epid != pid) { el->Release(); continue; }
+                VARIANT nv; VariantInit(&nv);
+                if (SUCCEEDED(el->GetCurrentPropertyValue(kNamePropertyId, &nv))
+                    && nv.vt == VT_BSTR && nv.bstrVal) {
+                    const std::string nm = ToLowerAscii(WideToUtf8(nv.bstrVal));
+                    // "resend" and "send file" are not the message-send button.
+                    if (nm == "send" || nm == "send message" || nm == "send now") {
+                        best = el;   // caller releases
+                    }
+                }
+                VariantClear(&nv);
+                if (best != el) el->Release();
+            }
+            arr->Release();
+        }
+        cond->Release();
+    }
+    VariantClear(&want);
+    root->Release();
+    return best;
+}
+
 IUIAutomationElement* FindComposerElement(IUIAutomation* uia, HWND wnd, DWORD pid,
                                           long long deadlineMs, int& editableSeen) {
     if (!uia) return nullptr;
@@ -978,8 +1116,16 @@ void ShowBlockedNotice(const std::string& appExe, const std::string& what) {
         "Detected: " + (what.empty() ? std::string("sensitive data") : what) + "\n"
         "Application: " + appExe + "\n\n"
         "The text is still in the message box. Remove the sensitive details to send it.";
+    // MessageBoxA, not W, was the bug the user saw as "unwanted characters" in
+    // the dialog. Every string in this file is UTF-8; the A entry point decodes
+    // its bytes with the machine's ANSI code page instead, so the em dash in the
+    // title (E2 80 94) arrived on screen as three separate Latin-1 characters,
+    // and any non-ASCII in the detection text did the same. Convert once and use
+    // the wide call, which is what the bytes have always meant.
     std::thread([body]() {
-        MessageBoxA(nullptr, body.c_str(), "CyberSentinel DLP — Message blocked",
+        const std::wstring wbody  = Utf8ToWide(body);
+        const std::wstring wtitle = Utf8ToWide("CyberSentinel DLP - Message blocked");
+        MessageBoxW(nullptr, wbody.c_str(), wtitle.c_str(),
                     MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND);
     }).detach();
 }
@@ -1081,8 +1227,8 @@ void ReportUninspectable(const std::string& exe, DWORD pid) {
     NetworkExfilMonitor::ClassifyResult none;
     EmitEvent(exe, pid, "ALLOW", "medium", none,
               "Typed-message inspection could not read the composer in " + exe +
-              " — messages in this app are being sent uninspected", "");
-    LogWarn("composer unreadable in " + exe + " — typed messages are NOT being inspected");
+              " - messages in this app are being sent uninspected", "");
+    LogWarn("composer unreadable in " + exe + " - typed messages are NOT being inspected");
 }
 
 // ── Worker ────────────────────────────────────────────────────────────────
@@ -1154,7 +1300,7 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
             // conclusion; this is the evidence behind it.
             LogInfo("focused read found nothing for " + exe + " after " +
                     std::to_string(NowSteadyMs() - began) + "ms / " +
-                    std::to_string(attempts) + " attempt(s) — " + read.source);
+                    std::to_string(attempts) + " attempt(s) - " + read.source);
         }
 
         // The live read is preferred because it is current — the sampler can be
@@ -1168,7 +1314,7 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
             // keep — release it. See the header on why this fails open.
             LogInfo("no composer text for " + exe + " (" +
                    (read.status == ReadStatus::NoComposer ? "no editable node" : "empty box") +
-                   ") — releasing keystroke");
+                   ") - releasing keystroke");
             ResolveRelease(withCtrl);
             if (read.status == ReadStatus::NoComposer) ReportUninspectable(exe, pid);
             return;
@@ -1193,7 +1339,7 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
         }
         LogInfo("message clean (" + (cls.category.empty() ? std::string("unclassified") : cls.category) +
                ") in " + exe + " via " + via + " [" + TextProfile(text) + "]" +
-               dropped + " — releasing");
+               dropped + " - releasing");
         ResolveRelease(withCtrl);
         return;
     }
@@ -1214,9 +1360,9 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
     } else {
         EmitEvent(exe, pid, "ALERT", severity, cls,
                   "Sensitive message sent in " + exe + " (" + cls.category +
-                  ") — inspection did not finish before the send was released", text);
+                  ") - inspection did not finish before the send was released", text);
         LogWarn("MESSAGING_TEXT_LATE exe=" + exe + " category=" + cls.category +
-                " detected=[" + what + "] — verdict arrived after the watchdog released the keystroke");
+                " detected=[" + what + "] - verdict arrived after the watchdog released the keystroke");
     }
 }
 
@@ -1272,7 +1418,7 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
         const long long now = NowSteadyMs();
         std::lock_guard<std::mutex> lk(g_snapMx);
         if (text == g_lastAuditText && now - g_lastAuditMs < 10000) {
-            LogDbg("alert: same text already reported for " + exe + " — suppressed");
+            LogDbg("alert: same text already reported for " + exe + " - suppressed");
             return;
         }
         g_lastAuditText = text;
@@ -1291,7 +1437,7 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
             dropped = " (classifier saw [" + DescribeLabels(raw) +
                       "], none of them selected in this policy)";
         }
-        LogInfo("alert: message clean in " + exe + " via " + via + " [" + TextProfile(text) + "] — " +
+        LogInfo("alert: message clean in " + exe + " via " + via + " [" + TextProfile(text) + "] - " +
                (cls.category.empty() ? std::string("unclassified") : cls.category) +
                dropped);
         return;
@@ -1301,7 +1447,7 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
     const std::string severity = (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
     EmitEvent(exe, pid, "ALERT", severity, cls,
               "Sensitive message sent in " + exe + " (" + cls.category +
-              ") — policy is in alert mode, the message was not stopped", text);
+              ") - policy is in alert mode, the message was not stopped", text);
     LogWarn("MESSAGING_TEXT_ALERT exe=" + exe + " category=" + cls.category +
             " detected=[" + what + "] via=" + via);
 }
@@ -1325,7 +1471,7 @@ bool EnsureUia(IUIAutomation*& uia, long long& lastComplaintMs, bool complain = 
                                         CLSCTX_INPROC_SERVER, IID_IUIAutomation,
                                         (void**)&uia);
     if (uia) {
-        LogInfo("UIAutomation acquired — the message box can be read");
+        LogInfo("UIAutomation acquired - the message box can be read");
         lastComplaintMs = 0;
         return true;
     }
@@ -1336,7 +1482,7 @@ bool EnsureUia(IUIAutomation*& uia, long long& lastComplaintMs, bool complain = 
             lastComplaintMs = now;
             char hex[16];
             snprintf(hex, sizeof(hex), "0x%08lX", (unsigned long)hr);
-            LogWarn(std::string("UIAutomation unavailable (hr=") + hex + ") — the message "
+            LogWarn(std::string("UIAutomation unavailable (hr=") + hex + ") - the message "
                     "box cannot be read, so typed messages are NOT being inspected. "
                     "Retrying on every send.");
         }
@@ -1350,7 +1496,7 @@ void WorkerThread() {
     const bool comOk = SUCCEEDED(hrCom);
 
     if (!comOk) {
-        LogWarn("COM could not be initialised on the inspection thread — typed "
+        LogWarn("COM could not be initialised on the inspection thread - typed "
                 "messages cannot be inspected on this agent run");
     }
 
@@ -1395,17 +1541,17 @@ void WorkerThread() {
                     lastProbeAt[probeExe] = now;
                     if (probeExe == "(unknown)") {
                         LogInfo("send key pressed, but the foreground window could not be "
-                                "attributed to a process — nothing to inspect");
+                                "attributed to a process - nothing to inspect");
                     } else if (!probeManaged) {
                         LogInfo("send key pressed in " + probeExe +
-                                " — NOT in the policy's managed app list, so it is being ignored. "
+                                " - NOT in the policy's managed app list, so it is being ignored. "
                                 "If this is the app you meant, add " + probeExe + " to it.");
                     } else if (!probeInspect) {
                         LogInfo("send key pressed in " + probeExe +
-                                " — it IS a managed app, but typed-message inspection is off "
+                                " - it IS a managed app, but typed-message inspection is off "
                                 "for it (tick \"Also inspect typed messages\" on the policy)");
                     } else {
-                        LogInfo("send key pressed in " + probeExe + " — managed, inspecting (" +
+                        LogInfo("send key pressed in " + probeExe + " - managed, inspecting (" +
                                 std::string(probeBlock ? "block" : "alert") + " mode)");
                     }
                 }
@@ -1434,12 +1580,12 @@ void WorkerThread() {
                 // and SAY so. Releasing in silence is what made this failure
                 // indistinguishable from the feature not existing: the hook wrote
                 // "managed, inspecting", and then no line was ever written again.
-                LogWarn("released the Enter in " + exe + " UNINSPECTED — UI Automation "
+                LogWarn("released the Enter in " + exe + " UNINSPECTED - UI Automation "
                         "is not available, so the message was sent unchecked");
                 ResolveRelease(ctrl);
             }
         } catch (...) {
-            LogWarn("decision threw — releasing keystroke");
+            LogWarn("decision threw - releasing keystroke");
             if (!audit) { try { ResolveRelease(ctrl); } catch (...) {} }
         }
     }
@@ -1464,7 +1610,7 @@ void WatchdogThread() {
             ReleaseKeystroke(ctrl);
             g_decisionPending.store(false);
             LogWarn("inspection exceeded " + std::to_string(g_cfg.decisionTimeoutMs) +
-                    "ms — keystroke released UNINSPECTED (the message was sent)");
+                    "ms - keystroke released UNINSPECTED (the message was sent)");
         }
     }
 }
@@ -1482,6 +1628,12 @@ void SamplerThread() {
 
     // The composer, found once and then polled. See the loop below.
     IUIAutomationElement* composer = nullptr;
+    IUIAutomationElement* sendBtn  = nullptr;
+    long long lastSendFindMs       = 0;
+    std::string lastClassified;
+    bool        lastSensitive      = false;
+    std::string lastWhat;
+    NetworkExfilMonitor::ClassifyResult lastCls;
     DWORD     composerPid      = 0;
     long long lastFindMs       = 0;
     long long findComplainedAt = 0;
@@ -1497,8 +1649,11 @@ void SamplerThread() {
             if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
 
             const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
-            if (!mv.managed && composer) {
-                composer->Release(); composer = nullptr; composerPid = 0;
+            if (!mv.managed) {
+                if (composer) { composer->Release(); composer = nullptr; composerPid = 0; }
+                if (sendBtn)  { sendBtn->Release();  sendBtn  = nullptr; }
+                std::lock_guard<std::mutex> lk(g_sendMx);
+                g_sendPid = 0; g_sendAtMs = 0;
             }
             // Block mode used to be excluded here, on the reasoning that it reads
             // at send time and did not want a sampler second-guessing it. That
@@ -1517,6 +1672,7 @@ void SamplerThread() {
             // element we were holding belongs to a window nobody types into now.
             if (composer && t.pid != composerPid) {
                 composer->Release(); composer = nullptr; composerPid = 0;
+                if (sendBtn) { sendBtn->Release(); sendBtn = nullptr; }
             }
 
             // Locate it the expensive way ONCE. This is the FindAll over a
@@ -1538,7 +1694,7 @@ void SamplerThread() {
                         findComplainedAt = now;
                         LogWarn("sampler cannot find a composer in " + t.exe + " (" +
                                 std::to_string(seen) + " editable node(s) seen in " +
-                                std::to_string(NowSteadyMs() - now) + "ms) — typed "
+                                std::to_string(NowSteadyMs() - now) + "ms) - typed "
                                 "messages in this app cannot be inspected");
                     }
                     continue;
@@ -1548,19 +1704,104 @@ void SamplerThread() {
             // The cheap part, every cycle: one element, one or two property
             // reads. This is what makes the sample a quarter of a second old
             // rather than seven seconds old.
+            //
+            // Chromium rebuilds the composer's accessibility node after a send,
+            // and again after a modal takes focus — so the element located
+            // before the first blocked message is dead by the time of the
+            // second. Nothing here used to notice: a dead element reads as ""
+            // exactly like an empty box does, the snapshot went permanently
+            // empty, and every later send fell through to the slow read this
+            // whole design exists to avoid. Blocking therefore worked exactly
+            // once per lock-on, which is worse than never working, because it
+            // demonstrates the feature and then silently stops enforcing it.
             std::string text;
-            try { text = TrimText(TextFromElement(composer)); } catch (...) {}
+            bool stale = false;
+            if (!ElementAlive(composer)) {
+                stale = true;
+            } else {
+                try { text = TrimText(TextFromElement(composer)); } catch (...) {}
+            }
+
+            // If the cached element said nothing, ask what actually has focus
+            // before believing the box is empty. Two property reads, no tree
+            // walk, so it is affordable every cycle — and it is what covers the
+            // gap between the composer being rebuilt and the re-find landing.
+            if (text.empty()) {
+                ComposerRead fr;
+                try { fr = ReadFocusedOnly(uia, t.pid); } catch (...) {}
+                if (fr.status == ReadStatus::Ok) text = TrimText(fr.text);
+            }
+
+            if (stale) {
+                composer->Release(); composer = nullptr; composerPid = 0;
+                lastFindMs = 0;   // re-acquire next cycle, do not wait out the 3s
+                LogInfo("sampler's composer in " + t.exe + " went stale (the app "
+                        "rebuilt it) - re-acquiring");
+            }
+
+            // ── Pre-decide, so the mouse hook never has to ───────────────
+            // Only when the text actually changed: this runs four times a
+            // second and a classifier pass on every tick would be pure waste.
+            if (text != lastClassified) {
+                lastClassified = text;
+                lastSensitive  = false;
+                lastWhat.clear();
+                lastCls = NetworkExfilMonitor::ClassifyResult{};
+                if (!text.empty() && mv.block) {
+                    try {
+                        const NetworkExfilMonitor::ClassifyResult raw =
+                            g_cfg.classify(text, "messaging_message");
+                        const NetworkExfilMonitor::ClassifyResult cls =
+                            RestrictToTypes(raw, mv.messageDataTypes);
+                        if (IsSensitive(cls)) {
+                            lastSensitive = true;
+                            lastWhat      = DescribeLabels(cls);
+                            lastCls       = cls;
+                        }
+                    } catch (...) {}
+                }
+            }
+
+            // ── Keep the Send button's rectangle current ─────────────────
+            // Found once (a tree walk), then re-measured every cycle, which is
+            // one property read. Re-measuring matters: the button moves when
+            // the window moves, resizes, or the composer grows to two lines.
+            if (mv.block) {
+                if (sendBtn && !ElementAlive(sendBtn)) {
+                    sendBtn->Release(); sendBtn = nullptr; lastSendFindMs = 0;
+                }
+                if (!sendBtn) {
+                    const long long now = NowSteadyMs();
+                    if (!lastSendFindMs || now - lastSendFindMs >= 5000) {
+                        lastSendFindMs = now;
+                        sendBtn = FindSendButton(uia, t.wnd, t.pid, now + 4000);
+                        if (sendBtn) LogInfo("sampler located the Send button in " + t.exe);
+                    }
+                }
+                if (sendBtn) {
+                    RECT r{};
+                    if (ElementRect(sendBtn, r) &&
+                        r.right > r.left && r.bottom > r.top) {
+                        std::lock_guard<std::mutex> lk(g_sendMx);
+                        g_sendRect = r; g_sendPid = t.pid; g_sendAtMs = NowSteadyMs();
+                    }
+                }
+            }
 
             std::lock_guard<std::mutex> lk(g_snapMx);
             // Stored even when empty. A sample that is never cleared would block
             // an innocent message on a card number sent five minutes ago.
-            g_snapText  = text;
-            g_snapPid   = t.pid;
-            g_snapAtMs  = NowSteadyMs();
+            g_snapText      = text;
+            g_snapPid       = t.pid;
+            g_snapAtMs      = NowSteadyMs();
+            g_snapSensitive = lastSensitive;
+            g_snapWhat      = lastWhat;
+            g_snapCls       = lastCls;
         } catch (...) {}
     }
 
     if (composer) composer->Release();
+    if (sendBtn)  sendBtn->Release();
     if (uia) uia->Release();
     if (comOk) CoUninitialize();
 }
@@ -1668,6 +1909,80 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
     return 1;   // hold it; the worker or the watchdog resolves it
 }
 
+// ── The mouse hook ────────────────────────────────────────────────────────
+//
+// Enter was only ever half the story. In testing a message was blocked on
+// Enter, and the very next thing the user did was click Send with the mouse —
+// which went straight out, because nothing was watching the button. A control
+// that a user defeats by accident on their second attempt is not a control.
+//
+// This hook does NOT hold the click the way KeyProc holds the keystroke. It
+// cannot afford to: a low-level mouse hook sees every movement on the machine
+// and Windows evicts one that dawdles. Everything expensive has therefore
+// already happened on the sampler thread — the button's rectangle is measured
+// and the text is classified up to four times a second — so all that is left
+// here is an integer comparison and reading a bool.
+//
+// It fails open at every step: unknown rectangle, stale rectangle, wrong
+// process, stale snapshot, or any doubt at all, and the click goes through.
+LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode != HC_ACTION) return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+
+    if (wParam == WM_LBUTTONUP && g_swallowNextUp.exchange(false)) {
+        return 1;   // the down half was ours; its up half must not escape either
+    }
+    if (wParam != WM_LBUTTONDOWN) {
+        return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+    }
+
+    MSLLHOOKSTRUCT* m = (MSLLHOOKSTRUCT*)lParam;
+    if (!m || (m->flags & LLMHF_INJECTED)) {
+        return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+    }
+
+    DWORD pid = 0;
+    {
+        std::lock_guard<std::mutex> lk(g_sendMx);
+        const bool fresh = g_sendPid && g_sendAtMs && (NowSteadyMs() - g_sendAtMs) <= 3000;
+        const bool inside = m->pt.x >= g_sendRect.left && m->pt.x < g_sendRect.right &&
+                            m->pt.y >= g_sendRect.top  && m->pt.y < g_sendRect.bottom;
+        if (!fresh || !inside) {
+            return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+        }
+        pid = g_sendPid;
+    }
+
+    std::string what, text;
+    NetworkExfilMonitor::ClassifyResult cls;
+    {
+        std::lock_guard<std::mutex> lk(g_snapMx);
+        const long long age = g_snapAtMs ? (NowSteadyMs() - g_snapAtMs) : -1;
+        if (!(g_snapPid == pid && g_snapSensitive && age >= 0 && age <= 15000)) {
+            return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+        }
+        what = g_snapWhat; cls = g_snapCls; text = g_snapText;
+    }
+
+    // Committed. Swallow both halves and report off the hook thread — every
+    // line below this point must stay off anything that can block.
+    g_swallowNextUp.store(true);
+    std::thread([pid, what, cls, text]() {
+        const std::string exe = ProcessExeName(pid);
+        const std::string severity =
+            (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
+        try {
+            EmitEvent(exe, pid, "BLOCK", severity, cls,
+                      "Blocked sensitive message in " + exe + " (" + cls.category +
+                      ") - Send button click", text);
+        } catch (...) {}
+        LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
+                " detected=[" + what + "] via=send-button-click");
+        ShowBlockedNotice(exe, what);
+    }).detach();
+
+    return 1;
+}
+
 void HookThread() {
     g_hookThread = GetCurrentThreadId();
     g_hook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyProc, GetModuleHandle(nullptr), 0);
@@ -1679,6 +1994,18 @@ void HookThread() {
     }
     LogInfo("typed-message keyboard hook installed");
 
+    // Non-fatal on purpose. Losing the mouse hook costs the Send-button path
+    // and nothing else; Enter is still inspected, so a partial capability beats
+    // refusing to start.
+    g_mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseProc, GetModuleHandle(nullptr), 0);
+    if (!g_mouseHook) {
+        LogWarn("SetWindowsHookEx(WH_MOUSE_LL) failed err=" +
+                std::to_string((unsigned long)GetLastError()) +
+                " - clicking Send with the mouse will NOT be inspected");
+    } else {
+        LogInfo("typed-message mouse hook installed (Send button covered)");
+    }
+
     // A low-level hook is only serviced while its installing thread pumps
     // messages. No window, no timers — just the pump.
     MSG msg;
@@ -1687,6 +2014,7 @@ void HookThread() {
         DispatchMessage(&msg);
     }
 
+    if (g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = nullptr; }
     UnhookWindowsHookEx(g_hook);
     g_hook = nullptr;
     LogInfo("typed-message keyboard hook removed");
@@ -1712,14 +2040,14 @@ bool Start(const Config& cfg) {
         const NetworkExfilMonitor::ClassifyResult probe =
             g_cfg.classify("card 4111 1111 1111 1111 end", "messaging_message");
         if (probe.labels.empty()) {
-            LogWarn("classifier self-test FAILED — a known-good test card was not detected. "
+            LogWarn("classifier self-test FAILED - a known-good test card was not detected. "
                     "Every typed message will be reported clean until this is fixed.");
         } else {
             LogInfo("classifier self-test: detected [" + DescribeLabels(probe) + "] as " +
                     (probe.category.empty() ? std::string("(no category)") : probe.category));
         }
     } catch (...) {
-        LogWarn("classifier self-test THREW — typed-message inspection cannot classify anything");
+        LogWarn("classifier self-test THREW - typed-message inspection cannot classify anything");
     }
 
     g_stop.store(false);

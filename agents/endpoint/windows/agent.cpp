@@ -699,6 +699,64 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
      }
  };
  
+ // Everything this agent logs is UTF-8. Every tool anyone actually reads the
+ // log with on Windows - Get-Content, Notepad, the diagnostic script - decodes
+ // it with the machine's ANSI code page instead, so a UTF-8 em dash (E2 80 94)
+ // surfaces as "a-circumflex, euro, quote" and a checkmark as similar debris.
+ // That is the stray capital-A characters users report littering the log.
+ //
+ // Transliterating at the sink fixes every message from every monitor at once -
+ // including messages not written yet - which is why it belongs here and not in
+ // the hundred-odd individual string literals that would each have to be found,
+ // changed, and then kept ASCII by everyone who edits this file afterwards.
+ std::string ToAsciiLog(const std::string& s) {
+     std::string out;
+     out.reserve(s.size());
+     size_t i = 0;
+     const size_t n = s.size();
+     while (i < n) {
+         const unsigned char c = (unsigned char)s[i];
+         if (c < 0x80) { out += (char)c; ++i; continue; }
+
+         unsigned cp = 0;
+         int len = 0;
+         if      ((c & 0xE0) == 0xC0) { cp = c & 0x1Fu; len = 2; }
+         else if ((c & 0xF0) == 0xE0) { cp = c & 0x0Fu; len = 3; }
+         else if ((c & 0xF8) == 0xF0) { cp = c & 0x07u; len = 4; }
+         else { out += '?'; ++i; continue; }
+
+         if (i + (size_t)len > n) { out += '?'; ++i; continue; }
+         bool ok = true;
+         for (int k = 1; k < len; ++k) {
+             const unsigned char cc = (unsigned char)s[i + k];
+             if ((cc & 0xC0) != 0x80) { ok = false; break; }
+             cp = (cp << 6) | (cc & 0x3Fu);
+         }
+         if (!ok) { out += '?'; ++i; continue; }
+         i += (size_t)len;
+
+         switch (cp) {
+             case 0x2010: case 0x2011: case 0x2012: case 0x2013:
+             case 0x2014: case 0x2015: case 0x2212: out += '-';    break;
+             case 0x2018: case 0x2019: case 0x201B: out += '\'';   break;
+             case 0x201C: case 0x201D: case 0x201F: out += '"';    break;
+             case 0x2026:                           out += "...";  break;
+             case 0x2192: case 0x21D2:              out += "->";   break;
+             case 0x2190:                           out += "<-";   break;
+             case 0x2713: case 0x2714:              out += "[ok]"; break;
+             case 0x2715: case 0x2717: case 0x2718: out += "[x]";  break;
+             case 0x2022: case 0x00B7:              out += '*';    break;
+             case 0x00A0:                           out += ' ';    break;
+             default:
+                 // Box drawing, used for section rules in a few messages.
+                 if (cp >= 0x2500 && cp <= 0x257F) out += '-';
+                 else                              out += '?';
+                 break;
+         }
+     }
+     return out;
+ }
+
  // ==================== Logger ====================
  
  class Logger {
@@ -817,7 +875,7 @@ void Log(const std::string& level, const std::string& message) {
     // Log timestamps use Asia/Kolkata (IST). Event payloads sent to the
     // server continue to use UTC via GetCurrentTimestampISO().
     std::string timestamp = GetCurrentTimestampLocalIST();
-    std::string logMsg = timestamp + " - CyberSentinelAgent - " + level + " - " + message;
+    std::string logMsg = timestamp + " - CyberSentinelAgent - " + level + " - " + ToAsciiLog(message);
     
     // Only output to console if window is visible (not in background mode)
     HWND consoleWindow = GetConsoleWindow();

@@ -1209,7 +1209,31 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Hint 'Still seeing them dated after the update? Send me the timestamps.'
     }
     if ($readok.Count -gt 0) { Ok 'The composer has been read successfully:'; foreach ($l in $readok) { Write-LogLine (Format-MsgLine $l) } }
-    if ($unread.Count -eq 0 -and $readok.Count -eq 0 -and $released.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }
+
+    # 1.2.5 moved the expensive search OFF the held keystroke: a background
+    # sampler finds the composer element once and then just re-reads it. These
+    # three lines are the only direct evidence of whether that worked, and none
+    # of the matchers above sees them - so without this block the decisive
+    # measurement is in the log and absent from the report.
+    $sampler = @($lines | Where-Object {
+      $_ -match 'sampler locked onto the composer|sampler cannot find a composer|focused read found nothing|went stale|located the Send button|mouse hook installed|WH_MOUSE_LL'
+    } | Select-Object -Last 8)
+    if ($sampler.Count -gt 0) {
+      Info 'Composer-search results (1.2.5+):'
+      foreach ($l in $sampler) { Write-LogLine (Format-MsgLine $l) }
+      Hint '"sampler locked onto the composer"  = it works. The verdict comes from what you typed.'
+      Hint '"sampler cannot find a composer"    = UI Automation cannot see this app''s message box.'
+      Hint '   The number in brackets is how many editable nodes it found: 0 means the box is not'
+      Hint '   exposed to accessibility at all, and this method cannot inspect that app.'
+      Hint '"focused read found nothing"        = the box was not what had focus when you pressed'
+      Hint '   Enter. The trailing focus:type=NNNN name=... says what actually did.'
+      Hint '"went stale ... re-acquiring"       = 1.2.6 caught the app rebuilding its message box.'
+      Hint '   Before 1.2.6 that went unnoticed and blocking stopped working after the first hit.'
+      Hint '"located the Send button"           = clicking Send with the mouse is covered too.'
+      Hint '   Absent on 1.2.6+? Only Enter is inspected - the button could not be found by name.'
+    }
+
+    if ($unread.Count -eq 0 -and $readok.Count -eq 0 -and $released.Count -eq 0 -and $sampler.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }
 
     # ---- stage 6: verdicts ------------------------------------------------
     Blank

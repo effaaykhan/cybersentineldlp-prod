@@ -11,6 +11,7 @@ interface PolicyTableProps {
   onDuplicate: (policy: Policy) => void
   onToggleStatus: (policy: Policy) => void
   onDelete: (policy: Policy) => void
+  canManage: boolean
 }
 
 export default function PolicyTable({
@@ -22,6 +23,7 @@ export default function PolicyTable({
   onDuplicate,
   onToggleStatus,
   onDelete,
+  canManage,
 }: PolicyTableProps) {
   return (
     <div className="card p-0">
@@ -50,6 +52,7 @@ export default function PolicyTable({
               onDuplicate={onDuplicate}
               onToggleStatus={onToggleStatus}
               onDelete={onDelete}
+              canManage={canManage}
             />
           ))
         )}

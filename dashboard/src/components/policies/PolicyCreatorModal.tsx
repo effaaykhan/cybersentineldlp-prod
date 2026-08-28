@@ -40,7 +40,7 @@ import WebActivityControlForm from './WebActivityControlForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
-import { ChevronLeft, ChevronRight, Check } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check, Eye } from 'lucide-react'
 import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 
@@ -49,6 +49,14 @@ interface PolicyCreatorModalProps {
   onClose: () => void
   onSave: (policy: Partial<Policy>) => void
   editingPolicy?: Policy | null
+  /**
+   * Read-only mode for roles that can see policies but not change them.
+   * The whole builder stays open and navigable on purpose — someone with
+   * oversight of the estate should be able to see exactly what a policy can
+   * be configured to do without needing rights to configure one. Only the
+   * final save is withheld.
+   */
+  readOnly?: boolean
 }
 
 /*
@@ -271,7 +279,8 @@ export default function PolicyCreatorModal({
   isOpen,
   onClose,
   onSave, 
-  editingPolicy 
+  editingPolicy,
+  readOnly = false,
 }: PolicyCreatorModalProps) {
   // When editing, skip step 1 (type selection) and go straight to step 2
   // (configuration). The policy type can't be changed for an existing
@@ -428,6 +437,8 @@ export default function PolicyCreatorModal({
   }
 
   const handleSave = () => {
+    if (readOnly) return
+
     if (!policyName.trim()) {
       toast.error('Policy name is required')
       return
@@ -603,13 +614,36 @@ export default function PolicyCreatorModal({
               <ChevronRight className="h-4 w-4" />
             </button>
           ) : (
-            <button onClick={handleSave} disabled={!canSave} className="btn btn-primary">
+            <button
+              onClick={handleSave}
+              disabled={readOnly || !canSave}
+              title={
+                readOnly
+                  ? 'Your role can view policies but not change them.'
+                  : undefined
+              }
+              className="btn btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
+            >
               {editingPolicy ? 'Save changes' : 'Create policy'}
             </button>
           )}
         </ModalFooter>
       }
     >
+          {readOnly && (
+            <div
+              role="status"
+              className="mb-4 flex items-start gap-2.5 rounded-cs-sm border border-cs-hair bg-cs-hair-2 px-3.5 py-3"
+            >
+              <Eye className="mt-[1px] h-4 w-4 shrink-0 text-cs-muted-2" />
+              <p className="text-[12.5px] leading-relaxed text-cs-ink-2">
+                <span className="font-semibold text-cs-ink">View only.</span>{' '}
+                Every option here is yours to explore — nothing you change is
+                saved, and the policy is not created. Ask an administrator if
+                you need a policy added or amended.
+              </p>
+            </div>
+          )}
 
           {step === 1 && (
             <PolicyTypeSelector

@@ -12,6 +12,7 @@ interface PolicyRowProps {
   onDuplicate: (policy: Policy) => void
   onToggleStatus: (policy: Policy) => void
   onDelete: (policy: Policy) => void
+  canManage: boolean
 }
 
 export default function PolicyRow({
@@ -21,6 +22,7 @@ export default function PolicyRow({
   onDuplicate,
   onToggleStatus,
   onDelete,
+  canManage,
 }: PolicyRowProps) {
   const [showMenu, setShowMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -155,6 +157,7 @@ export default function PolicyRow({
                 setShowMenu(false)
                 onToggleStatus(policy)
               }}
+              canManage={canManage}
               onDelete={() => {
                 setShowMenu(false)
                 onDelete(policy)

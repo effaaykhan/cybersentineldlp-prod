@@ -36,6 +36,10 @@ from app.models.permission import Permission, RolePermission, UserPermission
 # migration 006_rbac_permissions' seed list.
 _ALL_PERMISSIONS: frozenset[str] = frozenset({
     "view_events", "view_alerts", "export_events",
+    # Reading a policy is separate from changing one. Before this existed the
+    # only way to see the Policies page was to hold create_policy/update_policy,
+    # so read-only oversight was impossible to express. Added in migration 030.
+    "view_policies",
     "create_policy", "update_policy", "delete_policy", "assign_policy",
     "manage_users", "view_users", "manage_roles",
     "view_dashboard", "create_dashboard", "edit_dashboard", "delete_dashboard",
@@ -52,7 +56,8 @@ _ALL_PERMISSIONS: frozenset[str] = frozenset({
 # role_permissions seeded in migration 019.
 _DOMAIN_OPS: frozenset[str] = frozenset({
     "view_events", "view_alerts", "view_dashboard", "export_events",
-    "create_policy", "update_policy", "delete_policy", "assign_policy",
+    "view_policies", "create_policy", "update_policy", "delete_policy",
+    "assign_policy",
     "view_all_departments",
     # Domain admins investigate incidents in their domain, which is not
     # possible without the captured payload.
@@ -64,18 +69,22 @@ _ROLE_DEFAULTS: dict[str, frozenset[str]] = {
     "ADMIN":   _ALL_PERMISSIONS,
     # ANALYST investigates, so it needs the captured payload.
     "ANALYST": frozenset({"view_events", "view_alerts", "view_dashboard", "view_users",
-                          "view_sensitive_content"}),
+                          "view_policies", "view_sensitive_content"}),
     # MANAGER reports on posture: full event/alert visibility and export, but
     # NOT the payload — a manager needs counts and trends, not the leaked text.
     # (view_alerts was missing entirely, which hid Alerts *and* Incidents from
     # the nav while the API served them to anyone.)
     "MANAGER": frozenset({"view_events", "view_alerts", "export_events",
-                          "view_dashboard", "view_users"}),
+                          "view_dashboard", "view_users", "view_policies"}),
     # VIEWER is the default for SSO-provisioned accounts. It must be useful on
-    # its own — dashboard, agent health, events, alerts and incidents — while
-    # revealing no captured content. Everything here is metadata about an
-    # event, never the data the event was protecting.
-    "VIEWER":  frozenset({"view_events", "view_alerts", "view_dashboard"}),
+    # its own — dashboard, agent health, events, alerts, incidents and the
+    # policies in force — while revealing no captured content. Everything here
+    # is metadata about an event, never the data the event was protecting.
+    # view_policies is READ ONLY: a VIEWER may open the policy creator and
+    # explore every option, but the create/update/delete endpoints are gated on
+    # permissions it does not hold, so nothing it does there can take effect.
+    "VIEWER":  frozenset({"view_events", "view_alerts", "view_dashboard",
+                          "view_policies"}),
     "AGENT":   frozenset(),
     # Domain-scoped admins (granular RBAC).
     "THREAT_ADMIN": _DOMAIN_OPS,

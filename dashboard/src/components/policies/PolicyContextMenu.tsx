@@ -9,10 +9,12 @@ interface PolicyContextMenuProps {
   onDuplicate: () => void
   onToggleStatus: () => void
   onDelete: () => void
+  /** False for a read-only viewer: only "View Details" is offered. */
+  canManage: boolean
 }
 
 const PolicyContextMenu = forwardRef<HTMLDivElement, PolicyContextMenuProps>(
-  ({ policy, onViewDetails, onEdit, onDuplicate, onToggleStatus, onDelete }, ref) => {
+  ({ policy, onViewDetails, onEdit, onDuplicate, onToggleStatus, onDelete, canManage }, ref) => {
     return (
       <div
         ref={ref}
@@ -26,6 +28,8 @@ const PolicyContextMenu = forwardRef<HTMLDivElement, PolicyContextMenuProps>(
           View Details
         </button>
 
+        {canManage && (
+        <>
         <button
           onClick={onEdit}
           className="w-full px-4 py-2 text-left text-sm text-cs-ink-2 hover:bg-cs-hair-2 flex items-center gap-2 transition-colors"
@@ -61,6 +65,8 @@ const PolicyContextMenu = forwardRef<HTMLDivElement, PolicyContextMenuProps>(
           <Trash2 className="h-4 w-4" />
           Delete Policy
         </button>
+        </>
+        )}
       </div>
     )
   }

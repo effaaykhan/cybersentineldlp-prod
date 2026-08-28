@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import structlog
 
-from app.core.security import get_current_user, require_role, require_permission
+from app.core.security import require_role, require_permission
 from app.core.database import get_db, get_mongodb
 from app.core.cache import get_cache, CacheService
 from app.core.domains import domain_for_policy_type
@@ -243,13 +243,28 @@ async def get_policies(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     enabled_only: bool = False,
-    current_user: User = Depends(require_role("analyst")),
+    current_user: User = Depends(require_permission("view_policies")),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    SECURITY: requires analyst role. Policy bundles include conditions,
-    actions, agent_ids, and compliance tags — the full DLP enforcement
-    playbook. Must not be readable by VIEWERs.
+    SECURITY: requires ``view_policies``, which every human role holds —
+    VIEWER included.
+
+    This deliberately reverses an earlier "must not be readable by VIEWERs"
+    rule. That rule was enforced with require_role("analyst"), which is a
+    coarser thing than it looks: it conflated reading the playbook with
+    changing it, and left read-only oversight — the entire point of the
+    VIEWER role — unable to answer "what is actually being enforced here?".
+
+    The tradeoff is real and worth naming: a policy bundle is the full
+    enforcement playbook (conditions, actions, agent_ids, compliance tags),
+    so a reader learns what is and is not detected. That is accepted because
+    the audience is authorised staff, and because it is the same information
+    the Events page already implies. What is NOT widened is mutation:
+    create/update/delete/enable/disable stay on create_policy, update_policy
+    and delete_policy, which VIEWER does not hold. To take policy detail away
+    from a role again, revoke view_policies from it — the gate is now a
+    permission, so that is a grant change, not a code change.
     """
     policy_service = PolicyService(db)
     policies = await policy_service.get_all_policies(
@@ -300,7 +315,7 @@ async def get_policies(
 @router.get("/{policy_id}")
 async def get_policy(
     policy_id: str,
-    current_user: User = Depends(require_role("analyst")),
+    current_user: User = Depends(require_permission("view_policies")),
     db: AsyncSession = Depends(get_db),
 ):
     # ... (Implementation same as read_file)
@@ -781,7 +796,7 @@ async def import_policies(
 
 @router.get("/stats/summary")
 async def get_policy_stats(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_policies")),
     db: AsyncSession = Depends(get_db),
 ):
     # ... (Implementation same as read_file)

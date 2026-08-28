@@ -24,6 +24,7 @@ import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { formatDistanceToNow } from 'date-fns'
 import { useConfirm } from '@/components/ui/Modal'
+import { usePermission } from '@/hooks/usePermission'
 
 type PolicyStats = {
   total: number
@@ -34,6 +35,15 @@ type PolicyStats = {
 
 export default function PoliciesPage() {
   const { confirm, dialog } = useConfirm()
+  // Reading a policy and changing one are separate grants. A VIEWER reaches
+  // this page through view_policies and sees everything in force; the buttons
+  // that would alter the estate are gated individually below, and the server
+  // re-checks each one regardless.
+  const { has } = usePermission()
+  const canCreate = has('create_policy')
+  const canUpdate = has('update_policy')
+  const canDelete = has('delete_policy')
+  const canManage = canCreate || canUpdate || canDelete
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null)
@@ -131,9 +141,14 @@ export default function PoliciesPage() {
   })
 
   const handleSavePolicy = (policyData: Partial<Policy>) => {
+    // The modal already withholds its save button without these rights; this
+    // is the second lock, so no code path can fire a mutation the role does
+    // not hold. The API is the third.
     if (editingPolicy && editingPolicy.id) {
+      if (!canUpdate) return
       updateMutation.mutate({ id: editingPolicy.id, policyData })
     } else {
+      if (!canCreate) return
       createMutation.mutate(policyData)
     }
   }
@@ -254,7 +269,9 @@ export default function PoliciesPage() {
         <p className="eyebrow mb-1.5">Policies</p>
         <h1 className="text-2xl font-bold tracking-tight text-cs-ink">DLP Policies</h1>
         <p className="mt-1 text-sm text-cs-ink-2">
-          Create and manage data loss prevention policies
+          {canManage
+            ? 'Create and manage data loss prevention policies'
+            : 'Data loss prevention policies in force across the estate — view only'}
         </p>
       </div>
 
@@ -262,6 +279,7 @@ export default function PoliciesPage() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex-1" />
         <div className="flex items-center gap-3">
+          {canUpdate && (
           <button
             onClick={() => refreshBundlesMutation.mutate()}
             disabled={refreshBundlesMutation.isPending}
@@ -270,6 +288,8 @@ export default function PoliciesPage() {
             <RefreshCw className={`w-4 h-4 ${refreshBundlesMutation.isPending ? 'animate-spin' : ''}`} />
             {refreshBundlesMutation.isPending ? 'Refreshing…' : 'Refresh Bundles'}
           </button>
+          )}
+          {canCreate && (
           <button
             onClick={() => setShowImportModal(true)}
             className="btn-secondary gap-2"
@@ -277,6 +297,7 @@ export default function PoliciesPage() {
             <Upload className="w-4 h-4" />
             Import
           </button>
+          )}
           <button
             onClick={() => setShowExportModal(true)}
             disabled={policies.length === 0}
@@ -287,10 +308,15 @@ export default function PoliciesPage() {
           </button>
           <button
             onClick={handleCreatePolicy}
-            className="btn-primary gap-2"
+            className={canCreate ? 'btn-primary gap-2' : 'btn-secondary gap-2'}
+            title={
+              canCreate
+                ? undefined
+                : 'Browse the policy options. Saving needs policy-management rights.'
+            }
           >
             <Plus className="w-5 h-5" />
-            Create Policy
+            {canCreate ? 'Create Policy' : 'Explore Policy Options'}
           </button>
         </div>
         {lastRefreshAt && (
@@ -369,6 +395,7 @@ export default function PoliciesPage() {
         onDuplicate={handleDuplicate}
         onToggleStatus={handleToggleStatus}
         onDelete={handleDelete}
+        canManage={canManage}
       />
 
       {/* Inactive Policies Table */}
@@ -381,6 +408,7 @@ export default function PoliciesPage() {
         onDuplicate={handleDuplicate}
         onToggleStatus={handleToggleStatus}
         onDelete={handleDelete}
+        canManage={canManage}
       />
 
       {/* Policy Creator Modal */}
@@ -392,6 +420,7 @@ export default function PoliciesPage() {
         }}
         onSave={handleSavePolicy}
         editingPolicy={editingPolicy}
+        readOnly={editingPolicy ? !canUpdate : !canCreate}
       />
 
       {/* Policy Details Modal */}

@@ -63,7 +63,11 @@ const groups: NavGroup[] = [
       { name: 'ML Classifier', to: '/ml-classifier', icon: BrainCircuit, requires: ['create_policy', 'update_policy'] },
       { name: 'USB Devices', to: '/usb-devices', icon: Usb, requires: ['create_policy', 'update_policy'] },
       { name: 'Printers', to: '/printers', icon: Printer, requires: ['create_policy', 'update_policy'] },
-      { name: 'Policies', to: '/policies', icon: Shield, requires: ['create_policy', 'update_policy'] },
+      // Gated on the READ grant, not the write ones. Gating a page on
+      // create_policy hid the entire policy estate from every read-only role,
+      // which is the opposite of what an oversight role is for. Buttons inside
+      // the page are gated on the write permissions individually.
+      { name: 'Policies', to: '/policies', icon: Shield, requires: ['view_policies'] },
     ],
   },
   {

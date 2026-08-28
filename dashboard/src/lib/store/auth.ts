@@ -25,6 +25,7 @@ interface AuthState {
   verifyMfa: (mfaToken: string, code: string) => Promise<void>
   logout: () => void
   setTokens: (accessToken: string, refreshToken: string) => void
+  signInWithTokens: (accessToken: string, refreshToken: string) => Promise<void>
   refreshMe: () => Promise<void>
   hasPermission: (perm: string) => boolean
   hasAnyPermission: (perms: string[]) => boolean
@@ -149,6 +150,17 @@ export const useAuthStore = create<AuthState>()(
         set({ accessToken, refreshToken })
       },
 
+      // Establish a session from tokens the server has already issued — the
+      // SSO handoff. Identity is resolved the same way the password login
+      // resolves it, through /auth/me, so an SSO session and a password
+      // session carry the same `user` shape. Decoding the JWT here instead
+      // would give a role but no permissions, and permission-gated UI reads
+      // the list, not the role.
+      signInWithTokens: async (accessToken: string, refreshToken: string) => {
+        const user = await resolveUser(accessToken, '')
+        set({ isAuthenticated: true, accessToken, refreshToken, user })
+      },
+
       refreshMe: async () => {
         const token = get().accessToken
         if (!token) return
@@ -167,13 +179,20 @@ export const useAuthStore = create<AuthState>()(
         // ADMIN is treated as a global wildcard to avoid any divergence
         // between enum role and the permission list the server resolved.
         if (String(u.role).toUpperCase() === 'ADMIN') return true
-        return u.permissions.includes(perm)
+        // Never assume the list is there. A session persisted by an older
+        // build — or by any path that set `user` without resolving /auth/me —
+        // has no `permissions`, and `undefined.includes` throws during render.
+        // Because ADMIN returns above, only non-admins reached it, so the
+        // whole console went blank for exactly the accounts with the least
+        // access. Absent list = no permissions, not a crash.
+        return Array.isArray(u.permissions) && u.permissions.includes(perm)
       },
 
       hasAnyPermission: (perms: string[]) => {
         const u = get().user
         if (!u) return false
         if (String(u.role).toUpperCase() === 'ADMIN') return true
+        if (!Array.isArray(u.permissions)) return false
         return perms.some((p) => u.permissions.includes(p))
       },
     }),

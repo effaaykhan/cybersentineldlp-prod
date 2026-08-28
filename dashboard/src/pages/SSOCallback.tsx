@@ -31,24 +31,9 @@ import { AlertTriangle } from 'lucide-react'
  * someone reading over a shoulder or a synced history, never to the user.
  */
 
-/** Decode a JWT payload WITHOUT verifying the signature (client-side only). */
-function decodeJwtPayload(token: string): Record<string, unknown> {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) throw new Error('Malformed JWT')
-    // Base64url → base64 → decode
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-    const json = atob(base64)
-    return JSON.parse(json)
-  } catch {
-    return {}
-  }
-}
-
 export default function SSOCallback() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const { setTokens } = useAuthStore()
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -94,20 +79,18 @@ export default function SSOCallback() {
 
         if (cancelled) return
 
-        // Decode access token to extract user info (sub, email, role).
-        const claims = decodeJwtPayload(access_token)
+        // Resolve identity through /auth/me, exactly as the password login
+        // does. The access token's claims carry a role but no permission
+        // list, and every permission-gated surface — the whole sidebar
+        // included — reads the list. Populating the store from claims alone
+        // left non-admin SSO users with no `permissions` at all, which was
+        // indistinguishable from having no access and broke the console for
+        // them on arrival.
+        await useAuthStore
+          .getState()
+          .signInWithTokens(access_token, refresh_token)
 
-        // Populate auth store — same shape as the normal login flow.
-        useAuthStore.setState({
-          isAuthenticated: true,
-          accessToken: access_token,
-          refreshToken: refresh_token,
-          user: {
-            email: (claims.email as string) || '',
-            role: (claims.role as string) || 'VIEWER',
-            id: (claims.sub as string) || '',
-          },
-        })
+        if (cancelled) return
 
         navigate('/dashboard', { replace: true })
       } catch (err: unknown) {
@@ -123,7 +106,7 @@ export default function SSOCallback() {
     return () => {
       cancelled = true
     }
-  }, [searchParams, navigate, setTokens])
+  }, [searchParams, navigate])
 
   /*
     The SSO handoff sits between the light login screen and the light console,

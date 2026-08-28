@@ -13,6 +13,18 @@ export default function Layout() {
     setMounted(true)
   }, [])
 
+  // Re-resolve identity from the server once per console load. The store is
+  // persisted, so without this a session keeps whatever permission list it
+  // was created with for as long as the tokens live: a role change made in
+  // User Management never reaches the open tab, and a session created
+  // without a permission list never acquires one. refreshMe swallows
+  // transient failures and leaves the session intact.
+  useEffect(() => {
+    if (isAuthenticated) {
+      void useAuthStore.getState().refreshMe()
+    }
+  }, [isAuthenticated])
+
   if (!mounted) {
     return null
   }

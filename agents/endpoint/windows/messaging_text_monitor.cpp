@@ -56,6 +56,7 @@ std::thread g_hookThreadObj;
 std::thread g_workerObj;
 std::thread g_samplerObj;
 std::thread g_watchdogObj;
+std::thread g_locatorObj;
 
 // ── Hook -> worker handoff ────────────────────────────────────────────────
 // The hook must never block, so it publishes the bare facts and wakes the
@@ -138,6 +139,20 @@ long long  g_sendAtMs  = 0;
 // A swallowed button-down must have its button-up swallowed too, or the app
 // sees a release it never saw pressed and can latch a drag.
 std::atomic<bool> g_swallowNextUp{false};
+
+// ââ What the locator has found âââââââââââââââââââââââââââââââââââââ
+// Both threads live in the COM multithreaded apartment, so an interface pointer
+// is legal to use from either one. The lock protects the pointer itself; anyone
+// reading through it takes their own reference first, so the locator is free to
+// replace or release its copy at any moment.
+std::mutex            g_locMx;
+IUIAutomationElement* g_locComposer    = nullptr;
+DWORD                 g_locComposerPid = 0;
+IUIAutomationElement* g_locSendBtn     = nullptr;
+DWORD                 g_locSendBtnPid  = 0;
+// Set by the sampler when the element it is reading through goes dead, so the
+// locator re-acquires immediately instead of waiting out its rate limit.
+std::atomic<bool>     g_refindComposer{false};
 
 // Alert mode fires on every Enter, including the ones that resend the same
 // text; an operator does not need the same message five times.
@@ -1620,10 +1635,196 @@ void WatchdogThread() {
     }
 }
 
-// ── Sampler ───────────────────────────────────────────────────────────────
-// Alert mode only. Keeps the last thing seen in the composer of a managed app,
-// because alert mode never holds the Enter and so has nothing left to read by
-// the time it is asked.
+// ── Locating things ────────────────────────────────────────────────
+// Every tree walk in this file happens on the locator thread and nowhere else.
+//
+// FindAll(TreeScope_Descendants) over a Chromium document is the seven-second
+// call this whole design exists to avoid, and the deadline argument does not
+// bound it: a deadline can only be tested between results, so it limits the
+// loop AFTER FindAll has returned and never FindAll itself. Running one on the
+// sampler thread therefore stops the 250ms text sample for as long as the walk
+// takes.
+//
+// That is how hunting for the Send button made things worse than before it
+// existed: a walk every five seconds starved the snapshot that the Enter path
+// reads, so Enter stopped blocking at all - and in an app that does not name
+// its button "Send" the walk never succeeds, so the starvation is permanent
+// and Enter never recovers. Splitting the threads is the fix; the sampler now
+// does nothing but property reads, which is what made it fast in the first
+// place.
+
+void PublishComposer(IUIAutomationElement* el, DWORD pid) {
+    IUIAutomationElement* old = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_locMx);
+        old = g_locComposer;
+        if (el) el->AddRef();
+        g_locComposer = el; g_locComposerPid = pid;
+    }
+    if (old) old->Release();   // outside the lock: Release can re-enter COM
+}
+
+void PublishSendBtn(IUIAutomationElement* el, DWORD pid) {
+    IUIAutomationElement* old = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_locMx);
+        old = g_locSendBtn;
+        if (el) el->AddRef();
+        g_locSendBtn = el; g_locSendBtnPid = pid;
+    }
+    if (old) old->Release();
+}
+
+IUIAutomationElement* AcquireComposer(DWORD& pidOut) {
+    std::lock_guard<std::mutex> lk(g_locMx);
+    pidOut = g_locComposerPid;
+    if (g_locComposer) g_locComposer->AddRef();
+    return g_locComposer;
+}
+
+IUIAutomationElement* AcquireSendBtn(DWORD& pidOut) {
+    std::lock_guard<std::mutex> lk(g_locMx);
+    pidOut = g_locSendBtnPid;
+    if (g_locSendBtn) g_locSendBtn->AddRef();
+    return g_locSendBtn;
+}
+
+// ── Locator ───────────────────────────────────────────────────────
+// Nothing on any critical path waits for this thread, so it is allowed to be
+// slow. It publishes what it finds and the sampler reads through it.
+void LocatorThread() {
+    HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool comOk = SUCCEEDED(hrCom);
+
+    IUIAutomation* uia = nullptr;
+    long long uiaComplainedAt = 0;
+
+    IUIAutomationElement* composer = nullptr;
+    DWORD     composerPid      = 0;
+    long long lastFindMs       = 0;
+    long long findComplainedAt = 0;
+
+    IUIAutomationElement* sendBtn  = nullptr;
+    DWORD     sendPid          = 0;
+    long long lastSendFindMs   = 0;
+    unsigned  sendMisses       = 0;
+
+    while (!g_stop.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        if (g_stop.load()) break;
+        if (!comOk) continue;
+
+        try {
+            TargetApp t = ResolveForegroundApp();
+            if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
+
+            const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
+
+            // Focus left everything we care about. Drop what we hold so the
+            // sampler stops reading a box nobody is typing into, and so the
+            // mouse hook stops recognising a rectangle that has moved on.
+            if (!mv.managed || !mv.inspectMessages) {
+                if (composer) {
+                    PublishComposer(nullptr, 0);
+                    composer->Release(); composer = nullptr; composerPid = 0;
+                }
+                if (sendBtn) {
+                    PublishSendBtn(nullptr, 0);
+                    sendBtn->Release(); sendBtn = nullptr; sendPid = 0;
+                    std::lock_guard<std::mutex> lk(g_sendMx);
+                    g_sendPid = 0; g_sendAtMs = 0;
+                }
+                lastSendFindMs = 0; sendMisses = 0;
+                continue;
+            }
+
+            // Acquired here rather than at thread start, and quietly: the
+            // worker complains at the moment it matters - a real send.
+            if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
+
+            // The sampler found its element dead. Re-acquire now rather than
+            // waiting out the rate limit.
+            if (g_refindComposer.exchange(false) && composer) {
+                PublishComposer(nullptr, 0);
+                composer->Release(); composer = nullptr; composerPid = 0;
+                lastFindMs = 0;
+            }
+
+            // Focus moved to another instance of a managed app.
+            if (composer && t.pid != composerPid) {
+                PublishComposer(nullptr, 0);
+                composer->Release(); composer = nullptr; composerPid = 0;
+            }
+            if (sendBtn && (t.pid != sendPid || !ElementAlive(sendBtn))) {
+                PublishSendBtn(nullptr, 0);
+                sendBtn->Release(); sendBtn = nullptr; sendPid = 0;
+                lastSendFindMs = 0; sendMisses = 0;
+            }
+
+            if (!composer) {
+                const long long now = NowSteadyMs();
+                if (!lastFindMs || now - lastFindMs >= 3000) {
+                    lastFindMs = now;
+                    int seen = 0;
+                    composer = FindComposerElement(uia, t.wnd, t.pid, now + 8000, seen);
+                    if (composer) {
+                        composerPid = t.pid;
+                        PublishComposer(composer, t.pid);
+                        LogInfo("locator locked onto the composer in " + t.exe + " after " +
+                                std::to_string(NowSteadyMs() - now) + "ms");
+                    } else if (!findComplainedAt || now - findComplainedAt > 60000) {
+                        findComplainedAt = now;
+                        LogWarn("locator cannot find a composer in " + t.exe + " (" +
+                                std::to_string(seen) + " editable node(s) seen in " +
+                                std::to_string(NowSteadyMs() - now) + "ms) - typed "
+                                "messages in this app cannot be inspected");
+                    }
+                }
+            }
+
+            // The Send button is a bonus; Enter is the feature. So back off
+            // hard when an app has no button under a name we recognise -
+            // the walk costs seconds and repeating it forever buys nothing.
+            if (mv.block && !sendBtn) {
+                const long long now  = NowSteadyMs();
+                const long long wait = 5000LL << (sendMisses < 5 ? sendMisses : 5);
+                if (!lastSendFindMs || now - lastSendFindMs >= wait) {
+                    lastSendFindMs = now;
+                    sendBtn = FindSendButton(uia, t.wnd, t.pid, 0);
+                    if (sendBtn) {
+                        sendPid = t.pid; sendMisses = 0;
+                        PublishSendBtn(sendBtn, t.pid);
+                        LogInfo("locator located the Send button in " + t.exe);
+                    } else {
+                        if (sendMisses == 0) {
+                            LogInfo("locator found no Send button in " + t.exe +
+                                    " under a name it recognises - Enter is still "
+                                    "inspected, clicking Send is not");
+                        }
+                        if (sendMisses < 5) ++sendMisses;
+                    }
+                }
+            }
+        } catch (...) {}
+    }
+
+    PublishComposer(nullptr, 0);
+    PublishSendBtn(nullptr, 0);
+    if (composer) composer->Release();
+    if (sendBtn)  sendBtn->Release();
+    if (uia) uia->Release();
+    if (comOk) CoUninitialize();
+}
+
+// ── Sampler ───────────────────────────────────────────────────────
+// Keeps the last thing seen in the composer of a managed app, and the verdict
+// on it, so that neither the Enter path nor the mouse hook has to ask a slow
+// question at the moment it is least able to wait for the answer.
+//
+// Everything here is a property read on an element somebody else located. That
+// is the whole contract of this thread, and the reason it can run four times a
+// second: the moment a tree walk creeps back in, the snapshot goes stale and
+// both blocking paths quietly stop working.
 void SamplerThread() {
     HRESULT hrCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool comOk = SUCCEEDED(hrCom);
@@ -1631,17 +1832,10 @@ void SamplerThread() {
     IUIAutomation* uia = nullptr;
     long long uiaComplainedAt = 0;
 
-    // The composer, found once and then polled. See the loop below.
-    IUIAutomationElement* composer = nullptr;
-    IUIAutomationElement* sendBtn  = nullptr;
-    long long lastSendFindMs       = 0;
     std::string lastClassified;
-    bool        lastSensitive      = false;
+    bool        lastSensitive = false;
     std::string lastWhat;
     NetworkExfilMonitor::ClassifyResult lastCls;
-    DWORD     composerPid      = 0;
-    long long lastFindMs       = 0;
-    long long findComplainedAt = 0;
 
     const unsigned interval = g_cfg.sampleIntervalMs ? g_cfg.sampleIntervalMs : 250;
     while (!g_stop.load()) {
@@ -1654,94 +1848,51 @@ void SamplerThread() {
             if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
 
             const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
-            if (!mv.managed) {
-                if (composer) { composer->Release(); composer = nullptr; composerPid = 0; }
-                if (sendBtn)  { sendBtn->Release();  sendBtn  = nullptr; }
-                std::lock_guard<std::mutex> lk(g_sendMx);
-                g_sendPid = 0; g_sendAtMs = 0;
-            }
-            // Block mode used to be excluded here, on the reasoning that it reads
-            // at send time and did not want a sampler second-guessing it. That
-            // reasoning was backwards: block mode is the one mode that reads
-            // while holding the user's keystroke, so it is the mode that can
-            // least afford to ask a slow question. It now decides on what this
-            // thread saw a moment earlier — see DecideAndAct.
+            // Block mode used to be excluded here, on the reasoning that it
+            // reads at send time and did not want a sampler second-guessing it.
+            // That reasoning was backwards: block mode is the one mode that
+            // reads while holding the user's keystroke, so it is the mode that
+            // can least afford to ask a slow question. It now decides on what
+            // this thread saw a moment earlier - see DecideAndAct.
             if (!mv.managed || !mv.inspectMessages) continue;
-
-            // Acquired here rather than at thread start, and quietly: the worker
-            // complains at the moment it matters — a real send. A sampler that
-            // cannot see the tree has nothing worth saying twice a second.
             if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
 
-            // Focus moved to another app, or another instance of one. The
-            // element we were holding belongs to a window nobody types into now.
-            if (composer && t.pid != composerPid) {
-                composer->Release(); composer = nullptr; composerPid = 0;
-                if (sendBtn) { sendBtn->Release(); sendBtn = nullptr; }
-            }
-
-            // Locate it the expensive way ONCE. This is the FindAll over a
-            // Chromium document that measured seven seconds — affordable here,
-            // where nothing is held, and nowhere else. Rate-limited so a window
-            // with no composer at all is not re-searched four times a second.
-            if (!composer) {
-                const long long now = NowSteadyMs();
-                if (lastFindMs && now - lastFindMs < 3000) continue;
-                lastFindMs = now;
-                int seen = 0;
-                composer = FindComposerElement(uia, t.wnd, t.pid, now + 8000, seen);
-                if (composer) {
-                    composerPid = t.pid;
-                    LogInfo("sampler locked onto the composer in " + t.exe + " after " +
-                            std::to_string(NowSteadyMs() - now) + "ms");
-                } else {
-                    if (!findComplainedAt || now - findComplainedAt > 60000) {
-                        findComplainedAt = now;
-                        LogWarn("sampler cannot find a composer in " + t.exe + " (" +
-                                std::to_string(seen) + " editable node(s) seen in " +
-                                std::to_string(NowSteadyMs() - now) + "ms) - typed "
-                                "messages in this app cannot be inspected");
-                    }
-                    continue;
-                }
-            }
-
-            // The cheap part, every cycle: one element, one or two property
-            // reads. This is what makes the sample a quarter of a second old
-            // rather than seven seconds old.
-            //
-            // Chromium rebuilds the composer's accessibility node after a send,
-            // and again after a modal takes focus — so the element located
-            // before the first blocked message is dead by the time of the
-            // second. Nothing here used to notice: a dead element reads as ""
-            // exactly like an empty box does, the snapshot went permanently
-            // empty, and every later send fell through to the slow read this
-            // whole design exists to avoid. Blocking therefore worked exactly
-            // once per lock-on, which is worse than never working, because it
-            // demonstrates the feature and then silently stops enforcing it.
+            // One element, one or two property reads. This is what makes the
+            // sample a quarter of a second old rather than seven seconds old.
             std::string text;
-            bool stale = false;
-            if (!ElementAlive(composer)) {
-                stale = true;
-            } else {
-                try { text = TrimText(TextFromElement(composer)); } catch (...) {}
+            DWORD cpid = 0;
+            IUIAutomationElement* composer = AcquireComposer(cpid);
+            if (composer) {
+                if (cpid != t.pid) {
+                    // Belongs to a window nobody is typing into now. The
+                    // locator will notice and re-point us.
+                } else if (ElementAlive(composer)) {
+                    try { text = TrimText(TextFromElement(composer)); } catch (...) {}
+                } else if (!g_refindComposer.exchange(true)) {
+                    // Chromium rebuilds the composer's accessibility node after
+                    // a send, and again after a modal takes focus - so the
+                    // element located before the first blocked message is dead
+                    // by the time of the second. Nothing used to notice: a dead
+                    // element reads as "" exactly like an empty box does, the
+                    // snapshot went permanently empty, and blocking worked
+                    // exactly once per lock-on. Which is worse than never
+                    // working, because it demonstrates the control and then
+                    // silently stops enforcing it. Logged once per death, not
+                    // four times a second until the re-find lands.
+                    LogInfo("the composer in " + t.exe + " went stale (the app "
+                            "rebuilt it) - re-acquiring");
+                }
+                composer->Release();
             }
 
             // If the cached element said nothing, ask what actually has focus
             // before believing the box is empty. Two property reads, no tree
-            // walk, so it is affordable every cycle — and it is what covers the
+            // walk, so it is affordable every cycle - and it is what covers the
             // gap between the composer being rebuilt and the re-find landing.
             if (text.empty()) {
                 ComposerRead fr;
                 try { fr = ReadFocusedOnly(uia, t.pid); } catch (...) {}
                 if (fr.status == ReadStatus::Ok) text = TrimText(fr.text);
-            }
-
-            if (stale) {
-                composer->Release(); composer = nullptr; composerPid = 0;
-                lastFindMs = 0;   // re-acquire next cycle, do not wait out the 3s
-                LogInfo("sampler's composer in " + t.exe + " went stale (the app "
-                        "rebuilt it) - re-acquiring");
             }
 
             // ── Pre-decide, so the mouse hook never has to ───────────────
@@ -1768,29 +1919,18 @@ void SamplerThread() {
             }
 
             // ── Keep the Send button's rectangle current ─────────────────
-            // Found once (a tree walk), then re-measured every cycle, which is
-            // one property read. Re-measuring matters: the button moves when
+            // One property read. Re-measuring matters: the button moves when
             // the window moves, resizes, or the composer grows to two lines.
-            if (mv.block) {
-                if (sendBtn && !ElementAlive(sendBtn)) {
-                    sendBtn->Release(); sendBtn = nullptr; lastSendFindMs = 0;
+            DWORD spid = 0;
+            IUIAutomationElement* btn = AcquireSendBtn(spid);
+            if (btn) {
+                RECT r{};
+                if (spid == t.pid && ElementRect(btn, r) &&
+                    r.right > r.left && r.bottom > r.top) {
+                    std::lock_guard<std::mutex> lk(g_sendMx);
+                    g_sendRect = r; g_sendPid = spid; g_sendAtMs = NowSteadyMs();
                 }
-                if (!sendBtn) {
-                    const long long now = NowSteadyMs();
-                    if (!lastSendFindMs || now - lastSendFindMs >= 5000) {
-                        lastSendFindMs = now;
-                        sendBtn = FindSendButton(uia, t.wnd, t.pid, now + 4000);
-                        if (sendBtn) LogInfo("sampler located the Send button in " + t.exe);
-                    }
-                }
-                if (sendBtn) {
-                    RECT r{};
-                    if (ElementRect(sendBtn, r) &&
-                        r.right > r.left && r.bottom > r.top) {
-                        std::lock_guard<std::mutex> lk(g_sendMx);
-                        g_sendRect = r; g_sendPid = t.pid; g_sendAtMs = NowSteadyMs();
-                    }
-                }
+                btn->Release();
             }
 
             std::lock_guard<std::mutex> lk(g_snapMx);
@@ -1805,8 +1945,6 @@ void SamplerThread() {
         } catch (...) {}
     }
 
-    if (composer) composer->Release();
-    if (sendBtn)  sendBtn->Release();
     if (uia) uia->Release();
     if (comOk) CoUninitialize();
 }
@@ -2064,6 +2202,7 @@ bool Start(const Config& cfg) {
     g_workerObj     = std::thread(WorkerThread);
     g_watchdogObj   = std::thread(WatchdogThread);
     g_samplerObj    = std::thread(SamplerThread);
+    g_locatorObj    = std::thread(LocatorThread);
     g_hookThreadObj = std::thread(HookThread);
 
     // Give the hook a moment to report failure so Start() reflects reality.
@@ -2080,6 +2219,7 @@ void Stop() {
     if (g_workerObj.joinable())     g_workerObj.join();
     if (g_watchdogObj.joinable())   g_watchdogObj.join();
     if (g_samplerObj.joinable())    g_samplerObj.join();
+    if (g_locatorObj.joinable())    g_locatorObj.join();
 
     // Both resolvers have now exited. If a keystroke was still held when the
     // stop came, nobody is left to give it back — and quietly eating the user's

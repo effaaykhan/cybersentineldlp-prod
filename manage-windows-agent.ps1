@@ -1216,13 +1216,13 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # of the matchers above sees them - so without this block the decisive
     # measurement is in the log and absent from the report.
     $sampler = @($lines | Where-Object {
-      $_ -match 'sampler locked onto the composer|sampler cannot find a composer|focused read found nothing|went stale|located the Send button|mouse hook installed|WH_MOUSE_LL'
+      $_ -match 'locked onto the composer|cannot find a composer|focused read found nothing|went stale|located the Send button|found no Send button|mouse hook installed|WH_MOUSE_LL'
     } | Select-Object -Last 8)
     if ($sampler.Count -gt 0) {
       Info 'Composer-search results (1.2.5+):'
       foreach ($l in $sampler) { Write-LogLine (Format-MsgLine $l) }
-      Hint '"sampler locked onto the composer"  = it works. The verdict comes from what you typed.'
-      Hint '"sampler cannot find a composer"    = UI Automation cannot see this app''s message box.'
+      Hint '"locator locked onto the composer"  = it works. The verdict comes from what you typed.'
+      Hint '"locator cannot find a composer"    = UI Automation cannot see this app''s message box.'
       Hint '   The number in brackets is how many editable nodes it found: 0 means the box is not'
       Hint '   exposed to accessibility at all, and this method cannot inspect that app.'
       Hint '"focused read found nothing"        = the box was not what had focus when you pressed'
@@ -1230,7 +1230,9 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Hint '"went stale ... re-acquiring"       = 1.2.6 caught the app rebuilding its message box.'
       Hint '   Before 1.2.6 that went unnoticed and blocking stopped working after the first hit.'
       Hint '"located the Send button"           = clicking Send with the mouse is covered too.'
-      Hint '   Absent on 1.2.6+? Only Enter is inspected - the button could not be found by name.'
+      Hint '"found no Send button"              = only Enter is inspected in that app. Harmless on'
+      Hint '   1.2.7+, which backs off instead of re-searching; on 1.2.6 that same search ran every'
+      Hint '   5s on the sampler thread and starved it, which is why Enter stopped blocking too.'
     }
 
     if ($unread.Count -eq 0 -and $readok.Count -eq 0 -and $released.Count -eq 0 -and $sampler.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }

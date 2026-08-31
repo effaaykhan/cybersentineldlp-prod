@@ -480,7 +480,10 @@ void EmitEvent(const EventFields& f) {
     j << "\"action\":\""         << EscapeJson(f.action)                << "\",";
     j << "\"channel\":\""        << EscapeJson(f.channel)               << "\",";
     j << "\"process_name\":\""   << EscapeJson(f.processName)           << "\",";
-    j << "\"process_id\":"       << f.pid                               << ",";
+    // Quoted: process_id is Optional[str] on EventCreate and pydantic 2 will
+    // not coerce a number to a string, it 422s the request. Unquoted, every
+    // network-exfil event was rejected at ingest and never reached the console.
+    j << "\"process_id\":\""     << f.pid                               << "\",";
     j << "\"command_line\":\""   << EscapeJson(f.commandLine)           << "\",";
     if (!f.fileName.empty()) {
         j << "\"file_name\":\""  << EscapeJson(f.fileName)              << "\",";

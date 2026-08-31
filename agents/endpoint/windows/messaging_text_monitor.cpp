@@ -1068,7 +1068,12 @@ void EmitEvent(const std::string& exe, DWORD pid, const std::string& action,
     j << "\"action\":\""        << EscapeJson(action)             << "\",";
     j << "\"channel\":\""       << "MESSAGING"                    << "\",";
     j << "\"process_name\":\""  << EscapeJson(exe)                << "\",";
-    j << "\"process_id\":"      << pid                            << ",";
+    // Quoted deliberately. process_id is declared Optional[str] on EventCreate
+    // and pydantic 2 does not coerce a number to a string - it 422s the whole
+    // request. Sending a bare integer here meant every blocked message was
+    // rejected at ingest, so the block happened on the endpoint and left no
+    // event, no alert and no incident behind it.
+    j << "\"process_id\":\""    << pid                            << "\",";
     j << "\"destination\":\""   << EscapeJson(exe)                << "\",";
     j << "\"destination_type\":\"" << "messaging_app"             << "\",";
     j << "\"blocked\":"         << (action == "BLOCK" ? "true" : "false") << ",";

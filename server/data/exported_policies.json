@@ -187,6 +187,84 @@
     }
   },
   {
+    "name": "Web Activity Control",
+    "description": "",
+    "enabled": true,
+    "priority": 100,
+    "type": "web_activity_control",
+    "severity": "high",
+    "config": {
+      "mode": "enforce",
+      "minLevel": "Confidential",
+      "matrix": {
+        "webmail": {
+          "upload": "block",
+          "download": "block",
+          "attach": "block",
+          "send": "block"
+        },
+        "cloud_storage": {
+          "upload": "block",
+          "download": "block",
+          "post": "mask"
+        },
+        "collaboration": {
+          "upload": "block",
+          "download": "block",
+          "post": "mask"
+        },
+        "genai": {
+          "upload": "block",
+          "download": "block",
+          "attach": "block",
+          "post": "mask",
+          "ai_response": "block"
+        }
+      },
+      "appOverrides": [],
+      "blockUninspectable": true,
+      "action": "block"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "event_type",
+          "operator": "in",
+          "value": [
+            "cloud_upload",
+            "collaboration",
+            "email",
+            "genai"
+          ]
+        },
+        {
+          "field": "activity",
+          "operator": "in",
+          "value": [
+            "ai_response",
+            "attach",
+            "download",
+            "post",
+            "send",
+            "upload"
+          ]
+        },
+        {
+          "field": "classification_level",
+          "operator": "in",
+          "value": [
+            "Confidential",
+            "Restricted"
+          ]
+        }
+      ]
+    },
+    "actions": {
+      "log": {}
+    }
+  },
+  {
     "name": "application control policy",
     "description": "",
     "enabled": false,

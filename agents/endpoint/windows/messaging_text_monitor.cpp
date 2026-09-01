@@ -53,6 +53,27 @@ HHOOK       g_hook       = nullptr;
 HHOOK       g_mouseHook  = nullptr;
 DWORD       g_hookThread = 0;
 std::thread g_hookThreadObj;
+
+// ── Are we still hooked? ──────────────────────────────────────────────────
+//
+// Windows removes a low-level hook whose callback overruns
+// LowLevelHooksTimeout — 300ms, by default — and it tells nobody. No error, no
+// callback, no notification: the HHOOK we are holding stays non-null and every
+// keystroke from that moment on is simply never offered to us again. From
+// inside this process the result is indistinguishable from a user who stopped
+// typing, which is exactly why this failure reads as "it blocked yesterday,
+// today it does not, and there is nothing in the log".
+//
+// So the hook thread cannot be trusted to notice its own death, and nothing
+// short of restarting the agent used to bring it back. These two timestamps
+// let the watchdog notice instead, by asking a question the OS will answer:
+// has Windows seen input that we did not?
+std::atomic<long long> g_lastKeyHookMs{0};
+std::atomic<long long> g_lastMouseHookMs{0};
+
+// Posted to the hook thread; the hooks may only be reinstalled by the thread
+// that owns their message pump.
+constexpr UINT WM_REHOOK = WM_APP + 7;
 std::thread g_workerObj;
 std::thread g_samplerObj;
 std::thread g_watchdogObj;
@@ -140,7 +161,25 @@ long long  g_sendAtMs  = 0;
 // sees a release it never saw pressed and can latch a drag.
 std::atomic<bool> g_swallowNextUp{false};
 
-// ââ What the locator has found âââââââââââââââââââââââââââââââââââââ
+// Is there anything in the composer right now?
+//
+// This exists because of what WhatsApp actually does: the control to the right
+// of the message box is a MICROPHONE while the box is empty and only becomes
+// Send once you type. Searching for a Send button in an empty chat window is
+// therefore guaranteed to fail, and the old code did exactly that — it searched
+// on a timer from the moment the app came to the foreground, missed (there was
+// no such button yet), and backed off to one attempt every 160 seconds. By the
+// time a user typed something the search had given up, so clicking Send was
+// never covered on the one app it was written for.
+//
+// Searching is now driven by this instead of by the clock: look when there is
+// something to send, never when there is not.
+std::atomic<bool> g_composerHasText{false};
+// Said once per app, not four times a second, when the pointer probe works out
+// where Send is - it is the line that tells an operator the mouse is covered.
+std::atomic<bool> g_hoverSaidSo{false};
+
+// ── What the locator has found ─────────────────────────────────────
 // Both threads live in the COM multithreaded apartment, so an interface pointer
 // is legal to use from either one. The lock protects the pointer itself; anyone
 // reading through it takes their own reference first, so the locator is free to
@@ -342,7 +381,13 @@ bool StartedNoLaterThan(DWORD ancestorPid, DWORD childPid) {
     return CompareFileTime(&a, &c) <= 0;
 }
 
-std::vector<std::string> AncestorExes(DWORD pid, const std::string& childExe) {
+// mayWalk=false answers ONLY from the cache and never touches the process
+// table. The keyboard hook passes false, and that is not an optimisation — see
+// the note above KeyProc. The sampler, which looks at the foreground app four
+// times a second, is what keeps this cache warm; a window you have not had in
+// front of you cannot be the window you just pressed Enter in.
+std::vector<std::string> AncestorExes(DWORD pid, const std::string& childExe,
+                                      bool mayWalk) {
     {
         std::lock_guard<std::mutex> lk(g_ancestorMx);
         auto it = g_ancestorCache.find(pid);
@@ -350,6 +395,7 @@ std::vector<std::string> AncestorExes(DWORD pid, const std::string& childExe) {
             return it->second.exes;
         }
     }
+    if (!mayWalk) return {};
 
     std::vector<std::string> out;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -391,11 +437,12 @@ NetworkExfilMonitor::MessagingVerdict AskPolicy(const std::string& exeLower) {
 }
 
 // Returns the verdict, and rewrites t.exe to the name that actually matched.
-NetworkExfilMonitor::MessagingVerdict VerdictForTarget(TargetApp& t) {
+NetworkExfilMonitor::MessagingVerdict VerdictForTarget(TargetApp& t,
+                                                      bool mayWalk = true) {
     NetworkExfilMonitor::MessagingVerdict mv = AskPolicy(t.exe);
     if (mv.managed || t.exe.empty() || !t.pid) return mv;
 
-    for (const auto& pexe : AncestorExes(t.pid, t.exe)) {
+    for (const auto& pexe : AncestorExes(t.pid, t.exe, mayWalk)) {
         if (pexe == t.exe) continue;
         NetworkExfilMonitor::MessagingVerdict pv = AskPolicy(pexe);
         if (pv.managed) {
@@ -553,6 +600,11 @@ const PROPERTYID kNamePropertyId = 30005;
 // complete one. 50000 is Button; 30001 is the bounding rectangle.
 const CONTROLTYPEID kButtonControlTypeId       = 50000;
 const PROPERTYID    kBoundingRectanglePropertyId = 30001;
+// 50006 is Image, 30011 is AutomationId. Chromium-family apps expose an
+// icon-only button as a Button whose only child is an Image, and the hit test
+// under the cursor lands on whichever of the two is innermost.
+const CONTROLTYPEID kImageControlTypeId        = 50006;
+const PROPERTYID    kAutomationIdPropertyId    = 30011;
 
 // Where an element is on screen, in screen coordinates.
 //
@@ -852,13 +904,120 @@ ComposerRead ReadFocusedOnly(IUIAutomation* uia, DWORD pid) {
 // Matched on a contained "send" so "Send", "Send message" and "Send now" all
 // hit, and deliberately NOT on position or icon, which change with every
 // redesign.
+// ── Recognising the Send control ───────────────────────────────────
+//
+// Two independent tests, because neither covers these apps on its own.
+//
+// By NAME, when there is a name: the accessible name is "Send", "Send message",
+// occasionally "Send (Enter)". Matched a word at a time rather than by
+// substring, so "Resend", "Unsend" and "Sender" do not match, and the compound
+// actions that send something other than the typed text - "Send file", "Send
+// contact", "Send voice message" - are excluded outright. Swallowing a click on
+// those would block an attachment flow, which the attachment path already
+// covers, while showing the user a message about typed text.
+//
+// By POSITION, for the apps that ship an unnamed icon, which is most of them:
+// in every chat client this monitor manages, the send affordance is the control
+// immediately to the RIGHT of the message box and vertically level with it.
+// Emoji and attachment sit to the LEFT; toolbar and header buttons sit above
+// with no vertical overlap. The test is deliberately narrow, and it fails safe:
+// no composer rectangle, or nothing small beside it, and there is no candidate
+// at all rather than a guess.
+
+std::string ElementStringProp(IUIAutomationElement* el, PROPERTYID prop) {
+    if (!el) return "";
+    std::string out;
+    VARIANT v; VariantInit(&v);
+    if (SUCCEEDED(el->GetCurrentPropertyValue(prop, &v)) && v.vt == VT_BSTR && v.bstrVal)
+        out = ToLowerAscii(WideToUtf8(v.bstrVal));
+    VariantClear(&v);
+    return out;
+}
+
+CONTROLTYPEID ElementControlType(IUIAutomationElement* el) {
+    if (!el) return 0;
+    CONTROLTYPEID ct = 0;
+    VARIANT v; VariantInit(&v);
+    if (SUCCEEDED(el->GetCurrentPropertyValue(UIA_ControlTypePropertyId, &v)) && v.vt == VT_I4)
+        ct = (CONTROLTYPEID)v.lVal;
+    VariantClear(&v);
+    return ct;
+}
+
+// Whole-word test. "resend" and "sender" contain "send" and are not it.
+bool ContainsWord(const std::string& hay, const std::string& word) {
+    size_t at = 0;
+    while ((at = hay.find(word, at)) != std::string::npos) {
+        const bool leftOk  = at == 0 || !isalnum((unsigned char)hay[at - 1]);
+        const size_t end   = at + word.size();
+        const bool rightOk = end >= hay.size() || !isalnum((unsigned char)hay[end]);
+        if (leftOk && rightOk) return true;
+        at = end;
+    }
+    return false;
+}
+
+bool NameSuggestsSend(const std::string& name) {
+    if (name.empty() || name.size() > 48) return false;
+    static const char* kNotThisSend[] = {
+        "resend", "unsend", "send file", "send a file", "send document",
+        "send photo", "send picture", "send image", "send video", "send gif",
+        "send sticker", "send contact", "send location", "send voice",
+        "send audio", "send money", "send payment", "send later",
+        "schedule send", "send feedback", "send invite",
+    };
+    for (const char* bad : kNotThisSend)
+        if (name.find(bad) != std::string::npos) return false;
+    return ContainsWord(name, "send");
+}
+
+bool ElementSuggestsSend(IUIAutomationElement* el) {
+    if (NameSuggestsSend(ElementStringProp(el, kNamePropertyId))) return true;
+    // An automation id is developer-chosen and never localised, so a substring
+    // is the right test there: "sendButton", "btn-send", "composer_send".
+    const std::string id = ElementStringProp(el, kAutomationIdPropertyId);
+    if (id.empty() || id.size() > 48) return false;
+    if (id.find("resend") != std::string::npos ||
+        id.find("unsend") != std::string::npos) return false;
+    return id.find("send") != std::string::npos;
+}
+
+// Big enough to click, small enough to be a button rather than a panel or a
+// conversation row. Everything published to the mouse hook passes through here:
+// the hook swallows a click inside whatever rectangle it is given, so an
+// oversized one would swallow clicks all over the window.
+bool ButtonSized(const RECT& r) {
+    const LONG w = r.right - r.left;
+    const LONG h = r.bottom - r.top;
+    return w >= 8 && h >= 8 && w <= 400 && h <= 200;
+}
+
+// Is this rectangle the control sitting beside the message box?
+bool RectBesideComposer(const RECT& cand, const RECT& comp) {
+    const LONG w = cand.right - cand.left;
+    const LONG h = cand.bottom - cand.top;
+    if (w < 8 || h < 8 || w > 140 || h > 140)          return false;  // not button-shaped
+    if (cand.top >= comp.bottom || cand.bottom <= comp.top) return false;  // not level with it
+    if (cand.left < comp.right - 8)                    return false;  // not to its right
+    if (cand.left - comp.right > 250)                  return false;  // not beside it
+    return true;
+}
+
+// composerRect may be null; viaPosition (optional) reports which test won, so
+// the log can say whether the agent recognised the button or guessed it.
 IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
-                                     long long deadlineMs) {
+                                     long long deadlineMs,
+                                     const RECT* composerRect,
+                                     bool* viaPosition) {
+    if (viaPosition) *viaPosition = false;
     if (!uia || !wnd) return nullptr;
     IUIAutomationElement* root = nullptr;
     if (FAILED(uia->ElementFromHandle(wnd, &root)) || !root) return nullptr;
 
-    IUIAutomationElement* best = nullptr;
+    IUIAutomationElement* named  = nullptr;
+    IUIAutomationElement* placed = nullptr;   // best positional candidate so far
+    LONG                  placedLeft = 0;
+
     VARIANT want; VariantInit(&want);
     want.vt = VT_I4; want.lVal = kButtonControlTypeId;
     IUIAutomationCondition* cond = nullptr;
@@ -866,23 +1025,32 @@ IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
         IUIAutomationElementArray* arr = nullptr;
         if (SUCCEEDED(root->FindAll(TreeScope_Descendants, cond, &arr)) && arr) {
             int n = 0; arr->get_Length(&n);
-            for (int i = 0; i < n && !best; ++i) {
+            for (int i = 0; i < n && !named; ++i) {
                 if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
                 IUIAutomationElement* el = nullptr;
                 if (FAILED(arr->GetElement(i, &el)) || !el) continue;
                 const DWORD epid = ElementProcessId(el);
                 if (pid && epid && epid != pid) { el->Release(); continue; }
-                VARIANT nv; VariantInit(&nv);
-                if (SUCCEEDED(el->GetCurrentPropertyValue(kNamePropertyId, &nv))
-                    && nv.vt == VT_BSTR && nv.bstrVal) {
-                    const std::string nm = ToLowerAscii(WideToUtf8(nv.bstrVal));
-                    // "resend" and "send file" are not the message-send button.
-                    if (nm == "send" || nm == "send message" || nm == "send now") {
-                        best = el;   // caller releases
-                    }
+
+                RECT r{};
+                const bool measured = ElementRect(el, r);
+
+                // Measurable and button-shaped is a condition of the NAME match
+                // too. The only use anything found here is put to is a click
+                // rectangle, so a control we cannot measure is not a candidate,
+                // and a huge one is a container that happens to be named Send.
+                if (measured && ButtonSized(r) && ElementSuggestsSend(el)) {
+                    named = el; continue;                               // caller releases
                 }
-                VariantClear(&nv);
-                if (best != el) el->Release();
+
+                if (composerRect && measured &&
+                    RectBesideComposer(r, *composerRect) &&
+                    (!placed || r.left < placedLeft)) {
+                    if (placed) placed->Release();
+                    placed = el; placedLeft = r.left;
+                    continue;                                           // kept, not released
+                }
+                el->Release();
             }
             arr->Release();
         }
@@ -890,7 +1058,64 @@ IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
     }
     VariantClear(&want);
     root->Release();
-    return best;
+
+    if (named) {
+        if (placed) placed->Release();
+        return named;
+    }
+    if (placed && viaPosition) *viaPosition = true;
+    return placed;
+}
+
+// ── The pointer as the cheap search ───────────────────────────────
+//
+// FindSendButton walks the whole descendant tree, which on a Chromium document
+// costs seconds. ElementFromPoint asks about ONE point and costs a fraction of
+// that, and there is a point worth asking about: nobody clicks Send without
+// first moving the pointer onto it. At 300ms per pass, a button the user is
+// travelling towards is identified well before the click lands.
+//
+// It also covers what the tree walk cannot. The walk runs on a timer against a
+// tree that rebuilds itself constantly; this runs against whatever is under the
+// cursor at that instant, so an app that renames or re-creates its send control
+// per message is handled without a re-find. Publishes straight into the
+// rectangle the mouse hook reads - there is no element to cache, which is the
+// point.
+bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
+                             const RECT* composerRect) {
+    if (!uia || !t.wnd) return false;
+    POINT p{};
+    if (!GetCursorPos(&p)) return false;
+    RECT wr{};
+    if (!GetWindowRect(t.wnd, &wr)) return false;
+    if (p.x < wr.left || p.x >= wr.right || p.y < wr.top || p.y >= wr.bottom) return false;
+
+    IUIAutomationElement* el = nullptr;
+    if (FAILED(uia->ElementFromPoint(p, &el)) || !el) return false;
+
+    bool published = false;
+    const DWORD epid = ElementProcessId(el);
+    RECT r{};
+    if ((!t.pid || !epid || epid == t.pid) && ElementRect(el, r)) {
+        // The hit test returns the innermost node, which for an icon button is
+        // the Image inside it rather than the Button itself.
+        //
+        // The control type gate applies to the NAME test as well, not only the
+        // positional one. A conversation row reading "send me the file when you
+        // can" is named send-ish and is not a button, and swallowing a click on
+        // it would be the agent breaking the app.
+        const CONTROLTYPEID ct = ElementControlType(el);
+        const bool clickable = (ct == kButtonControlTypeId || ct == kImageControlTypeId);
+        if (clickable && ButtonSized(r) &&
+            (ElementSuggestsSend(el) ||
+             (composerRect && RectBesideComposer(r, *composerRect)))) {
+            std::lock_guard<std::mutex> lk(g_sendMx);
+            g_sendRect = r; g_sendPid = t.pid; g_sendAtMs = NowSteadyMs();
+            published = true;
+        }
+    }
+    el->Release();
+    return published;
 }
 
 IUIAutomationElement* FindComposerElement(IUIAutomation* uia, HWND wnd, DWORD pid,
@@ -1614,12 +1839,64 @@ void WorkerThread() {
     if (comOk) CoUninitialize();
 }
 
+// ── Is the hook still there? ──────────────────────────────────────────────
+//
+// There is no API that answers "is my hook still installed" — SetWindowsHookEx
+// hands back a handle and Windows never revokes it, even when it has stopped
+// calling us. So we infer it. GetLastInputInfo reports when the OS last saw
+// any input at all; if Windows has been receiving keystrokes and mouse moves
+// this whole time and our two callbacks have not run once, there is only one
+// explanation left, and it is not that the user went quiet.
+void CheckHookHealth() {
+    static long long lastCheckMs  = 0;
+    static long long lastRehookMs = -1;
+
+    const long long now = NowSteadyMs();
+    if (lastRehookMs < 0) lastRehookMs = now;
+    if (now - lastCheckMs < 5000) return;
+    lastCheckMs = now;
+    if (!g_hookThread) return;
+
+    LASTINPUTINFO lii{};
+    lii.cbSize = sizeof(lii);
+    if (!GetLastInputInfo(&lii)) return;
+    const DWORD systemIdleMs = GetTickCount() - lii.dwTime;   // wraps correctly
+
+    const long long ours = (std::max)(g_lastKeyHookMs.load(), g_lastMouseHookMs.load());
+    const long long silentMs = ours ? (now - ours) : 0;
+
+    if (ours && systemIdleMs < 5000 && silentMs > 20000 &&
+        now - lastRehookMs > 30000) {
+        lastRehookMs = now;
+        LogWarn("input hooks have seen nothing for " + std::to_string(silentMs / 1000) +
+                "s while Windows was still receiving input - the OS has silently dropped "
+                "them (a hook callback overran LowLevelHooksTimeout). Typed-message "
+                "blocking has been OFF for that long. Reinstalling now.");
+        PostThreadMessage(g_hookThread, WM_REHOOK, 0, 0);
+        return;
+    }
+
+    // Belt and braces. The test above weighs BOTH hooks against system input,
+    // so it cannot see the case where the keyboard hook alone was dropped and
+    // ordinary mouse movement keeps the timestamp looking healthy. Nothing can
+    // detect that from in here, so the remedy is to reinstall on a slow timer
+    // whether or not anything looks wrong: two syscalls, no user-visible
+    // effect, and it bounds the damage of any dropped hook to ten minutes
+    // instead of until the next agent restart. Never mid-adjudication.
+    if (now - lastRehookMs > 600000 && !g_decisionPending.load()) {
+        lastRehookMs = now;
+        LogDbg("periodic input-hook reinstall (guards a silently dropped hook)");
+        PostThreadMessage(g_hookThread, WM_REHOOK, 0, 0);
+    }
+}
+
 // ── Watchdog ──────────────────────────────────────────────────────────────
 // The worker cannot time itself out: when UI Automation wedges, the worker is
 // inside that call. Somebody outside it has to give the keystroke back.
 void WatchdogThread() {
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        CheckHookHealth();
         if (g_decisionResolved.load()) continue;
         const long long started = g_holdStartMs.load();
         if (!started) continue;
@@ -1708,6 +1985,7 @@ void LocatorThread() {
     DWORD     sendPid          = 0;
     long long lastSendFindMs   = 0;
     unsigned  sendMisses       = 0;
+    bool      hadText          = false;
 
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -1734,7 +2012,8 @@ void LocatorThread() {
                     std::lock_guard<std::mutex> lk(g_sendMx);
                     g_sendPid = 0; g_sendAtMs = 0;
                 }
-                lastSendFindMs = 0; sendMisses = 0;
+                lastSendFindMs = 0; sendMisses = 0; hadText = false;
+                g_hoverSaidSo.store(false);
                 continue;
             }
 
@@ -1782,29 +2061,64 @@ void LocatorThread() {
                 }
             }
 
-            // The Send button is a bonus; Enter is the feature. So back off
-            // hard when an app has no button under a name we recognise -
-            // the walk costs seconds and repeating it forever buys nothing.
-            if (mv.block && !sendBtn) {
-                const long long now  = NowSteadyMs();
-                const long long wait = 5000LL << (sendMisses < 5 ? sendMisses : 5);
-                if (!lastSendFindMs || now - lastSendFindMs >= wait) {
-                    lastSendFindMs = now;
-                    sendBtn = FindSendButton(uia, t.wnd, t.pid, 0);
-                    if (sendBtn) {
-                        sendPid = t.pid; sendMisses = 0;
-                        PublishSendBtn(sendBtn, t.pid);
-                        LogInfo("locator located the Send button in " + t.exe);
-                    } else {
-                        if (sendMisses == 0) {
-                            LogInfo("locator found no Send button in " + t.exe +
-                                    " under a name it recognises - Enter is still "
-                                    "inspected, clicking Send is not");
+            // ── Covering the Send button ─────────────────────────
+            //
+            // Enter is the feature; the button is what a user reaches for the
+            // moment Enter stops working, so leaving it uncovered defeats the
+            // control on the second attempt.
+            //
+            // Both searches are driven by there being something in the box,
+            // not by a timer. On WhatsApp the control only becomes Send once
+            // you type - before that it is a microphone - so searching an empty
+            // window was guaranteed to miss, and the miss backed the search off
+            // to once every 160 seconds. That is why clicking Send was never
+            // blocked: by the time there was a message to send, the agent had
+            // stopped looking.
+            const bool typing = g_composerHasText.load();
+            if (mv.block && typing) {
+                // A new message deserves a fresh attempt, whatever the last one
+                // cost. Without this the backoff outlives the reason for it.
+                if (!hadText) { lastSendFindMs = 0; sendMisses = 0; }
+
+                RECT cr{};
+                const bool haveCr = composer && ElementRect(composer, cr);
+
+                // Cheap, every pass, and independent of the cached element.
+                if (!sendBtn) {
+                    if (ProbeHoveredSendControl(uia, t, haveCr ? &cr : nullptr) &&
+                        !g_hoverSaidSo.exchange(true)) {
+                        LogInfo("locator recognised the control under the pointer in " +
+                                t.exe + " as Send - a click on it is now inspected");
+                    }
+                }
+
+                if (!sendBtn) {
+                    const long long now  = NowSteadyMs();
+                    const long long wait = 3000LL << (sendMisses < 4 ? sendMisses : 4);
+                    if (!lastSendFindMs || now - lastSendFindMs >= wait) {
+                        lastSendFindMs = now;
+                        bool viaPos = false;
+                        sendBtn = FindSendButton(uia, t.wnd, t.pid, 0,
+                                                 haveCr ? &cr : nullptr, &viaPos);
+                        if (sendBtn) {
+                            sendPid = t.pid; sendMisses = 0;
+                            PublishSendBtn(sendBtn, t.pid);
+                            LogInfo(std::string("locator located the Send button in ") +
+                                    t.exe + (viaPos ? " by position (beside the message box)"
+                                                    : " by name"));
+                        } else {
+                            if (sendMisses == 0) {
+                                LogInfo("locator found no Send button in " + t.exe +
+                                        " - by name or beside the message box. Enter is "
+                                        "still inspected; a click is inspected only while "
+                                        "the pointer rests on the control first");
+                            }
+                            if (sendMisses < 4) ++sendMisses;
                         }
-                        if (sendMisses < 5) ++sendMisses;
                     }
                 }
             }
+            hadText = typing;
         } catch (...) {}
     }
 
@@ -1854,7 +2168,10 @@ void SamplerThread() {
             // reads while holding the user's keystroke, so it is the mode that
             // can least afford to ask a slow question. It now decides on what
             // this thread saw a moment earlier - see DecideAndAct.
-            if (!mv.managed || !mv.inspectMessages) continue;
+            if (!mv.managed || !mv.inspectMessages) {
+                g_composerHasText.store(false);
+                continue;
+            }
             if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
 
             // One element, one or two property reads. This is what makes the
@@ -1894,6 +2211,11 @@ void SamplerThread() {
                 try { fr = ReadFocusedOnly(uia, t.pid); } catch (...) {}
                 if (fr.status == ReadStatus::Ok) text = TrimText(fr.text);
             }
+
+            // What the locator uses to decide whether to look for the Send
+            // control at all: it only exists, and only matters, while there is
+            // something in the box.
+            g_composerHasText.store(!text.empty());
 
             // ── Pre-decide, so the mouse hook never has to ───────────────
             // Only when the text actually changed: this runs four times a
@@ -1952,6 +2274,10 @@ void SamplerThread() {
 // ── The hook ──────────────────────────────────────────────────────────────
 
 LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    // Proof of life, before any decision to return early. The watchdog reads
+    // this to tell "nobody is typing" apart from "we are no longer hooked".
+    g_lastKeyHookMs.store(NowSteadyMs(), std::memory_order_relaxed);
+
     if (nCode != HC_ACTION) return CallNextHookEx(g_hook, nCode, wParam, lParam);
 
     KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)lParam;
@@ -1979,14 +2305,28 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
 
-    // VerdictForTarget can walk the process tree, which is the one thing in this
-    // hook that is not a pointer chase. It is bounded and, in practice, already
-    // done: the sampler resolves the foreground app every 500ms and fills the
-    // same cache, so by the time anyone presses Enter the answer is a map
-    // lookup. A cold miss costs one process snapshot — single-digit
-    // milliseconds against a LowLevelHooksTimeout of 300.
+    // mayWalk=false, and this is the whole reason the hook kept dying.
+    //
+    // VerdictForTarget falls back to walking the process tree whenever the
+    // foreground app is NOT managed — which is most windows on the machine, and
+    // every one of them arrives here, because a hook sees Enter everywhere and
+    // not just in WhatsApp. That walk is CreateToolhelp32Snapshot over every
+    // process on the system plus an OpenProcess per hop, and its cache is keyed
+    // by pid and flushed wholesale at 64 entries, so misses keep coming. The
+    // old comment here argued the walk was already cached and cost single-digit
+    // milliseconds; that is true for the app you are testing and false for the
+    // editor, terminal or browser you press Enter in a hundred times an hour.
+    // One such snapshot overrunning 300ms is all it takes for Windows to remove
+    // this hook for good, and it removes the mouse hook with it — they share
+    // this thread. Enter blocking stops dead, mid-session, in silence. That is
+    // the regression.
+    //
+    // A hook may do pointer chases and cache reads. It may not query the OS for
+    // a list of anything. The sampler owns the walk now; here we read what it
+    // cached and, on a miss, let the keystroke through.
     TargetApp t = ResolveForegroundApp();
-    const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
+    const NetworkExfilMonitor::MessagingVerdict mv =
+        VerdictForTarget(t, /*mayWalk=*/false);
 
     // Publish the trace BEFORE any early return, for managed and unmanaged apps
     // alike. The previous version only traced apps the policy did not cover, so
@@ -2069,6 +2409,8 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
 // It fails open at every step: unknown rectangle, stale rectangle, wrong
 // process, stale snapshot, or any doubt at all, and the click goes through.
 LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    g_lastMouseHookMs.store(NowSteadyMs(), std::memory_order_relaxed);
+
     if (nCode != HC_ACTION) return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
 
     if (wParam == WM_LBUTTONUP && g_swallowNextUp.exchange(false)) {
@@ -2126,16 +2468,22 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     return 1;
 }
 
-void HookThread() {
-    g_hookThread = GetCurrentThreadId();
+// Installs, or reinstalls, both hooks. Hook-thread only.
+//
+// Unhooking first is deliberate even when we believe the hooks are already
+// gone: if Windows dropped only one of them, the survivor would otherwise be
+// leaked and go on delivering into a second registration.
+bool InstallHooks(bool reinstall) {
+    if (g_hook)      { UnhookWindowsHookEx(g_hook);      g_hook = nullptr; }
+    if (g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = nullptr; }
+
     g_hook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyProc, GetModuleHandle(nullptr), 0);
     if (!g_hook) {
-        LogWarn("SetWindowsHookEx(WH_KEYBOARD_LL) failed err=" +
+        LogWarn(std::string(reinstall ? "REINSTALL FAILED: " : "") +
+                "SetWindowsHookEx(WH_KEYBOARD_LL) failed err=" +
                 std::to_string((unsigned long)GetLastError()));
-        g_running.store(false);
-        return;
+        return false;
     }
-    LogInfo("typed-message keyboard hook installed");
 
     // Non-fatal on purpose. Losing the mouse hook costs the Send-button path
     // and nothing else; Enter is still inspected, so a partial capability beats
@@ -2145,14 +2493,37 @@ void HookThread() {
         LogWarn("SetWindowsHookEx(WH_MOUSE_LL) failed err=" +
                 std::to_string((unsigned long)GetLastError()) +
                 " - clicking Send with the mouse will NOT be inspected");
-    } else {
-        LogInfo("typed-message mouse hook installed (Send button covered)");
+    }
+
+    // Fresh proof of life, so the watchdog does not immediately re-fire on the
+    // silence that led us here.
+    const long long now = NowSteadyMs();
+    g_lastKeyHookMs.store(now);
+    g_lastMouseHookMs.store(now);
+
+    LogInfo(std::string(reinstall ? "typed-message hooks REINSTALLED"
+                                  : "typed-message keyboard hook installed") +
+            (g_mouseHook ? " (Send button covered)" : " (mouse hook unavailable)"));
+    return true;
+}
+
+void HookThread() {
+    g_hookThread = GetCurrentThreadId();
+    if (!InstallHooks(false)) {
+        g_running.store(false);
+        return;
     }
 
     // A low-level hook is only serviced while its installing thread pumps
     // messages. No window, no timers — just the pump.
     MSG msg;
-    while (!g_stop.load() && GetMessage(&msg, nullptr, 0, 0) > 0) {
+    while (!g_stop.load()) {
+        const BOOL got = GetMessage(&msg, nullptr, 0, 0);
+        if (got <= 0) break;                      // WM_QUIT, or an error
+        if (!msg.hwnd && msg.message == WM_REHOOK) {
+            InstallHooks(true);                   // the watchdog says we went deaf
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }

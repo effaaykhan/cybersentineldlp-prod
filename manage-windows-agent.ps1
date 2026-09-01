@@ -1,4 +1,4 @@
-<#
+﻿<#
   manage-windows-agent.ps1 — CyberSentinel DLP WINDOWS agent MANAGER.
 
   A single, self-contained console app. Self-elevates to Administrator, detects any
@@ -1216,7 +1216,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # of the matchers above sees them - so without this block the decisive
     # measurement is in the log and absent from the report.
     $sampler = @($lines | Where-Object {
-      $_ -match 'locked onto the composer|cannot find a composer|focused read found nothing|went stale|located the Send button|found no Send button|mouse hook installed|WH_MOUSE_LL'
+      $_ -match 'locked onto the composer|cannot find a composer|focused read found nothing|went stale|located the Send button|found no Send button|recognised the control under the pointer|mouse hook installed|WH_MOUSE_LL'
     } | Select-Object -Last 8)
     if ($sampler.Count -gt 0) {
       Info 'Composer-search results (1.2.5+):'
@@ -1230,9 +1230,18 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Hint '"went stale ... re-acquiring"       = 1.2.6 caught the app rebuilding its message box.'
       Hint '   Before 1.2.6 that went unnoticed and blocking stopped working after the first hit.'
       Hint '"located the Send button"           = clicking Send with the mouse is covered too.'
-      Hint '"found no Send button"              = only Enter is inspected in that app. Harmless on'
-      Hint '   1.2.7+, which backs off instead of re-searching; on 1.2.6 that same search ran every'
-      Hint '   5s on the sampler thread and starved it, which is why Enter stopped blocking too.'
+      Hint '   1.2.8 says HOW it was found: "by name" (the control is called Send) or "by position"'
+      Hint '   (an unnamed icon sitting immediately right of the message box, which is what'
+      Hint '   WhatsApp ships).'
+      Hint '"recognised the control under the pointer as Send" = the 1.2.8 fallback. It identifies'
+      Hint '   the button as you move the mouse onto it, so a click is covered even in an app whose'
+      Hint '   tree the search cannot walk.'
+      Hint '"found no Send button"              = only Enter is inspected in that app, unless you'
+      Hint '   rest the pointer on the button first. Before 1.2.8 this was the normal outcome on'
+      Hint '   WhatsApp for a silly reason: the search only ran on a timer, and while the message'
+      Hint '   box is EMPTY that control is a microphone, not Send - so it kept missing, backed off'
+      Hint '   to once every 160s, and had stopped looking by the time you typed anything. 1.2.8'
+      Hint '   searches only while there is text in the box.'
     }
 
     if ($unread.Count -eq 0 -and $readok.Count -eq 0 -and $released.Count -eq 0 -and $sampler.Count -eq 0) { Info 'No composer read attempted yet (nothing got past stage 3/4).' }
@@ -1280,6 +1289,66 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
         Hint 'On agents older than 1.2.3 the verdict lines are DEBUG, so an agent logging at'
         Hint 'INFO shows this message even when inspection is working. Update to 1.2.3+.'
       }
+    }
+
+    # ---- stage 7: did the block reach the console? ------------------------
+    #
+    # This stage exists because of a real and very expensive failure: messages
+    # WERE being blocked on the endpoint - dialog on screen, keystroke dropped -
+    # and not one of those blocks produced an event, an alert or an incident in
+    # the console. Blocking that leaves no record is indistinguishable from not
+    # blocking at all the moment anyone asks for evidence.
+    Blank
+    Write-Host '   STAGE 7  Did it reach the console?' -ForegroundColor Cyan
+
+    $blocked7 = @($lines | Where-Object { $_ -match 'MESSAGING_TEXT_(BLOCKED|ALERT|LATE)' })
+    $dropped  = @($lines | Where-Object { $_ -match 'DROPPING EVENTS|Dropping event because no active policies' } | Select-Object -Last 3)
+    $failed   = @($lines | Where-Object { $_ -match 'Failed to send event \(HTTP' } | Select-Object -Last 5)
+    $spooled  = @($lines | Where-Object { $_ -match 'spooled event\(s\)|Event spool is FULL' } | Select-Object -Last 3)
+
+    # The spool is the physical evidence: every event the server refused or
+    # never answered is written here and replayed later, so a file that exists
+    # and is growing IS the answer to "where did my alerts go".
+    $spoolFile = $null
+    foreach ($d in @($INSTALL_DIR, $LEGACY_DIR, "$DATA_DIR\logs", "$LEGACY_DATA\logs")) {
+      if ($d -and (Test-Path (Join-Path $d 'cybersentineldlp_events.spool'))) {
+        $spoolFile = Get-Item (Join-Path $d 'cybersentineldlp_events.spool'); break
+      }
+    }
+
+    if ($dropped.Count -gt 0) {
+      Err 'The agent DISCARDED its own events - they never left this machine:'
+      foreach ($l in $dropped) { Write-LogLine (Format-MsgLine $l) }
+      Hint 'Before 1.2.8 the agent only sent events when it held a file, clipboard or USB policy.'
+      Hint 'Messaging, print, app-control and network-share policies are fetched separately and did'
+      Hint 'not count, so an endpoint whose only policy was the messaging one blocked messages and'
+      Hint 'threw away every record of it. 1.2.8 counts all of them. If you see this line dated'
+      Hint 'AFTER updating to 1.2.8, this agent genuinely has no policy assigned in any channel.'
+    }
+    if ($failed.Count -gt 0) {
+      Err 'The server REFUSED events (they are spooled on disk, not lost):'
+      foreach ($l in $failed) { Write-LogLine (Format-MsgLine $l) }
+      Hint 'From 1.2.8 the line carries the server''s own answer. "422" names the field it rejected;'
+      Hint 'the whole event is discarded on a 422, which is why one bad field costs the entire'
+      Hint 'record. 401/403 = the agent key. 000/timeout = it cannot reach the manager at all.'
+    }
+    if ($spoolFile) {
+      $kb = [math]::Round($spoolFile.Length / 1KB, 1)
+      Warn "Event spool present: $($spoolFile.FullName) - ${kb} KB, last written $($spoolFile.LastWriteTime)"
+      Hint 'Every line in that file is an event the server did not accept. It is replayed on the'
+      Hint 'next successful heartbeat, so fix the cause and the backlog lands by itself.'
+    }
+    if ($spooled.Count -gt 0) { foreach ($l in $spooled) { Write-LogLine (Format-MsgLine $l) } }
+
+    if ($blocked7.Count -gt 0 -and $dropped.Count -eq 0 -and $failed.Count -eq 0 -and -not $spoolFile) {
+      Ok "$($blocked7.Count) enforcement action(s) recorded, and nothing reports a delivery failure."
+      Hint 'The events were accepted by the manager. In the console they appear under'
+      Hint 'Events with type "messaging" (channel MESSAGING), and a blocked Confidential or'
+      Hint 'Restricted message also raises an incident automatically.'
+      Hint 'Still nothing there? Check you are looking at the right server and that the event list'
+      Hint 'is not filtered to a date range or a single agent.'
+    } elseif ($blocked7.Count -eq 0) {
+      Info 'No enforcement action to deliver yet - block a message first (stage 6).'
     }
 
     Blank

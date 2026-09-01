@@ -2043,6 +2043,8 @@ static ClassificationResult Classify(const std::string& content,
      // fill the disk.
      std::mutex spoolMutex;
      bool spoolFullWarned = false;
+     // Throttle for the "this agent is dropping everything" warning below.
+     std::chrono::steady_clock::time_point lastDropWarnAt{};
      static const size_t MAX_SPOOL_BYTES = 16 * 1024 * 1024;   // ~16MB of evidence
      static const size_t MAX_FLUSH_BATCH = 100;                // per heartbeat
 
@@ -8397,13 +8399,63 @@ if (shouldMonitor) {
      // Events are EVIDENCE. A block whose event never arrives is enforcement
      // with no audit trail — the file was stopped, but nothing can prove it,
      // which defeats the log-retention requirement the product is built around.
+     // Is this endpoint configured to enforce ANYTHING?
+     //
+     // allowEvents alone is not that question, and reading it as if it were is
+     // what made a blocked WhatsApp message leave no trace. It is computed from
+     // the policy BUNDLE, which carries only the four file / clipboard / USB
+     // categories; messaging, printing, application control, network shares and
+     // USB device control are each synced from their own endpoint and were
+     // never represented in it. An endpoint whose only active policy is a
+     // messaging one therefore blocked a message on screen, showed the user the
+     // dialog, and then discarded the event that proves any of it happened —
+     // the worst possible failure for a control whose entire product is the
+     // record it leaves.
+     //
+     // Every flag below means "the server sent us a policy in this channel and
+     // we are acting on it". If any is set, this agent's events are wanted.
+     bool EventsAllowed() const {
+         return allowEvents.load()            || messagingEnforced.load()   ||
+                printerControlEnforced.load() || appControlEnforced.load()  ||
+                usbDeviceControlEnforced.load() || netShareEnforced.load();
+     }
+
+     // Will this event EVER be accepted?
+     //
+     // 400/422 means the server understood the request and refused its content:
+     // a field of the wrong type, a body it cannot parse. Replaying that is not
+     // retrying, it is repeating, and it costs more than nothing - the spool
+     // replays in order and stops at the first failure, so a single permanently
+     // rejected event freezes every event queued behind it, indefinitely. That
+     // is how a fixed bug keeps producing an empty console.
+     //
+     // 401/403 are NOT in this set on purpose: an agent key can be re-issued and
+     // a rejected event become deliverable, so those keep their place in line.
+     static bool PermanentRejection(int status) {
+         return status == 400 || status == 404 || status == 409 ||
+                status == 413 || status == 422;
+     }
+
      // This used to Post once and discard the outcome, so every event raised
      // while the server was unreachable was lost silently. Now a failed send is
      // spooled to disk and replayed on reconnect (see FlushSpooledEvents).
      bool SendEvent(const std::string& eventData) {
          try {
-             if (!allowEvents) {
-                 logger.Debug("Dropping event because no active policies");
+             if (!EventsAllowed()) {
+                 // Warning, not Debug. An agent silently throwing away
+                 // everything it sees is the single most expensive state this
+                 // software can be in, and at Debug nobody ever saw it. Said at
+                 // most once a minute so a busy endpoint does not drown in it.
+                 const auto now = std::chrono::steady_clock::now();
+                 if (now - lastDropWarnAt > std::chrono::seconds(60)) {
+                     lastDropWarnAt = now;
+                     logger.Warning("DROPPING EVENTS: this agent has no active policy in "
+                                    "any channel it enforces (file/clipboard/USB/messaging/"
+                                    "print/app-control/network-share). Nothing it observes "
+                                    "will reach the console until one is assigned.");
+                 } else {
+                     logger.Debug("Dropping event because no active policies");
+                 }
                  return false;
              }
 
@@ -8413,8 +8465,22 @@ if (shouldMonitor) {
                  logger.Debug("Event sent successfully");
                  return true;
              }
+             // The body, not just the code. A 422 names the field it choked on
+             // and that one line is the whole diagnosis; without it the only
+             // symptom is a spool file quietly filling up with evidence that
+             // never lands. Truncated because a validation error echoes the
+             // input back and the input can be a whole captured message.
+             std::string why = response;
+             if (why.size() > 240) why = why.substr(0, 240) + "…";
+             if (PermanentRejection(status)) {
+                 logger.Error("Event REJECTED by the server (HTTP " + std::to_string(status) +
+                              ") and DISCARDED — it will never be accepted in this form. "
+                              "The action still happened on this endpoint; only the record "
+                              "of it is lost: " + why);
+                 return false;
+             }
              logger.Warning("Failed to send event (HTTP " + std::to_string(status) +
-                            ") — spooling for retry");
+                            ") — spooling for retry: " + why);
              SpoolEvent(eventData);
              return false;
          } catch (...) {
@@ -8499,6 +8565,7 @@ if (shouldMonitor) {
                          " spooled event(s) to the server");
 
              size_t sent = 0;
+             size_t dropped = 0;
              bool serverGoneAgain = false;
              std::vector<std::string> remaining;
 
@@ -8507,7 +8574,7 @@ if (shouldMonitor) {
                  // order, instead of hammering a dead endpoint 5000 times. Also
                  // cap the batch: this runs on the heartbeat thread holding
                  // spoolMutex, and the next beat is only seconds away.
-                 if (serverGoneAgain || sent >= MAX_FLUSH_BATCH) {
+                 if (serverGoneAgain || (sent + dropped) >= MAX_FLUSH_BATCH) {
                      remaining.push_back(pending[i]);
                      continue;
                  }
@@ -8520,10 +8587,18 @@ if (shouldMonitor) {
                  }
                  if (status == 200 || status == 201) {
                      sent++;
+                 } else if (PermanentRejection(status)) {
+                     dropped++;          // step over it; see PermanentRejection
                  } else {
                      serverGoneAgain = true;
                      remaining.push_back(pending[i]);
                  }
+             }
+
+             if (dropped) {
+                 logger.Error("Discarded " + std::to_string(dropped) + " spooled event(s) "
+                              "the server permanently refused. Everything queued behind them "
+                              "is now being delivered.");
              }
 
              if (remaining.empty()) {

@@ -389,23 +389,87 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # correct binary with a broken launcher is not an updated agent.
   #
   # Returns $true when the task is registered.
+  # The person at the desk, as DOMAIN\user.
+  #
+  # NOT $env:USERNAME. This script self-elevates, so that variable names the
+  # administrator UAC handed back, which on any machine where the admin is a
+  # separate account is not the user actually logged in. The agent's task is
+  # registered with LogonType Interactive - "run while this account is at the
+  # console" - so naming the wrong account produces a task stuck in state Ready
+  # that has never run once, and Start-ScheduledTask queues it and reports
+  # success while nothing happens. The same trap is already documented above
+  # Get-BrowserProfileDirs; it applies here and it was not handled.
+  #
+  # Interactive is nonetheless the right logon type and must stay: the agent
+  # installs low-level keyboard hooks and reads composer text over UI
+  # Automation, neither of which reaches a user's desktop from session 0. This
+  # has to run AS the user, so it has to name the user correctly.
+  function Get-ConsoleUser {
+    $u = $null
+    try { $u = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName } catch {}
+    if (-not $u) {
+      # Nobody at the console, or CIM refused. Whoever owns the shell is the
+      # same person by another route.
+      try {
+        $proc = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop |
+                Select-Object -First 1
+        if ($proc) {
+          $o = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
+          if ($o.User) { $u = if ($o.Domain) { "$($o.Domain)\$($o.User)" } else { $o.User } }
+        }
+      } catch {}
+    }
+    if (-not $u) { $u = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME } }
+    "$u".Trim()
+  }
+
+  # Compare accounts by SID, not by string. A registered principal can come back
+  # as a SID, as DOMAIN\user or as a bare name for the same account, and string
+  # comparison calls those three different users.
+  function Resolve-UserSid {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+    if ($Name -match '^S-1-') { return $Name }
+    try { return (New-Object System.Security.Principal.NTAccount($Name)).Translate(
+                   [System.Security.Principal.SecurityIdentifier]).Value } catch { return $null }
+  }
+
+  # The console user's profile directory, resolved through ProfileList rather
+  # than assumed to be C:\Users\<name> - the folder does not always match the
+  # account name (renamed accounts, roaming profiles, a .DOMAIN suffix).
+  function Get-ConsoleUserProfile {
+    $who = Get-ConsoleUser
+    $sid = Resolve-UserSid $who
+    if ($sid) {
+      try {
+        $pip = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid" `
+                  -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath
+        if ($pip -and (Test-Path $pip)) { return $pip }
+      } catch {}
+    }
+    $guess = Join-Path 'C:\Users' ($who -replace '^.*\\', '')
+    if (Test-Path $guess) { return $guess }
+    $env:USERPROFILE
+  }
+
   function Register-AgentTask {
     param([string]$ExePath)
     try {
       if (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
       }
+      $runAs  = Get-ConsoleUser
       $action = New-ScheduledTaskAction -Execute $ExePath -Argument '--background' -WorkingDirectory $INSTALL_DIR
-      $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+      $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $runAs
       $tBoot  = New-ScheduledTaskTrigger -AtStartup
       $tBoot.Delay = 'PT30S'
-      $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+      $principal = New-ScheduledTaskPrincipal -UserId $runAs -LogonType Interactive -RunLevel Highest
       $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
         -ExecutionTimeLimit (New-TimeSpan -Days 9999) -MultipleInstances IgnoreNew
       Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger @($tLogon,$tBoot) `
         -Principal $principal -Settings $settings -Description 'CyberSentinel DLP Agent - endpoint monitoring' -Force | Out-Null
-      Ok "Scheduled task '$TASK_NAME' registered (logon + startup)"
+      Ok "Scheduled task '$TASK_NAME' registered to run as $runAs (logon + startup)"
       return $true
     } catch {
       Err "Could not create scheduled task: $($_.Exception.Message)"
@@ -428,6 +492,22 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if ($exe -match '(?i)wscript|cscript|powershell|cmd\.exe') { return $false }
       if ($arg -match '(?i)\.vbs') { return $false }
       if ($exe -notmatch '(?i)cybersentineldlp_agent\.exe') { return $false }
+    }
+
+    # A task registered against the wrong account is not correct however right
+    # its action is. With LogonType Interactive it can only run while that
+    # account is at the console, so a task naming the elevating administrator
+    # never runs at all - and this function reported it as correct, which is why
+    # Update kept saying "Scheduled task is correct" on a machine where the
+    # agent could not start. Returning false here makes the update path
+    # re-register it against the real console user.
+    $want = Resolve-UserSid (Get-ConsoleUser)
+    $got  = Resolve-UserSid "$($task.Principal.UserId)"
+    if ($want -and $got) {
+      if ($want -ne $got) { return $false }
+    } elseif ((("$($task.Principal.UserId)" -replace '^.*\\', '')) -ine
+              ((Get-ConsoleUser) -replace '^.*\\', '')) {
+      return $false
     }
     return $true
   }
@@ -604,6 +684,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     [Environment]::SetEnvironmentVariable('CYBERSENTINELDLP_SERVER_URL', $serverURL, 'Machine')
     $env:CYBERSENTINELDLP_SERVER_URL = $serverURL
 
+    $userProfile = Get-ConsoleUserProfile
     $config = @{
       server_url = $serverURL; agent_name = $agentName
       heartbeat_interval = $heartbeat; policy_sync_interval = $policySync
@@ -612,7 +693,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       monitoring = @{
         file_system = $true; clipboard = $true; usb_devices = $true
         screen_capture = $true; print_jobs = $true
-        monitored_paths = @("C:\Users\$env:USERNAME\Documents","C:\Users\$env:USERNAME\Desktop","C:\Users\$env:USERNAME\Downloads")
+        # Same trap as the task principal: $env:USERNAME under self-elevation is
+        # the administrator, so this used to watch an admin profile nobody works
+        # in while the real user's Documents went unmonitored.
+        monitored_paths = @((Join-Path $userProfile 'Documents'),
+                            (Join-Path $userProfile 'Desktop'),
+                            (Join-Path $userProfile 'Downloads'))
         file_extensions = @('.pdf','.docx','.xlsx','.csv','.txt','.json','.xml','.sql','.pem','.key','.env','.conf')
       }
       quarantine_path = "$DATA_DIR\quarantine"; log_path = "$DATA_DIR\logs"; cache_path = "$DATA_DIR\cache"
@@ -895,7 +981,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     if (Test-AgentTaskCurrent -ExePath $ExePath) {
       Ok 'Scheduled task is correct.'
     } else {
-      Warn 'Scheduled task is missing or launches the agent the old way - rewriting it.'
+      Warn 'Scheduled task is missing, launches the agent the old way, or runs as the wrong account - rewriting it.'
       $null = Register-AgentTask -ExePath $ExePath
     }
 

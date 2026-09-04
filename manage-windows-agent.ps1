@@ -534,8 +534,9 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     }
     Ok 'Directories ready'
-    # Before Step 5 writes the binary, not after Defender has already eaten it.
-    Set-AgentDefenderExclusions | Out-Null
+    # Read-only check. Says what to run if Defender will eat the binary at
+    # Step 5; never changes a Defender setting itself.
+    Show-AgentDefenderSteps -Brief | Out-Null
 
     # -- Step 4: OCR deps (optional) -----------------------------------------
     Step 4 $TOTAL 'OCR dependencies (Chocolatey + Tesseract, optional)'
@@ -707,7 +708,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     if (-not (Test-Path $INSTALL_DIR)) {
       New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
     }
-    Set-AgentDefenderExclusions | Out-Null
+    Show-AgentDefenderSteps -Brief | Out-Null
     $tmpExe  = Join-Path $INSTALL_DIR ($EXE_NAME + '.download')
 
     Info 'Downloading the latest published binary...'
@@ -1488,44 +1489,62 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     } catch { 'not present' }
   }
 
-  # Tell Defender what this binary is BEFORE it exists on disk.
+  # THIS SCRIPT DOES NOT CHANGE ANY DEFENDER SETTING, and must not be made to.
+  # Adding code that does is what got the script itself quarantined.
   #
-  # Why this has to run first rather than from the [5] menu afterwards: the
-  # agent is an unsigned executable that installs a SYSTEM scheduled task, sets
-  # a global low-level keyboard AND mouse hook, enumerates processes, reads
-  # other applications' text through UI Automation, watches the clipboard, and
-  # POSTs what it finds to a server. That is an accurate description of a DLP
-  # agent and a word-for-word description of an infostealer, and Defender's ML
-  # model - the "!ml" in Trojan:Win32/Bearfoos.B!ml - cannot tell the two apart
-  # from behaviour alone. Every CI build is also a brand-new hash with zero
-  # prevalence in Defender's cloud, which is itself weighted as suspicious.
+  # An earlier revision called the Defender preference cmdlets to add
+  # exclusions, and the Defender command-line tool to pull the agent back out
+  # of quarantine first. Both ran automatically during install and update with
+  # no human in the loop. AMSI scans script content as PowerShell executes it,
+  # and "take a file back out of quarantine, then exempt the folder it lives
+  # in, unattended" is a recognised pattern: the script was quarantined as
+  # Trojan:PowerShell/Killav.VDA!MTB.
   #
-  # So this is not a workaround for a bug. It is the channel Windows provides
-  # for an administrator to say "this one is ours", and it has to be in place
-  # before the file lands, because real-time protection acts during the write.
-  # Returns $true only when the exclusion is read back successfully.
-  function Set-AgentDefenderExclusions {
-    if (-not $isAdmin) { Warn 'Not elevated - cannot register the agent with Defender.'; return $false }
-    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
-      Warn 'Defender cmdlets unavailable on this device - skipping.'
-      return $false
-    }
-    foreach ($d in @($INSTALL_DIR, $DATA_DIR)) {
-      if ($d) { try { Add-MpPreference -ExclusionPath $d -ErrorAction Stop } catch {} }
-    }
-    try { Add-MpPreference -ExclusionProcess "$PROC_NAME.exe" -ErrorAction Stop } catch {}
-
-    # Read it back. Add-MpPreference reports success even when tamper
-    # protection or a management policy silently discards the change, so its
-    # own return value proves nothing.
+  # That verdict is fair. A downloaded installer that quietly weakens antivirus
+  # is dangerous whoever wrote it, and a security product does not get to be
+  # the exception. So the rule is: READ Defender state, never write it. The
+  # Get-Mp* queries used here are ordinary read-only calls and carry none of
+  # that weight, and no command text is printed either - a scanner cannot tell
+  # a command a script is about to run from one it is only displaying.
+  #
+  # The remediation is therefore described, not executed, and points at the
+  # Windows Security UI: it puts a person in the loop, leaves the decision with
+  # the machine's owner, and is auditable. On a fleet it belongs in Intune or
+  # group policy, and the durable fix is signing the agent.
+  function Show-AgentDefenderSteps {
+    param([switch]$Brief)
+    $q = @(Get-AgentQuarantine)
     $pref = $null; try { $pref = Get-MpPreference -ErrorAction Stop } catch {}
     $okPath = $pref -and (@($pref.ExclusionPath) |
                 Where-Object { $_ -and $_.TrimEnd('\') -ieq $INSTALL_DIR.TrimEnd('\') }).Count -gt 0
-    if ($okPath) { Ok "Registered with Defender (excluded: $INSTALL_DIR)"; return $true }
+    if ($okPath -and $q.Count -eq 0) {
+      if (-not $Brief) { Ok "Defender exclusion already present for $INSTALL_DIR" }
+      return $true
+    }
 
-    Warn 'Defender exclusions did not stick (tamper protection, or GPO/Intune-managed).'
-    Hint 'On a managed fleet the exclusion belongs in that policy. Without it,'
-    Hint 'Defender will quarantine the agent as Trojan:Win32/Bearfoos.B!ml.'
+    Blank
+    if ($q.Count -gt 0) { Warn "Defender has acted on the agent $($q.Count) time(s)." }
+    if (-not $okPath)   { Warn "No Defender exclusion covers $INSTALL_DIR." }
+    Hint 'The agent is unsigned and behaves like the software it is built to catch,'
+    Hint 'so Defender judges it on behaviour and quarantines it. An administrator'
+    Hint 'has to allow it, in Windows Security, in this order:'
+    Blank
+    if ($q.Count -gt 0) {
+      Write-Host '    1. Virus & threat protection > Protection history' -ForegroundColor Yellow
+      Write-Host '       Find the agent entry, Actions > Allow on device.' -ForegroundColor Yellow
+      Write-Host '       Do this FIRST: exempting a folder Defender has already' -ForegroundColor DarkYellow
+      Write-Host '       emptied looks like it worked and leaves you no binary.' -ForegroundColor DarkYellow
+      Blank
+    }
+    Write-Host '    2. Virus & threat protection > Manage settings >'         -ForegroundColor Yellow
+    Write-Host '       Exclusions > Add an exclusion > Folder:'               -ForegroundColor Yellow
+    Write-Host "         $INSTALL_DIR"                                        -ForegroundColor White
+    Write-Host "         $DATA_DIR"                                           -ForegroundColor White
+    Blank
+    Hint 'Then re-run this script. On a fleet, configure those exclusions through'
+    Hint 'Intune or group policy instead. The durable fix is an Authenticode'
+    Hint 'signature on the agent - that also covers Smart App Control, which'
+    Hint 'blocks unsigned binaries and ignores exclusions entirely.'
     return $false
   }
 
@@ -1620,46 +1639,15 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Blank; Write-Host '   Allowing the agent in Microsoft Defender' -ForegroundColor Cyan; Hr '-' 'DarkCyan'
     if (-not $isAdmin) { Err 'This needs Administrator. Re-run the script elevated.'; return }
 
-    # Restore first. Excluding a path Defender has already emptied looks like it
-    # worked and still leaves you with no binary.
-    $q = @(Get-AgentQuarantine)
-    if ($q.Count -gt 0) {
-      $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
-      if (Test-Path $mpcmd) {
-        foreach ($name in ($q | Select-Object -ExpandProperty Name -Unique)) {
-          Info "Restoring from quarantine: $name"
-          & $mpcmd -Restore -Name $name 2>&1 | Out-Null
-        }
-      } else { Warn 'MpCmdRun.exe not found - cannot restore from quarantine automatically.' }
-    }
-
-    try {
-      Add-MpPreference -ExclusionPath $INSTALL_DIR -ErrorAction Stop
-      Ok "Excluded path: $INSTALL_DIR"
-    } catch { Err "Could not add the path exclusion: $($_.Exception.Message)" }
-    try {
-      Add-MpPreference -ExclusionProcess "$PROC_NAME.exe" -ErrorAction Stop
-      Ok "Excluded process: $PROC_NAME.exe"
-    } catch { Err "Could not add the process exclusion: $($_.Exception.Message)" }
-
-    # Read it back. Add-MpPreference reports success even when tamper
-    # protection or a management policy silently discards the change.
-    $pref = $null; try { $pref = Get-MpPreference -ErrorAction Stop } catch {}
-    $okPath = $pref -and (@($pref.ExclusionPath) | Where-Object { $_ -and $_.TrimEnd('\') -ieq $INSTALL_DIR.TrimEnd('\') }).Count -gt 0
-    $okProc = $pref -and (@($pref.ExclusionProcess) | Where-Object { $_ -and $_ -imatch [regex]::Escape($PROC_NAME) }).Count -gt 0
-    if ($okPath -and $okProc) { Ok 'Exclusions confirmed present.' }
-    else {
-      Err 'The exclusions did not stick.'
-      Hint 'Usually tamper protection, or Defender settings managed by group policy'
-      Hint 'or Intune. On a managed fleet the exclusion belongs in that policy, not here.'
-      return
-    }
+    # Prints the commands; does not run them. See the note on
+    # Show-AgentDefenderSteps for why this script no longer writes to Defender.
+    if (-not (Show-AgentDefenderSteps)) { return }
 
     $exe = Join-Path $INSTALL_DIR $EXE_NAME
     if (-not (Test-Path $exe)) {
-      Blank; Warn 'The binary is still missing - Defender removed it before this ran.'
+      Blank; Warn 'The exclusion is in place but the binary is gone - Defender removed it.'
       Hint 'Use [2] Update from the main menu to fetch a fresh copy; it will not be'
-      Hint 'quarantined again now that the exclusion is in place.'
+      Hint 'quarantined again now that the exclusion is present.'
       return
     }
     Blank; Info 'Restarting the agent...'

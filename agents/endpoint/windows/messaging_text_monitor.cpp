@@ -2300,8 +2300,32 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
-    // One decision at a time; a second Enter goes straight through.
+    // A second Enter must NOT reach the app while the first is being judged.
+    //
+    // This is what made the log and the screen disagree. The first Enter is
+    // held for up to decisionTimeoutMs, and during that time the window looks
+    // like it ignored you - so you press Enter again. Windows does it for you
+    // anyway: key auto-repeat starts after ~500ms and then fires ~30 times a
+    // second, so merely holding Enter a beat too long produced a second
+    // keydown. Passing those through handed the send straight to the app while
+    // the first keystroke was still under inspection. The inspection then
+    // finished, dropped the keystroke IT owned, and wrote
+    // MESSAGING_TEXT_BLOCKED - entirely true about that keystroke, entirely
+    // wrong about what the user watched happen, because the message had
+    // already gone out on the repeat.
+    //
+    // Swallowing them costs nothing: if the message turns out clean,
+    // ResolveRelease replays exactly one Enter and the send still happens. The
+    // only thing lost is a duplicate nobody meant to send.
     if (g_decisionPending.load()) {
+        const long long held = NowSteadyMs() - g_holdStartMs.load();
+        const long long cap  =
+            (long long)(g_cfg.decisionTimeoutMs ? g_cfg.decisionTimeoutMs : 1200) * 3;
+        if (held >= 0 && held < cap) return 1;      // still deciding - hold it too
+
+        // The latch looks stuck: the watchdog clears it within one timeout, so
+        // being three timeouts late means something is wedged. Fail open rather
+        // than leave Enter permanently dead on this machine.
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
 

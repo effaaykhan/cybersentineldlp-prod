@@ -389,43 +389,9 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # correct binary with a broken launcher is not an updated agent.
   #
   # Returns $true when the task is registered.
-  # The person at the desk, as DOMAIN\user.
-  #
-  # NOT $env:USERNAME. This script self-elevates, so that variable names the
-  # administrator UAC handed back, which on any machine where the admin is a
-  # separate account is not the user actually logged in. The agent's task is
-  # registered with LogonType Interactive - "run while this account is at the
-  # console" - so naming the wrong account produces a task stuck in state Ready
-  # that has never run once, and Start-ScheduledTask queues it and reports
-  # success while nothing happens. The same trap is already documented above
-  # Get-BrowserProfileDirs; it applies here and it was not handled.
-  #
-  # Interactive is nonetheless the right logon type and must stay: the agent
-  # installs low-level keyboard hooks and reads composer text over UI
-  # Automation, neither of which reaches a user's desktop from session 0. This
-  # has to run AS the user, so it has to name the user correctly.
-  function Get-ConsoleUser {
-    $u = $null
-    try { $u = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName } catch {}
-    if (-not $u) {
-      # Nobody at the console, or CIM refused. Whoever owns the shell is the
-      # same person by another route.
-      try {
-        $proc = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop |
-                Select-Object -First 1
-        if ($proc) {
-          $o = Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction Stop
-          if ($o.User) { $u = if ($o.Domain) { "$($o.Domain)\$($o.User)" } else { $o.User } }
-        }
-      } catch {}
-    }
-    if (-not $u) { $u = if ($env:USERDOMAIN) { "$env:USERDOMAIN\$env:USERNAME" } else { $env:USERNAME } }
-    "$u".Trim()
-  }
-
-  # Compare accounts by SID, not by string. A registered principal can come back
-  # as a SID, as DOMAIN\user or as a bare name for the same account, and string
-  # comparison calls those three different users.
+  # Compare accounts by SID, not by string. The same account comes back as a
+  # SID, as DOMAIN\user or as a bare name depending on how it was registered,
+  # and string comparison calls those three different users.
   function Resolve-UserSid {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
@@ -434,22 +400,31 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
                    [System.Security.Principal.SecurityIdentifier]).Value } catch { return $null }
   }
 
-  # The console user's profile directory, resolved through ProfileList rather
-  # than assumed to be C:\Users\<name> - the folder does not always match the
-  # account name (renamed accounts, roaming profiles, a .DOMAIN suffix).
-  function Get-ConsoleUserProfile {
-    $who = Get-ConsoleUser
-    $sid = Resolve-UserSid $who
-    if ($sid) {
-      try {
-        $pip = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid" `
-                  -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath
-        if ($pip -and (Test-Path $pip)) { return $pip }
-      } catch {}
+  # Every real user profile on the device.
+  #
+  # Read from ProfileList rather than by listing C:\Users, because the folder
+  # name does not always match the account (renamed accounts, roaming profiles,
+  # a .DOMAIN suffix), and because ProfileList is what Windows itself believes.
+  # The well-known service SIDs - SYSTEM, LOCAL SERVICE, NETWORK SERVICE - are
+  # skipped: nobody works in those, and monitoring them is pure noise.
+  #
+  # Enumerated rather than resolved to one user because the installer must not
+  # guess who the device belongs to. $env:USERNAME under self-elevation is the
+  # administrator UAC returned, so a single-user answer monitored a profile
+  # nobody works in while the real user's documents went unwatched.
+  function Get-AllUserProfiles {
+    $out = @()
+    $root = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+    foreach ($k in @(Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+      $sid = Split-Path $k.Name -Leaf
+      if ($sid -in @('S-1-5-18','S-1-5-19','S-1-5-20')) { continue }
+      if ($sid -notmatch '^S-1-5-21-') { continue }
+      $pip = $null
+      try { $pip = (Get-ItemProperty $k.PSPath -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath } catch {}
+      if ($pip -and (Test-Path $pip)) { $out += $pip }
     }
-    $guess = Join-Path 'C:\Users' ($who -replace '^.*\\', '')
-    if (Test-Path $guess) { return $guess }
-    $env:USERPROFILE
+    if (-not $out) { $out = @($env:USERPROFILE) }
+    $out | Select-Object -Unique
   }
 
   function Register-AgentTask {
@@ -458,18 +433,39 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
       }
-      $runAs  = Get-ConsoleUser
       $action = New-ScheduledTaskAction -Execute $ExePath -Argument '--background' -WorkingDirectory $INSTALL_DIR
-      $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $runAs
-      $tBoot  = New-ScheduledTaskTrigger -AtStartup
-      $tBoot.Delay = 'PT30S'
-      $principal = New-ScheduledTaskPrincipal -UserId $runAs -LogonType Interactive -RunLevel Highest
+
+      # Any interactive user, not one named account.
+      #
+      # Naming a user was the bug: -UserId with LogonType Interactive means "run
+      # while THIS account is at the console", and the account the script had to
+      # hand was whoever UAC returned, which on this machine is never at the
+      # console. The task sat in state Ready and had never run once. Resolving
+      # the console user instead only moved the guess - it still picks one
+      # account, and it is wrong the moment a second person uses the device.
+      #
+      # BUILTIN\Users by SID, so it fires for every interactive user in their
+      # own session. The SID, not the name: "Users" is localised, and this has
+      # to work on a German or Japanese install.
+      $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Highest
+
+      # No -User on the trigger either: an at-logon trigger without one fires
+      # for whoever logs on. Startup is deliberately NOT a trigger any more - at
+      # boot there is no interactive session for an Interactive task to run in,
+      # so it could never fire and only made the task look like it had more
+      # coverage than it did.
+      $tLogon = New-ScheduledTaskTrigger -AtLogOn
+
+      # Parallel, not IgnoreNew. With fast user switching two people are logged
+      # on at once, and IgnoreNew would silently leave the second one with no
+      # agent - an unmonitored user on a DLP endpoint, which is the one outcome
+      # this product cannot have.
       $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit (New-TimeSpan -Days 9999) -MultipleInstances IgnoreNew
-      Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger @($tLogon,$tBoot) `
+        -ExecutionTimeLimit (New-TimeSpan -Days 9999) -MultipleInstances Parallel
+      Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger $tLogon `
         -Principal $principal -Settings $settings -Description 'CyberSentinel DLP Agent - endpoint monitoring' -Force | Out-Null
-      Ok "Scheduled task '$TASK_NAME' registered to run as $runAs (logon + startup)"
+      Ok "Scheduled task '$TASK_NAME' registered for every interactive user (at logon)"
       return $true
     } catch {
       Err "Could not create scheduled task: $($_.Exception.Message)"
@@ -494,21 +490,21 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if ($exe -notmatch '(?i)cybersentineldlp_agent\.exe') { return $false }
     }
 
-    # A task registered against the wrong account is not correct however right
-    # its action is. With LogonType Interactive it can only run while that
-    # account is at the console, so a task naming the elevating administrator
-    # never runs at all - and this function reported it as correct, which is why
-    # Update kept saying "Scheduled task is correct" on a machine where the
-    # agent could not start. Returning false here makes the update path
-    # re-register it against the real console user.
-    $want = Resolve-UserSid (Get-ConsoleUser)
-    $got  = Resolve-UserSid "$($task.Principal.UserId)"
-    if ($want -and $got) {
-      if ($want -ne $got) { return $false }
-    } elseif ((("$($task.Principal.UserId)" -replace '^.*\\', '')) -ine
-              ((Get-ConsoleUser) -replace '^.*\\', '')) {
-      return $false
-    }
+    # A task registered against a named account is not correct however right its
+    # action is. It runs for that one user, and where the installer had to guess
+    # the account it ran for nobody - state Ready, never run, which this
+    # function used to report as correct while the agent could not start.
+    # Returning false makes the update path rewrite it for the Users group.
+    $gid = "$($task.Principal.GroupId)"
+    if (-not $gid) { return $false }
+    $gsid = Resolve-UserSid $gid
+    if ($gsid) { if ($gsid -ne 'S-1-5-32-545') { return $false } }
+    elseif ($gid -ne 'S-1-5-32-545') { return $false }
+
+    # IgnoreNew leaves a second simultaneous user with no agent. That is an
+    # unmonitored session on a DLP endpoint, so it counts as out of date.
+    if ("$($task.Settings.MultipleInstances)" -and
+        "$($task.Settings.MultipleInstances)" -ine 'Parallel') { return $false }
     return $true
   }
 
@@ -684,7 +680,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     [Environment]::SetEnvironmentVariable('CYBERSENTINELDLP_SERVER_URL', $serverURL, 'Machine')
     $env:CYBERSENTINELDLP_SERVER_URL = $serverURL
 
-    $userProfile = Get-ConsoleUserProfile
+    $userProfiles = @(Get-AllUserProfiles)
     $config = @{
       server_url = $serverURL; agent_name = $agentName
       heartbeat_interval = $heartbeat; policy_sync_interval = $policySync
@@ -693,12 +689,16 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       monitoring = @{
         file_system = $true; clipboard = $true; usb_devices = $true
         screen_capture = $true; print_jobs = $true
-        # Same trap as the task principal: $env:USERNAME under self-elevation is
-        # the administrator, so this used to watch an admin profile nobody works
-        # in while the real user's Documents went unmonitored.
-        monitored_paths = @((Join-Path $userProfile 'Documents'),
-                            (Join-Path $userProfile 'Desktop'),
-                            (Join-Path $userProfile 'Downloads'))
+        # Every profile on the device, not one. This was
+        # C:\Users\$env:USERNAME\..., which under self-elevation is the
+        # administrator - so file monitoring watched a profile nobody works in
+        # while the real user's documents went unwatched, and on a shared device
+        # covered one person out of several.
+        monitored_paths = @(
+          $userProfiles | ForEach-Object {
+            (Join-Path $_ 'Documents'), (Join-Path $_ 'Desktop'), (Join-Path $_ 'Downloads')
+          }
+        )
         file_extensions = @('.pdf','.docx','.xlsx','.csv','.txt','.json','.xml','.sql','.pem','.key','.env','.conf')
       }
       quarantine_path = "$DATA_DIR\quarantine"; log_path = "$DATA_DIR\logs"; cache_path = "$DATA_DIR\cache"
@@ -941,11 +941,14 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # agent died too early to log anything, which is exactly the case where the
     # agent log is empty and unhelpful.
     try {
+      # 332 is the one that names this class of failure outright - "did not
+      # launch task because the user was not logged on" - and 101/103/203 cover
+      # a launch or action that was refused rather than never attempted.
       $ev = Get-WinEvent -FilterHashtable @{
               LogName   = 'Microsoft-Windows-TaskScheduler/Operational'
-              Id        = 201
+              Id        = 101, 103, 111, 201, 203, 329, 331, 332
               StartTime = (Get-Date).AddMinutes(-10)
-            } -MaxEvents 3 -ErrorAction Stop |
+            } -MaxEvents 6 -ErrorAction Stop |
             Where-Object { $_.Message -match [regex]::Escape($TASK_NAME) }
       foreach ($e in @($ev)) {
         Hint ("Task Scheduler   : {0}  {1}" -f $e.TimeCreated, (($e.Message -split "`r?`n")[0]))
@@ -957,6 +960,16 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Blank; Hint ("Last lines of {0} (written {1}):" -f $lf.Name, $lf.LastWriteTime)
       Get-Content $lf.FullName -Tail 12 -ErrorAction SilentlyContinue |
         ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+      # A log written moments ago separates the two failures that look identical
+      # from the outside: a task that never fired, and an agent that started,
+      # ran, and died. Only the second one is a bug in the agent.
+      $ageMin = ((Get-Date) - $lf.LastWriteTime).TotalMinutes
+      if ($ageMin -ge 0 -and $ageMin -lt 15) {
+        Blank
+        Warn 'That log was written minutes ago - so the agent DID run, and then exited.'
+        Hint 'This is a crash or an early exit, not a task that never fired. Run the'
+        Hint 'binary by hand with the line below and read what it prints.'
+      }
     } else {
       Hint 'No log file exists - the agent never got far enough to open one.'
     }

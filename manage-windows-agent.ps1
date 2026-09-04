@@ -1,14 +1,21 @@
-﻿<#
-  manage-windows-agent.ps1 — CyberSentinel DLP WINDOWS agent MANAGER.
+<#
+  manage-windows-agent.ps1 - CyberSentinel DLP WINDOWS agent MANAGER.
 
   A single, self-contained console app. Self-elevates to Administrator, detects any
   existing agent (current OR legacy layout), reports its live status, and offers:
 
       [1] Install  [2] Update  [3] Uninstall  [4] Logs  [5] Extension  [6] Exit
 
-  Everything (install, update, uninstall) is implemented INLINE in this one file —
+  Everything (install, update, uninstall) is implemented INLINE in this one file -
   it does not download or depend on any other script. The only things it fetches
   from GitHub are the agent binary and its SHA-256 sidecar (the actual artifacts).
+
+  KEEP THIS FILE PURE ASCII WITH NO BOM. It is fetched and executed as a
+  STRING (irm | iex), and a UTF-8 BOM survives that trip: the parser then sees
+  \uFEFF before the '<#' below, never opens this comment, and parses the whole
+  header as code ("Missing type name after '['"). A BOM is what makes the -File
+  path safe for non-ASCII under Windows PowerShell 5.1, so with no BOM the file
+  must avoid non-ASCII entirely - no em dashes, no box drawing.
 
   Run either form (both self-elevate to Administrator):
     powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
@@ -61,7 +68,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   $TASK_NAME   = 'CyberSentinel DLP Agent'
   $PROC_NAME   = 'cybersentineldlp_agent'
 
-  # Legacy (pre-rename) layout — detected so we can flag / clean it too.
+  # Legacy (pre-rename) layout - detected so we can flag / clean it too.
   $LEGACY_DIR   = 'C:\Program Files\CyberSentinel'
   $LEGACY_DATA  = 'C:\ProgramData\CyberSentinel'
   $LEGACY_PROC  = 'cybersentinel_agent'
@@ -610,7 +617,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # Identity is assigned HERE rather than left to the agent to mint on first
     # run. Two reasons:
     #   * The agent generates an id when the config has none and persists it back
-    #     — but only if it can resolve and write that config. When it cannot, it
+    #     - but only if it can resolve and write that config. When it cannot, it
     #     generates a fresh one every restart, and the dashboard grows a new row
     #     per reboot.
     #   * The browser extension has to report under this exact id so a device
@@ -871,7 +878,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       #
       # extension-id.txt is only written once the agent has run, so an endpoint
       # where the extension was deployed from [5] but the agent never started
-      # had no file — and the force-install policy survived the uninstall,
+      # had no file - and the force-install policy survived the uninstall,
       # quietly reinstalling an extension pointed at a manager this machine no
       # longer talks to. The registry entry is the thing actually doing that, so
       # it is the honest place to read it from.
@@ -1453,7 +1460,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # heuristics apply on the very build you are trying to roll out.
   #
   # The real fix is code signing. Until there is a certificate, the supported
-  # answer is an explicit exclusion — which is a deliberate, visible act by an
+  # answer is an explicit exclusion - which is a deliberate, visible act by an
   # administrator, so it is a menu entry and never something Install does
   # quietly on your behalf.
 
@@ -1657,7 +1664,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
   # Code integrity is a different subsystem from the antivirus, with a different
   # log and no relationship to exclusions. It is what produces "we can't confirm
-  # who published <exe> that the app tried to load" — the app being svchost.exe,
+  # who published <exe> that the app tried to load" - the app being svchost.exe,
   # because Task Scheduler is what launches the agent. Missing this log is how a
   # signing problem gets mistaken for a malware detection and chased with
   # exclusions that could never have worked.
@@ -1710,16 +1717,16 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # running both shows up ONCE on the dashboard with USB, print and browser
   # activity on the same agent.
 
-  # ── Browsers ──────────────────────────────────────────────────────────
+  # -- Browsers ----------------------------------------------------------
   #
-  # One table, one place. Everything else — force-install, managed config,
-  # private browsing, removal — reads from here, so a browser can never be
+  # One table, one place. Everything else - force-install, managed config,
+  # private browsing, removal - reads from here, so a browser can never be
   # half-handled by one function and missed by another.
   #
   # THE VALUE NAMES ARE NOT INTERCHANGEABLE. Chrome reads
   # IncognitoModeAvailability; Edge reads InPrivateModeAvailability. Writing
   # Chrome's name into Edge's key does nothing whatsoever, and reads back looking
-  # exactly like success — which is how Edge stayed open while the screen said it
+  # exactly like success - which is how Edge stayed open while the screen said it
   # was closed.
   $BROWSERS = @(
     [PSCustomObject]@{
@@ -1745,7 +1752,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # Used for REPORTING, never to decide whether to write policy. Policy is always
   # written for both: a machine with no Chrome today gets Chrome fully managed the
   # moment someone installs it, extension and all, with nobody revisiting the
-  # endpoint. That pre-staging is the useful behaviour — claiming the browser is
+  # endpoint. That pre-staging is the useful behaviour - claiming the browser is
   # "configured" when it is not installed is the misleading part, and that is what
   # this fixes.
   function Test-BrowserInstalled {
@@ -1947,7 +1954,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
   # Only what an ADMINISTRATOR owns. Enforcement mode and the uninspectable rule
   # are properties of the Web Activity Control policy on the server, not of a
-  # per-browser setting — pushing them here would give an endpoint a way to
+  # per-browser setting - pushing them here would give an endpoint a way to
   # disagree with the policy that is supposed to govern it.
   # Writes ONLY wantVersion. Deliberately separate from Set-ManagedConfig: the
   # update path does not know the server URL or the agent id, and calling the
@@ -1980,7 +1987,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   #
   # There is NO browser policy that turns an extension on in InPrivate. Chrome
   # and Edge require the user to tick "Allow in InPrivate" per extension, by
-  # design, and enterprise policy cannot tick it for them — so a force-installed
+  # design, and enterprise policy cannot tick it for them - so a force-installed
   # DLP extension simply does not run there. That is a genuine hole: anything a
   # user does in an InPrivate window is uninspected.
   #
@@ -1993,11 +2000,11 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # ONE browser is covered is how Edge stayed wide open while the screen said the
   # hole was closed.
 
-  # ── Making an update actually happen ──────────────────────────────────
+  # -- Making an update actually happen ----------------------------------
   #
   # Writing the force-install policy does NOT deploy a new build. It tells the
   # browser which extension to keep installed; the browser then checks the update
-  # feed on its own schedule — roughly every few hours — so a freshly published
+  # feed on its own schedule - roughly every few hours - so a freshly published
   # version does not appear when you press Deploy, and the whole thing looks
   # broken. chrome://extensions -> Update forces it, but that is a manual step on
   # every endpoint and not something to hand an operator.
@@ -2031,7 +2038,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   }
 
   # Which version is actually on disk, per profile. This is the honest answer to
-  # "did the update land?" — the version is the name of the folder the browser
+  # "did the update land?" - the version is the name of the folder the browser
   # unpacked it into (e.g. "2.1.0_0").
   function Get-InstalledExtensionVersions {
     param([string]$ExtId)
@@ -2053,7 +2060,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   #
   # THE TRAP THIS EXISTS FOR: manifest.json pins the signing key, so an unpacked
   # "Load unpacked" copy has the SAME extension id as the published build. That is
-  # deliberate — you debug the extension you deploy — but it means a leftover
+  # deliberate - you debug the extension you deploy - but it means a leftover
   # unpacked folder from an earlier test occupies the id the policy is trying to
   # fill. The managed build never takes over, and every symptom points somewhere
   # else: the popup, the icon and the settings all come from the stale folder, so
@@ -2403,7 +2410,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     $go = Read-Host '   Repair now? (y/N)'
     if ($go -ne 'y' -and $go -ne 'Y') { Warn 'Cancelled - nothing changed.'; return }
 
-    # ── 1. stop force-installing it ───────────────────────────────────────
+    # -- 1. stop force-installing it ---------------------------------------
     try {
       Remove-ExtensionPolicy $ExtId
       Ok 'Force-install policy withdrawn.'
@@ -2421,7 +2428,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Blank
     Read-Host '   Press Enter once you have done that' | Out-Null
 
-    # ── 2. check the browser really did forget it ─────────────────────────
+    # -- 2. check the browser really did forget it -------------------------
     $left = @(Get-InstalledExtensionVersions $ExtId)
     if (@($left).Count -gt 0) {
       Blank
@@ -2444,7 +2451,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
     Ok 'The browser uninstalled it and cleared its record.'
 
-    # ── 3. force it again ─────────────────────────────────────────────────
+    # -- 3. force it again -------------------------------------------------
     try {
       foreach ($b in $BROWSERS) {
         $null = Set-ForcelistEntry -Root $b.Root -ExtId $ExtId -UpdateUrl $UpdateUrl
@@ -2485,7 +2492,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # someone is looking at this machine's coverage, and silently skipping the
   # question because it happened to be handled last time hides the one blind spot
   # the extension cannot cover. Three explicit choices, and Enter changes
-  # nothing — so it is a confirmation, not a trap.
+  # nothing - so it is a confirmation, not a trap.
   function Invoke-PrivateBrowsingPrompt {
     Blank
     Info 'Private browsing:'
@@ -2954,8 +2961,8 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
             $installed = @(Get-InstalledExtensionVersions $extId)
             if (@($installed).Count -eq 0) {
               # Nothing on disk is ambiguous, and the two readings need
-              # different answers. Either it has never been installed here — a
-              # browser start fixes that — or it WAS installed and its files
+              # different answers. Either it has never been installed here - a
+              # browser start fixes that - or it WAS installed and its files
               # went away while the browser's record of it stayed, which a start
               # cannot fix because the browser still believes it has it.
               # Watching tells the two apart without having to ask.

@@ -780,17 +780,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Invoke-AgentReconcile -ExePath $exePath -SkipStart
     Info 'Restarting the agent...'
     Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
-    # Same patience as the install path (6 x 2s), not a single 3s look.
     # Start-ScheduledTask returns as soon as the task is queued, not when the
     # process exists, so one early check reported "agent not detected" for an
     # agent that was starting perfectly well and heartbeating seconds later.
-    # Crying wolf on a routine update is worse than waiting another 9 seconds:
-    # it trains you to ignore the one time it means something.
-    $proc = $null
-    for ($i = 0; $i -lt 6 -and -not $proc; $i++) {
-      Start-Sleep -Seconds 2
-      $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
-    }
+    # Crying wolf on a routine update is worse than waiting: it trains you to
+    # ignore the one time it means something.
+    $proc = Wait-AgentProcess -TimeoutSeconds 25
     Blank
     if ($proc) {
       # The version is read back from the process's own image, so this line says
@@ -800,7 +795,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if ($runVer) { Ok "Update complete - agent v$($runVer.Trim()) running (PID $($proc.Id))." }
       else         { Ok "Update complete - agent running (PID $($proc.Id))." }
     }
-    else { Warn "Agent not detected yet - start it with: Start-ScheduledTask -TaskName '$TASK_NAME'" }
+    else { Show-AgentStartFailure }
   }
 
   # Everything an installation is, apart from the binary.
@@ -809,6 +804,81 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # only ever having its exe swapped. Each check states what it found, because
   # "nothing needed fixing" and "I did not look" are the same output otherwise -
   # and that ambiguity is what let a broken launcher survive.
+  # Poll, do not sleep once. The agent reads its config, resolves the server and
+  # pulls a policy bundle before its process is worth looking for, and against a
+  # slow or unreachable server that is comfortably more than the three seconds
+  # this used to allow - which reported a healthy agent as failed to start.
+  function Wait-AgentProcess {
+    param([int]$TimeoutSeconds = 25)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+      $p = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($p) { return $p }
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    $null
+  }
+
+  # "check [4] Logs" was the entire failure path, which left the one number that
+  # names the cause - the task's last result - behind a menu someone has to know
+  # to visit, and said nothing at all when the agent never wrote a log. Decode it
+  # here, next to the failure, with whatever the agent managed to write.
+  function Show-AgentStartFailure {
+    Warn 'Agent did not start.'
+    $info = $null
+    try { $info = Get-ScheduledTaskInfo -TaskName $TASK_NAME -ErrorAction Stop } catch {}
+    if ($info) {
+      $rc  = [int64]$info.LastTaskResult
+      $why = switch ($rc) {
+        0          { 'the task launched it cleanly - so the agent started and then exited by itself' }
+        1          { 'the agent ran and returned 1 - it started, then rejected its config or the server' }
+        267009     { 'the task reports itself still running' }
+        267011     { 'the task has never run' }
+        267014     { 'the last run was terminated' }
+        2147942402 { 'the exe was not found - wrong path in the task, or the file is gone' }
+        2147942405 { 'access denied' }
+        2147942625 { 'blocked as malware - antivirus stopped it RUNNING, not just downloading' }
+        2147942626 { 'the file was deleted as malware' }
+        3221225477 { 'the agent crashed - access violation' }
+        3221225781 { 'a required DLL was missing' }
+        3221225785 { 'a DLL entry point was missing' }
+        3221225794 { 'DLL initialisation failed' }
+        default    { 'unrecognised - quote this code' }
+      }
+      Hint ("Task last result : {0} (0x{1}) - {2}" -f $rc, $rc.ToString('X8'), $why)
+      Hint ("Task last run    : {0}" -f $info.LastRunTime)
+    } else {
+      Hint 'Could not read the scheduled task result.'
+    }
+
+    # The task's own record of what the process returned. Present even when the
+    # agent died too early to log anything, which is exactly the case where the
+    # agent log is empty and unhelpful.
+    try {
+      $ev = Get-WinEvent -FilterHashtable @{
+              LogName   = 'Microsoft-Windows-TaskScheduler/Operational'
+              Id        = 201
+              StartTime = (Get-Date).AddMinutes(-10)
+            } -MaxEvents 3 -ErrorAction Stop |
+            Where-Object { $_.Message -match [regex]::Escape($TASK_NAME) }
+      foreach ($e in @($ev)) {
+        Hint ("Task Scheduler   : {0}  {1}" -f $e.TimeCreated, (($e.Message -split "`r?`n")[0]))
+      }
+    } catch {}
+
+    $lf = Resolve-LogFile
+    if ($lf) {
+      Blank; Hint ("Last lines of {0} (written {1}):" -f $lf.Name, $lf.LastWriteTime)
+      Get-Content $lf.FullName -Tail 12 -ErrorAction SilentlyContinue |
+        ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+    } else {
+      Hint 'No log file exists - the agent never got far enough to open one.'
+    }
+    Blank
+    Hint 'To see the failure directly, run the exe in this window:'
+    Write-Host ("      & '{0}'" -f (Join-Path $INSTALL_DIR $EXE_NAME)) -ForegroundColor White
+  }
+
   function Invoke-AgentReconcile {
     param([string]$ExePath, [switch]$SkipStart)
     Blank
@@ -840,10 +910,9 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       } else {
         Info 'Agent is not running - starting it.'
         Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 3
-        $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+        $proc = Wait-AgentProcess -TimeoutSeconds 25
         if ($proc) { Ok "Agent started (PID $($proc.Id))." }
-        else { Warn "Agent did not start - check [4] Logs." }
+        else { Show-AgentStartFailure }
       }
     }
   }
@@ -1744,16 +1813,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
     Blank; Info 'Restarting the agent...'
     Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
-    $proc = $null
-    for ($i = 0; $i -lt 6 -and -not $proc; $i++) {
-      Start-Sleep -Seconds 2
-      $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
-    }
+    $proc = Wait-AgentProcess -TimeoutSeconds 25
     if ($proc) {
       $v = $null; try { $v = (Get-Item $proc.Path).VersionInfo.ProductVersion } catch {}
       if ($v) { Ok "Agent v$($v.Trim()) running (PID $($proc.Id))." } else { Ok "Agent running (PID $($proc.Id))." }
     } else {
-      Warn 'Agent still not running. Check [4] Logs for what it says on startup.'
+      Show-AgentStartFailure
     }
   }
 

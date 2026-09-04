@@ -534,6 +534,8 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     }
     Ok 'Directories ready'
+    # Before Step 5 writes the binary, not after Defender has already eaten it.
+    Set-AgentDefenderExclusions | Out-Null
 
     # -- Step 4: OCR deps (optional) -----------------------------------------
     Step 4 $TOTAL 'OCR dependencies (Chocolatey + Tesseract, optional)'
@@ -695,7 +697,18 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Blank
     Header 'UPDATE agent binary' 'Cyan'
     $exePath = Join-Path $INSTALL_DIR $EXE_NAME
-    $tmpExe  = Join-Path $env:TEMP $EXE_NAME
+
+    # Staged inside the install directory, never %TEMP%. An unsigned PE written
+    # into AppData\Local\Temp is one of the most heavily weighted signals
+    # Defender's ML model has, and %TEMP% is not covered by the install-path
+    # exclusion either - which is exactly how one binary got quarantined twice,
+    # once in Program Files and again in Temp. Same volume too, so replacing
+    # the live exe is a move rather than a cross-volume copy.
+    if (-not (Test-Path $INSTALL_DIR)) {
+      New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
+    }
+    Set-AgentDefenderExclusions | Out-Null
+    $tmpExe  = Join-Path $INSTALL_DIR ($EXE_NAME + '.download')
 
     Info 'Downloading the latest published binary...'
     try {
@@ -1473,6 +1486,47 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
               -Name 'VerifiedAndReputablePolicyState' -ErrorAction Stop).VerifiedAndReputablePolicyState
       switch ($v) { 0 { 'off' } 1 { 'ON' } 2 { 'evaluation' } default { "unknown ($v)" } }
     } catch { 'not present' }
+  }
+
+  # Tell Defender what this binary is BEFORE it exists on disk.
+  #
+  # Why this has to run first rather than from the [5] menu afterwards: the
+  # agent is an unsigned executable that installs a SYSTEM scheduled task, sets
+  # a global low-level keyboard AND mouse hook, enumerates processes, reads
+  # other applications' text through UI Automation, watches the clipboard, and
+  # POSTs what it finds to a server. That is an accurate description of a DLP
+  # agent and a word-for-word description of an infostealer, and Defender's ML
+  # model - the "!ml" in Trojan:Win32/Bearfoos.B!ml - cannot tell the two apart
+  # from behaviour alone. Every CI build is also a brand-new hash with zero
+  # prevalence in Defender's cloud, which is itself weighted as suspicious.
+  #
+  # So this is not a workaround for a bug. It is the channel Windows provides
+  # for an administrator to say "this one is ours", and it has to be in place
+  # before the file lands, because real-time protection acts during the write.
+  # Returns $true only when the exclusion is read back successfully.
+  function Set-AgentDefenderExclusions {
+    if (-not $isAdmin) { Warn 'Not elevated - cannot register the agent with Defender.'; return $false }
+    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
+      Warn 'Defender cmdlets unavailable on this device - skipping.'
+      return $false
+    }
+    foreach ($d in @($INSTALL_DIR, $DATA_DIR)) {
+      if ($d) { try { Add-MpPreference -ExclusionPath $d -ErrorAction Stop } catch {} }
+    }
+    try { Add-MpPreference -ExclusionProcess "$PROC_NAME.exe" -ErrorAction Stop } catch {}
+
+    # Read it back. Add-MpPreference reports success even when tamper
+    # protection or a management policy silently discards the change, so its
+    # own return value proves nothing.
+    $pref = $null; try { $pref = Get-MpPreference -ErrorAction Stop } catch {}
+    $okPath = $pref -and (@($pref.ExclusionPath) |
+                Where-Object { $_ -and $_.TrimEnd('\') -ieq $INSTALL_DIR.TrimEnd('\') }).Count -gt 0
+    if ($okPath) { Ok "Registered with Defender (excluded: $INSTALL_DIR)"; return $true }
+
+    Warn 'Defender exclusions did not stick (tamper protection, or GPO/Intune-managed).'
+    Hint 'On a managed fleet the exclusion belongs in that policy. Without it,'
+    Hint 'Defender will quarantine the agent as Trojan:Win32/Bearfoos.B!ml.'
+    return $false
   }
 
   function Get-AgentQuarantine {

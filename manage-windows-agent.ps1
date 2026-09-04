@@ -534,9 +534,9 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
     }
     Ok 'Directories ready'
-    # Read-only check. Says what to run if Defender will eat the binary at
-    # Step 5; never changes a Defender setting itself.
-    Show-AgentDefenderSteps -Brief | Out-Null
+    # Register the exclusion HERE, not after Step 5 writes the binary: an exe is
+    # scanned as it lands, so an exclusion added afterwards protects nothing.
+    Set-AgentDefenderExclusions -Brief | Out-Null
 
     # -- Step 4: OCR deps (optional) -----------------------------------------
     Step 4 $TOTAL 'OCR dependencies (Chocolatey + Tesseract, optional)'
@@ -708,8 +708,15 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     if (-not (Test-Path $INSTALL_DIR)) {
       New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
     }
-    Show-AgentDefenderSteps -Brief | Out-Null
+    Set-AgentDefenderExclusions -Brief | Out-Null
     $tmpExe  = Join-Path $INSTALL_DIR ($EXE_NAME + '.download')
+
+    # Clear a .download left behind by a run Defender interrupted. Invoke-
+    # WebRequest happily overwrites it, but if the fresh fetch fails for any
+    # reason the stale one is still there, and Get-FileHash then reads the file
+    # Defender has flagged and dies with "the file contains a virus" - which
+    # reads like the new download was blocked when it never arrived at all.
+    if (Test-Path $tmpExe) { Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue }
 
     Info 'Downloading the latest published binary...'
     try {
@@ -1489,34 +1496,116 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     } catch { 'not present' }
   }
 
-  # THIS SCRIPT DOES NOT CHANGE ANY DEFENDER SETTING, and must not be made to.
-  # Adding code that does is what got the script itself quarantined.
+  # Defender policy for this script, in one place. It has exactly one allowed
+  # write and a permanent forbidden list.
   #
-  # An earlier revision called the Defender preference cmdlets to add
-  # exclusions, and the Defender command-line tool to pull the agent back out
-  # of quarantine first. Both ran automatically during install and update with
-  # no human in the loop. AMSI scans script content as PowerShell executes it,
-  # and "take a file back out of quarantine, then exempt the folder it lives
-  # in, unattended" is a recognised pattern: the script was quarantined as
-  # Trojan:PowerShell/Killav.VDA!MTB.
+  # ALLOWED: registering the agent's own install and data directories as path
+  # exclusions. That is an ordinary installer step for an unsigned agent whose
+  # whole job looks like the software it is built to catch, it is scoped to two
+  # directories this script created itself, and without it the binary is taken
+  # mid-download - the file is scanned as it is written, so the exclusion has
+  # to be in place BEFORE the fetch, not after.
   #
-  # That verdict is fair. A downloaded installer that quietly weakens antivirus
-  # is dangerous whoever wrote it, and a security product does not get to be
-  # the exception. So the rule is: READ Defender state, never write it. The
-  # Get-Mp* queries used here are ordinary read-only calls and carry none of
-  # that weight, and no command text is printed either - a scanner cannot tell
-  # a command a script is about to run from one it is only displaying.
+  # FORBIDDEN, permanently: turning real-time, behaviour or cloud protection
+  # off, removing definitions, and pulling files back out of quarantine. An
+  # earlier revision did that last one - restore from quarantine, then exempt
+  # the folder, unattended - and AMSI quarantined this script as
+  # Trojan:PowerShell/Killav.VDA!MTB. That verdict was fair: a downloaded
+  # installer that quietly weakens antivirus is dangerous whoever wrote it. An
+  # exclusion narrows what gets scanned in future; the forbidden list changes
+  # whether scanning happens at all, and overrides a verdict Defender has
+  # already reached on a specific file.
   #
-  # The remediation is therefore described, not executed, and points at the
-  # Windows Security UI: it puts a person in the loop, leaves the decision with
-  # the machine's owner, and is auditable. On a fleet it belongs in Intune or
-  # group policy, and the durable fix is signing the agent.
+  # The consequence is that a copy Defender has ALREADY taken cannot be
+  # recovered from here, and nothing below tries. The exclusion stops the NEXT
+  # copy being taken, and Update downloads a fresh binary into the now-excluded
+  # directory - which is why recovery works without anyone opening Windows
+  # Security. Show-AgentDefenderSteps stays as the fallback for when the write
+  # is refused: Defender managed by Intune or group policy, or a third-party AV
+  # in charge. The durable fix is still an Authenticode signature on the agent,
+  # which is also the only thing that satisfies Smart App Control.
+  # Readable is reported separately from Missing, because "Defender says there
+  # is no exclusion" and "we could not ask Defender" are different facts that
+  # were previously collapsed into the same alarming sentence. Get-MpPreference
+  # throws on plenty of healthy machines - the Defender module missing from a
+  # Server Core image, WMI wedged, a third-party AV having taken over - and
+  # treating that as a definite "no exclusion" both cries wolf on the way in
+  # and, worse, reports a freshly added exclusion as REFUSED on the way out.
+  #
+  # Note that Protection history > Allow on device does NOT create a path
+  # exclusion. It clears one specific detection on one specific file, so the
+  # binary survives while Missing stays non-empty. That combination is honest
+  # rather than contradictory, and it is why the download can succeed on a
+  # machine this still reports as unexcluded.
+  function Get-AgentExclusionState {
+    $have = $null
+    try { $have = @((Get-MpPreference -ErrorAction Stop).ExclusionPath) }
+    catch { return [PSCustomObject]@{ Readable = $false; Missing = @($INSTALL_DIR, $DATA_DIR) } }
+    $missing = @()
+    foreach ($p in @($INSTALL_DIR, $DATA_DIR)) {
+      if (-not $p) { continue }
+      $t = $p.TrimEnd('\')
+      $hit = @($have) | Where-Object { $_ -and $_.TrimEnd('\') -ieq $t }
+      if (-not $hit) { $missing += $p }
+    }
+    # Missing is built with @() and assigned to a property, so it survives as an
+    # array. Emitting a bare list from a function would not: the pipeline
+    # unrolls it, an empty one becomes nothing and a single entry becomes a
+    # string, and every @(...).Count at a call site then reads wrong.
+    [PSCustomObject]@{ Readable = $true; Missing = $missing }
+  }
+
+  function Set-AgentDefenderExclusions {
+    param([switch]$Brief)
+    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
+      return (Show-AgentDefenderSteps -Brief:$Brief)
+    }
+    $before = Get-AgentExclusionState
+    if ($before.Readable -and @($before.Missing).Count -eq 0) {
+      if (-not $Brief) { Ok 'Defender already excludes the agent directories' }
+      return $true
+    }
+    if (-not $isAdmin) { return (Show-AgentDefenderSteps -Brief:$Brief) }
+
+    $failed = @()
+    foreach ($p in @($before.Missing)) {
+      try { Add-MpPreference -ExclusionPath $p -ErrorAction Stop }
+      catch { $failed += $p }
+    }
+
+    # Read it back rather than trusting the call to have worked. Where Defender
+    # is managed centrally the cmdlet returns without an error and changes
+    # nothing, which would otherwise look like success right up until the
+    # download is eaten again.
+    $after = Get-AgentExclusionState
+    if ($after.Readable) {
+      if (@($after.Missing).Count -gt 0) {
+        Warn 'Defender would not accept the exclusion - it is managed by policy, or another AV is in charge.'
+        return (Show-AgentDefenderSteps -Brief:$Brief)
+      }
+      Ok "Defender exclusion registered for $INSTALL_DIR and $DATA_DIR"
+    } elseif (@($failed).Count -gt 0) {
+      Warn "Defender rejected the exclusion for: $($failed -join ', ')"
+      return (Show-AgentDefenderSteps -Brief:$Brief)
+    } else {
+      # The add did not error but the read-back is unavailable. Do not call that
+      # a failure and send someone into Windows Security for nothing.
+      Ok "Defender exclusion submitted for $INSTALL_DIR and $DATA_DIR"
+      Hint 'Defender preferences could not be read back, so this is unconfirmed.'
+    }
+    if (@(Get-AgentQuarantine).Count -gt 0) {
+      Hint 'An already-quarantined copy stays quarantined; this script does not reach'
+      Hint 'into quarantine. Update fetches a fresh binary instead, and that copy is'
+      Hint 'covered by the exclusion just registered.'
+    }
+    return $true
+  }
+
   function Show-AgentDefenderSteps {
     param([switch]$Brief)
     $q = @(Get-AgentQuarantine)
-    $pref = $null; try { $pref = Get-MpPreference -ErrorAction Stop } catch {}
-    $okPath = $pref -and (@($pref.ExclusionPath) |
-                Where-Object { $_ -and $_.TrimEnd('\') -ieq $INSTALL_DIR.TrimEnd('\') }).Count -gt 0
+    $st = Get-AgentExclusionState
+    $okPath = $st.Readable -and @($st.Missing).Count -eq 0
     if ($okPath -and $q.Count -eq 0) {
       if (-not $Brief) { Ok "Defender exclusion already present for $INSTALL_DIR" }
       return $true
@@ -1524,10 +1613,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
     Blank
     if ($q.Count -gt 0) { Warn "Defender has acted on the agent $($q.Count) time(s)." }
-    if (-not $okPath)   { Warn "No Defender exclusion covers $INSTALL_DIR." }
+    if (-not $st.Readable) { Warn 'Could not read Defender exclusions on this device.' }
+    elseif (-not $okPath)  { Warn "No Defender exclusion covers $($st.Missing -join ' or ')." }
     Hint 'The agent is unsigned and behaves like the software it is built to catch,'
-    Hint 'so Defender judges it on behaviour and quarantines it. An administrator'
-    Hint 'has to allow it, in Windows Security, in this order:'
+    Hint 'so Defender judges it on behaviour and quarantines it. This script could'
+    Hint 'not register the exclusion itself, so an administrator has to do it in'
+    Hint 'Windows Security, in this order:'
     Blank
     if ($q.Count -gt 0) {
       Write-Host '    1. Virus & threat protection > Protection history' -ForegroundColor Yellow
@@ -1621,7 +1712,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
     Blank
     Write-Host '   [1] Allow the agent  ' -ForegroundColor Green -NoNewline
-    Write-Host '- restore it if quarantined, then exclude path + process'
+    Write-Host '- exclude its directories so the next copy is not taken'
     Write-Host '   [2] Show recent blocks' -ForegroundColor Yellow -NoNewline
     Write-Host ' - Defender / ASR / folder-access events naming the agent'
     Write-Host '   [3] Back            ' -ForegroundColor Gray -NoNewline
@@ -1639,9 +1730,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Blank; Write-Host '   Allowing the agent in Microsoft Defender' -ForegroundColor Cyan; Hr '-' 'DarkCyan'
     if (-not $isAdmin) { Err 'This needs Administrator. Re-run the script elevated.'; return }
 
-    # Prints the commands; does not run them. See the note on
-    # Show-AgentDefenderSteps for why this script no longer writes to Defender.
-    if (-not (Show-AgentDefenderSteps)) { return }
+    # Registers the path exclusions. Never touches a protection setting and
+    # never reaches into quarantine - see the policy note above
+    # Set-AgentDefenderExclusions.
+    if (-not (Set-AgentDefenderExclusions)) { return }
 
     $exe = Join-Path $INSTALL_DIR $EXE_NAME
     if (-not (Test-Path $exe)) {

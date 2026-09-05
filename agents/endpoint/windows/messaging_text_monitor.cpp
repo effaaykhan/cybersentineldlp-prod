@@ -662,6 +662,169 @@ std::string ElementDescription(IUIAutomationElement* el) {
     return out.empty() ? "(opaque)" : out;
 }
 
+// ── What the user actually typed ──────────────────────────────────────────
+//
+// Everything else in this file depends on UI Automation being able to read the
+// app's message box. On WhatsApp for Windows — a WinUI 3 window hosting
+// WebView2 — that has repeatedly proved unreliable: Chromium builds its
+// accessibility tree lazily, sometimes not at all, and when it is absent this
+// module has nothing to inspect and the send goes out unchecked. Every fix so
+// far has been a better way of asking the same question of a component that
+// keeps declining to answer.
+//
+// This is the answer that does not ask it. The hook already sees every
+// keystroke on the machine and, until now, discarded all of them except Enter.
+// Keeping the printable ones costs a table lookup per key and gives the
+// decision a source that no app, framework or accessibility setting can take
+// away.
+//
+// The scope is deliberately narrow, because this IS keystroke capture and it
+// should exist only where an operator has explicitly asked for typed messages
+// to be inspected:
+//   - only while the foreground window is a MANAGED app with typed-message
+//     inspection turned on. The sampler publishes that one window handle and
+//     the hook does a pointer compare, because resolving the foreground app on
+//     every keystroke is a syscall per key and that is how a low-level hook
+//     gets evicted by Windows;
+//   - discarded as soon as the message is sent, when the box is seen to be
+//     empty, on Escape, on select-all-and-replace, when a different app's
+//     message box takes over, and after five minutes of nobody typing.
+//     Deliberately NOT discarded merely because another window came to the
+//     front: the block dialog itself is MB_SETFOREGROUND, so that rule would
+//     empty the buffer immediately after every block and let the user's next
+//     Enter carry the same card number straight out;
+//   - never written to the log, and never leaves the machine except as the
+//     message text of a block or alert the policy already asked for;
+//   - capped, and expired.
+std::mutex  g_typedMx;
+std::string g_typedText;
+HWND        g_typedWnd  = nullptr;
+long long   g_typedAtMs = 0;
+
+// Published by the sampler, read by the hook. Null means "the foreground window
+// is not an app we inspect", and the hook records nothing at all.
+std::atomic<HWND> g_managedWnd{nullptr};
+// Ctrl+V in a managed app. The clipboard is read by the sampler, never by the
+// hook: OpenClipboard blocks on whichever process currently owns it.
+std::atomic<bool> g_pasteSeen{false};
+// Ctrl+A in a managed app. The next printable key or Delete replaces the whole
+// box, so the buffer has to start again - otherwise a card number that the user
+// selected and typed over is still in it, and blocks the innocent message that
+// replaced it.
+std::atomic<bool> g_selectAll{false};
+
+constexpr size_t   kTypedMaxBytes = 4096;
+constexpr long long kTypedMaxAgeMs = 300000;   // five minutes of not typing
+
+void ClearTypedBuffer() {
+    std::lock_guard<std::mutex> lk(g_typedMx);
+    g_typedText.clear();
+    g_typedAtMs = 0;
+}
+
+// What was typed into `wnd`, or empty. Never returns another window's text.
+std::string TypedTextFor(HWND wnd) {
+    std::lock_guard<std::mutex> lk(g_typedMx);
+    if (!wnd || g_typedWnd != wnd || g_typedText.empty()) return {};
+    if (g_typedAtMs && NowSteadyMs() - g_typedAtMs > kTypedMaxAgeMs) return {};
+    return g_typedText;
+}
+
+void AppendTypedText(HWND wnd, const std::string& add) {
+    if (add.empty()) return;
+    std::lock_guard<std::mutex> lk(g_typedMx);
+    const long long now = NowSteadyMs();
+    if (g_typedWnd != wnd || (g_typedAtMs && now - g_typedAtMs > kTypedMaxAgeMs)) {
+        g_typedText.clear();
+        g_typedWnd = wnd;
+    }
+    if (g_typedText.size() < kTypedMaxBytes)
+        g_typedText.append(add, 0, kTypedMaxBytes - g_typedText.size());
+    g_typedAtMs = now;
+}
+
+void AppendTyped(HWND wnd, char ch) { AppendTypedText(wnd, std::string(1, ch)); }
+
+// Ctrl+V happened in a managed app. Read from the SAMPLER thread, never the
+// hook: OpenClipboard blocks on whichever process currently owns the clipboard,
+// and a hook that blocks is a hook Windows removes. If it is held right now we
+// lose this one paste rather than stall the desktop.
+void AppendClipboardText(HWND wnd) {
+    if (!OpenClipboard(nullptr)) return;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    if (h) {
+        const wchar_t* w = (const wchar_t*)GlobalLock(h);
+        if (w) {
+            std::string utf8 = WideToUtf8(w);
+            GlobalUnlock(h);
+            if (utf8.size() > kTypedMaxBytes) utf8.resize(kTypedMaxBytes);
+            AppendTypedText(wnd, utf8);
+        }
+    }
+    CloseClipboard();
+}
+
+// Called from the hook, on every keydown, before anything expensive.
+//
+// MapVirtualKey rather than ToUnicode: ToUnicode mutates the calling thread's
+// keyboard state and can swallow the user's next dead key. Doing that inside a
+// hook, on every keystroke, would break accented input across the whole desktop
+// to read a message box.
+void RecordTypedKey(DWORD vk) {
+    const HWND managed = g_managedWnd.load(std::memory_order_relaxed);
+    if (!managed || GetForegroundWindow() != managed) return;
+
+    const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    if (ctrl) {
+        // Paste is how a card number most often arrives in a chat window, so it
+        // cannot be the one input method this does not see. The hook only
+        // records that it happened.
+        if (vk == 'V') g_pasteSeen.store(true, std::memory_order_relaxed);
+        if (vk == 'A') g_selectAll.store(true, std::memory_order_relaxed);
+        return;                                   // Ctrl+C, Ctrl+X … type nothing
+    }
+
+    // Shift+Enter is a new line, not a send - the send path lets it through
+    // untouched and asks us to keep it, because a message whose line breaks are
+    // dropped runs "4111111111111111" straight into the next word and stops
+    // looking like a card number.
+    if (vk == VK_RETURN) { AppendTyped(managed, '\n'); return; }
+
+    if (vk == VK_BACK || vk == VK_DELETE) {
+        if (g_selectAll.exchange(false, std::memory_order_relaxed)) {
+            ClearTypedBuffer();                   // the whole box was selected
+            return;
+        }
+        if (vk == VK_DELETE) return;              // forward delete: position unknown
+        std::lock_guard<std::mutex> lk(g_typedMx);
+        if (g_typedWnd == managed && !g_typedText.empty()) g_typedText.pop_back();
+        return;
+    }
+    if (vk == VK_ESCAPE) {
+        g_selectAll.store(false, std::memory_order_relaxed);
+        ClearTypedBuffer();
+        return;
+    }
+
+    char ch = 0;
+    if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) {
+        ch = (char)('0' + (vk - VK_NUMPAD0));
+    } else if (vk == VK_SPACE) {
+        ch = ' ';
+    } else {
+        // A shifted number-row key is punctuation, not a digit. Without this,
+        // "!!!!" reads as "1111" and a row of exclamation marks starts looking
+        // like the beginning of a card number.
+        if (vk >= '0' && vk <= '9' && (GetAsyncKeyState(VK_SHIFT) & 0x8000)) return;
+        const UINT m = MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) & 0x7FFF;
+        if (m < 32 || m > 126) return;            // dead keys, F-keys, navigation
+        ch = (char)m;
+    }
+    // Typing over a selection replaces it.
+    if (g_selectAll.exchange(false, std::memory_order_relaxed)) ClearTypedBuffer();
+    AppendTyped(managed, ch);
+}
+
 // ── Where the app actually keeps its UI ───────────────────────────────────
 //
 // ElementFromHandle(the foreground window) is the correct root for a native app
@@ -721,13 +884,23 @@ BOOL CALLBACK CollectRootWindow(HWND h, LPARAM lp) {
 // would put us back where we started. Everything else must be visible, because
 // a hidden pane is where a background tab's text lives, and reading that would
 // classify a conversation nobody is looking at.
+//
+// Browser hosts come BEFORE the foreground window, not after. Trying the
+// top-level window first looks like the conservative order and is the wrong
+// one: on WhatsApp that window intermittently exposes ONE editable node which
+// is not the message box - the 26-character, zero-digit node that a card number
+// was once judged against - and a search that returns on its first hit stops
+// there and never reaches the browser. When an app embeds a browser, the
+// browser is where the conversation is; the window itself is the fallback, and
+// for a native app (Telegram, Signal's Qt build) it is the only entry and
+// nothing about its handling changes.
 std::vector<HWND> ContentRoots(HWND wnd) {
     std::vector<HWND> roots;
     if (!wnd) return roots;
-    roots.push_back(wnd);
     std::vector<RootCandidate> kids;
     EnumChildWindows(wnd, CollectRootWindow, reinterpret_cast<LPARAM>(&kids));
     for (const auto& k : kids) if (k.browser)              roots.push_back(k.h);
+    roots.push_back(wnd);
     for (const auto& k : kids) if (!k.browser && k.visible) roots.push_back(k.h);
     return roots;
 }
@@ -1670,6 +1843,18 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
         if (IsSensitive(RestrictToTypes(sraw, types))) { text = snap; via = "sampled"; }
     }
 
+    // What the user typed into this window, which owes UI Automation nothing.
+    // Checked here beside the snapshot rather than after the live read: it is
+    // already in hand, it costs one classifier pass, and it cannot time out. On
+    // an app whose accessibility tree cannot be read it is the ONLY source, and
+    // a control that fails open on a card number is not a control.
+    const std::string typed = TypedTextFor(wnd);
+    if (text.empty() && !typed.empty()) {
+        NetworkExfilMonitor::ClassifyResult traw;
+        try { traw = g_cfg.classify(typed, "messaging_message"); } catch (...) {}
+        if (IsSensitive(RestrictToTypes(traw, types))) { text = typed; via = "typed"; }
+    }
+
     if (text.empty()) {
         // Focused element only - no tree walk of any kind. Retried, because
         // Chromium builds its accessibility tree lazily and the request that
@@ -1699,7 +1884,8 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
         // The live read is preferred because it is current — the sampler can be
         // up to one interval behind the last characters typed. But a stale
         // sample beats no inspection at all.
-        if (text.empty() && !snap.empty()) { text = snap; via = "sampled-fallback"; }
+        if (text.empty() && !snap.empty())  { text = snap;  via = "sampled-fallback"; }
+        if (text.empty() && !typed.empty()) { text = typed; via = "typed-fallback"; }
 
         if (text.empty()) {
             // Nothing readable. Could be an empty box, could be an app whose composer
@@ -1707,8 +1893,9 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
             // keep — release it. See the header on why this fails open.
             LogInfo("no composer text for " + exe + " (" +
                    (read.status == ReadStatus::NoComposer ? "no editable node" : "empty box") +
-                   ") - releasing keystroke");
+                   ", nothing typed either) - releasing keystroke");
             ResolveRelease(withCtrl);
+            ClearTypedBuffer();          // whatever was there has now been sent
             if (read.status == ReadStatus::NoComposer) ReportUninspectable(exe, pid);
             return;
         }
@@ -1734,6 +1921,7 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
                ") in " + exe + " via " + via + " [" + TextProfile(text) + "]" +
                dropped + " - releasing");
         ResolveRelease(withCtrl);
+        ClearTypedBuffer();              // the message has gone; start the next one
         return;
     }
 
@@ -1756,7 +1944,10 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
                   ") - inspection did not finish before the send was released", text);
         LogWarn("MESSAGING_TEXT_LATE exe=" + exe + " category=" + cls.category +
                 " detected=[" + what + "] - verdict arrived after the watchdog released the keystroke");
+        ClearTypedBuffer();
     }
+    // The block path deliberately does NOT clear: the text is still sitting in
+    // the box for the user to edit, so the buffer must still match it.
 }
 
 // ALERT mode. Nothing was held and nothing may be touched; the send has already
@@ -1796,6 +1987,14 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
                 : "snapshot too old (" + std::to_string(age) + "ms)";
         }
     }
+    if (text.empty()) {
+        const std::string typed = TypedTextFor(wnd);
+        if (!typed.empty()) { text = TrimText(typed); via = "typed"; snapshotNote = "typed"; }
+    }
+    // Alert mode never holds anything, so by now the message has been sent
+    // whatever we found. The next one starts from empty.
+    ClearTypedBuffer();
+
     if (text.empty()) {
         LogInfo("alert: nothing to inspect in " + exe + " (" +
                (read.status == ReadStatus::NoComposer ? "no editable node"
@@ -1964,19 +2163,17 @@ void WorkerThread() {
 
         try {
             const bool haveUia = comOk && EnsureUia(uia, uiaComplainedAt);
-            if (audit) {
-                if (haveUia) AuditAndAct(uia, wnd, pid, types, exe);
-            } else if (haveUia) {
-                DecideAndAct(uia, wnd, pid, ctrl, types, exe);
-            } else {
-                // We swallowed a keystroke we now cannot adjudicate. Give it back —
-                // and SAY so. Releasing in silence is what made this failure
-                // indistinguishable from the feature not existing: the hook wrote
-                // "managed, inspecting", and then no line was ever written again.
-                LogWarn("released the Enter in " + exe + " UNINSPECTED - UI Automation "
-                        "is not available, so the message was sent unchecked");
-                ResolveRelease(ctrl);
+            if (!haveUia) {
+                // This used to release the keystroke unread, because UI
+                // Automation was the only way to learn what was in the box.
+                // It no longer is: the typed-text buffer needs none of it, so
+                // the send is still adjudicated - on what the user typed, just
+                // not cross-checked against what the box actually holds.
+                LogWarn("UI Automation unavailable for " + exe + " - judging this send "
+                        "on typed text alone");
             }
+            if (audit) AuditAndAct(haveUia ? uia : nullptr, wnd, pid, types, exe);
+            else       DecideAndAct(haveUia ? uia : nullptr, wnd, pid, ctrl, types, exe);
         } catch (...) {
             LogWarn("decision threw - releasing keystroke");
             if (!audit) { try { ResolveRelease(ctrl); } catch (...) {} }
@@ -2330,7 +2527,10 @@ void SamplerThread() {
 
         try {
             TargetApp t = ResolveForegroundApp();
-            if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
+            if (t.exe.empty() || !g_cfg.messagingPolicy) {
+                g_managedWnd.store(nullptr, std::memory_order_relaxed);
+                continue;
+            }
 
             const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
             // Block mode used to be excluded here, on the reasoning that it
@@ -2341,13 +2541,24 @@ void SamplerThread() {
             // this thread saw a moment earlier - see DecideAndAct.
             if (!mv.managed || !mv.inspectMessages) {
                 g_composerHasText.store(false);
+                g_managedWnd.store(nullptr, std::memory_order_relaxed);
                 continue;
             }
+
+            // Published BEFORE the UI Automation check below, deliberately. The
+            // typed-text buffer is the path that has to keep working on a
+            // machine where UI Automation does not, so it cannot be gated on
+            // acquiring it.
+            g_managedWnd.store(t.wnd, std::memory_order_relaxed);
+            if (g_pasteSeen.exchange(false, std::memory_order_relaxed))
+                AppendClipboardText(t.wnd);
+
             if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
 
             // One element, one or two property reads. This is what makes the
             // sample a quarter of a second old rather than seven seconds old.
             std::string text;
+            bool  readableBox = false;
             DWORD cpid = 0;
             IUIAutomationElement* composer = AcquireComposer(cpid);
             if (composer) {
@@ -2356,6 +2567,7 @@ void SamplerThread() {
                     // locator will notice and re-point us.
                 } else if (ElementAlive(composer)) {
                     try { text = TrimText(TextFromElement(composer)); } catch (...) {}
+                    readableBox = true;
                 } else if (!g_refindComposer.exchange(true)) {
                     // Chromium rebuilds the composer's accessibility node after
                     // a send, and again after a modal takes focus - so the
@@ -2381,7 +2593,17 @@ void SamplerThread() {
                 ComposerRead fr;
                 try { fr = ReadFocusedOnly(uia, t.pid); } catch (...) {}
                 if (fr.status == ReadStatus::Ok) text = TrimText(fr.text);
+                else if (fr.status == ReadStatus::EmptyBox) readableBox = true;
             }
+
+            // The box is readable AND empty: whatever was typed has gone, by
+            // whatever route — sent, selected and deleted, or cleared by the app
+            // itself. Keeping the buffer past that is how a stale card number
+            // blocks the next, innocent message. Acted on ONLY when the box
+            // could actually be read: "no composer" means unknown, not empty,
+            // and on an app whose tree cannot be read the buffer is the only
+            // source there is.
+            if (readableBox && text.empty()) ClearTypedBuffer();
 
             // What the locator uses to decide whether to look for the Send
             // control at all: it only exists, and only matters, while there is
@@ -2452,7 +2674,16 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode != HC_ACTION) return CallNextHookEx(g_hook, nCode, wParam, lParam);
 
     KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)lParam;
-    if (!k || k->vkCode != VK_RETURN) {
+    if (!k) return CallNextHookEx(g_hook, nCode, wParam, lParam);
+
+    if (k->vkCode != VK_RETURN) {
+        // Every key that is not the send key is what the message is MADE of,
+        // and this callback is the only place in the process that sees it.
+        // Injected input is skipped so our own Enter replay is never counted.
+        if ((wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
+            !(k->flags & LLKHF_INJECTED)) {
+            RecordTypedKey(k->vkCode);
+        }
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
     // Our own replay. Must be first: everything below would otherwise re-hold it.
@@ -2469,6 +2700,7 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
     // Shift+Enter is "new line" in every one of these apps — never a send.
     if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
+        RecordTypedKey(VK_RETURN);
         return CallNextHookEx(g_hook, nCode, wParam, lParam);
     }
     // A second Enter must NOT reach the app while the first is being judged.
@@ -2699,6 +2931,12 @@ bool InstallHooks(bool reinstall) {
     LogInfo(std::string(reinstall ? "typed-message hooks REINSTALLED"
                                   : "typed-message keyboard hook installed") +
             (g_mouseHook ? " (Send button covered)" : " (mouse hook unavailable)"));
+    // The one line that says which capability this build has. Without it, an
+    // operator cannot tell a machine that fell back to typed text from one
+    // still relying entirely on an accessibility tree it cannot read.
+    if (!reinstall)
+        LogInfo("typed-text capture armed - a message can now be inspected even where "
+                "the app's accessibility tree cannot be read");
     return true;
 }
 
@@ -2792,6 +3030,13 @@ void Stop() {
     // Enter on agent shutdown is the same failure this module refuses
     // everywhere else, just at a moment nobody would think to test.
     ResolveRelease(g_holdCtrl.load());
+
+    // Nothing typed outlives the monitor. The buffer exists to inspect a send
+    // that is about to happen; once nothing is inspecting, holding it would be
+    // keystroke capture with no purpose attached.
+    g_managedWnd.store(nullptr, std::memory_order_relaxed);
+    g_pasteSeen.store(false, std::memory_order_relaxed);
+    ClearTypedBuffer();
 
     g_running.store(false);
 }

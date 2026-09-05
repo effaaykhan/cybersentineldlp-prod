@@ -662,6 +662,101 @@ std::string ElementDescription(IUIAutomationElement* el) {
     return out.empty() ? "(opaque)" : out;
 }
 
+// ── Where the app actually keeps its UI ───────────────────────────────────
+//
+// ElementFromHandle(the foreground window) is the correct root for a native app
+// and the wrong one for every app that hosts a browser. WhatsApp for Windows is
+// a WinUI 3 window with a WebView2 child:
+//
+//   WinUIDesktopWin32WindowClass                  <- GetForegroundWindow()
+//     Microsoft.UI.Content.DesktopChildSiteBridge
+//     Chrome_WidgetWin_0                          <- the entire chat UI is here
+//
+// WinUI does not bridge the WebView2 fragment into its own UI Automation tree.
+// So FindAll(TreeScope_Descendants) from the top-level window was not slow and
+// not unlucky - it was COMPLETE, and the true answer was zero editable nodes.
+// The composer cannot be reached from that root however long it is given, which
+// is precisely what "0 editable node(s) seen in 17668ms" reported, correctly,
+// about a box that had a card number in it. Every symptom followed from this:
+// no composer, no Send button, and a focused element that was the WebView2 host
+// pane rather than anything a user could type into.
+//
+// The root is therefore enumerated rather than assumed. The window itself is
+// tried first - a native app (Telegram, Signal's Qt build) must behave exactly
+// as it did before, and it costs one FindAll - then its child windows, browser
+// hosts ahead of the rest.
+bool IsEmbeddedBrowserHost(const std::string& cls) {
+    // Chromium's own window classes: WebView2, Electron and CEF all use them.
+    if (cls.rfind("chrome_widgetwin_", 0) == 0)               return true;
+    if (cls == "chrome_renderwidgethosthwnd")                 return true;
+    // The WinUI 3 / Windows App SDK content island that hosts them.
+    if (cls == "microsoft.ui.content.desktopchildsitebridge") return true;
+    if (cls == "windows.ui.core.corewindow")                  return true;
+    if (cls == "intermediate d3d window")                     return true;
+    return false;
+}
+
+struct RootCandidate {
+    HWND h       = nullptr;
+    bool browser = false;
+    bool visible = false;
+};
+
+BOOL CALLBACK CollectRootWindow(HWND h, LPARAM lp) {
+    auto* out = reinterpret_cast<std::vector<RootCandidate>*>(lp);
+    if (!out) return FALSE;
+    if (out->size() >= 48) return FALSE;      // a window tree, not a search
+    char cls[128] = {0};
+    if (GetClassNameA(h, cls, (int)sizeof(cls) - 1) <= 0) return TRUE;
+    RootCandidate c;
+    c.h       = h;
+    c.browser = IsEmbeddedBrowserHost(ToLowerAscii(cls));
+    c.visible = IsWindowVisible(h) ? true : false;
+    out->push_back(c);
+    return TRUE;
+}
+
+// Browser hosts are included whether or not Windows calls them visible - a
+// composited Chromium surface is not always marked WS_VISIBLE and excluding it
+// would put us back where we started. Everything else must be visible, because
+// a hidden pane is where a background tab's text lives, and reading that would
+// classify a conversation nobody is looking at.
+std::vector<HWND> ContentRoots(HWND wnd) {
+    std::vector<HWND> roots;
+    if (!wnd) return roots;
+    roots.push_back(wnd);
+    std::vector<RootCandidate> kids;
+    EnumChildWindows(wnd, CollectRootWindow, reinterpret_cast<LPARAM>(&kids));
+    for (const auto& k : kids) if (k.browser)              roots.push_back(k.h);
+    for (const auto& k : kids) if (!k.browser && k.visible) roots.push_back(k.h);
+    return roots;
+}
+
+// Chromium builds its accessibility tree only once a client asks for it the way
+// a screen reader does - WM_GETOBJECT carrying OBJID_CLIENT. Until something
+// asks, the tree does not exist, and every UI Automation query against it is
+// answered, truthfully, with nothing.
+//
+// SendMessageTimeout, short and abort-if-hung, and from the LOCATOR thread
+// only: this blocks on another process's message pump, and a low-level hook
+// that did such a thing would be evicted by Windows for overrunning its budget
+// - the exact failure this file already carries a watchdog for.
+#ifndef OBJID_CLIENT
+#define OBJID_CLIENT ((LONG)0xFFFFFFFC)
+#endif
+
+void NudgeAccessibility(HWND wnd) {
+    if (!wnd) return;
+    std::vector<RootCandidate> kids;
+    EnumChildWindows(wnd, CollectRootWindow, reinterpret_cast<LPARAM>(&kids));
+    for (const auto& k : kids) {
+        if (!k.browser) continue;
+        DWORD_PTR res = 0;
+        SendMessageTimeout(k.h, WM_GETOBJECT, 0, (LPARAM)OBJID_CLIENT,
+                           SMTO_ABORTIFHUNG, 200, &res);
+    }
+}
+
 enum class ReadStatus {
     Ok,          // we read the composer
     EmptyBox,    // we found the composer; there was nothing in it
@@ -832,9 +927,15 @@ ComposerRead ReadComposer(IUIAutomation* uia, HWND wnd, DWORD pid,
     // came back reporting an empty box: empty because the message it was meant
     // to inspect had already gone. It is a fine thing for the background sampler
     // to do and an indefensible thing to do while holding a keystroke.
+    // Over every candidate root, not just the top-level window - see
+    // ContentRoots. In a WebView2 app the top-level window's tree contains no
+    // editable node at all, so this branch used to conclude "no composer" about
+    // an app whose composer was one child window away.
     if (wnd && allowWindowSweep) {
-        IUIAutomationElement* root = nullptr;
-        if (SUCCEEDED(uia->ElementFromHandle(wnd, &root)) && root) {
+        for (HWND cand : ContentRoots(wnd)) {
+            if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
+            IUIAutomationElement* root = nullptr;
+            if (FAILED(uia->ElementFromHandle(cand, &root)) || !root) continue;
             std::vector<Candidate> cands;
             CollectEditable(uia, root, g_cfg.maxFallbackTextBytes, cands, editableSeen, deadlineMs);
             root->Release();
@@ -1005,14 +1106,13 @@ bool RectBesideComposer(const RECT& cand, const RECT& comp) {
 
 // composerRect may be null; viaPosition (optional) reports which test won, so
 // the log can say whether the agent recognised the button or guessed it.
-IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
-                                     long long deadlineMs,
-                                     const RECT* composerRect,
-                                     bool* viaPosition) {
-    if (viaPosition) *viaPosition = false;
-    if (!uia || !wnd) return nullptr;
+// One root, one pass — see SearchEditableUnder for why this is split out.
+IUIAutomationElement* SearchSendButtonUnder(IUIAutomation* uia, HWND rootWnd,
+                                            long long deadlineMs,
+                                            const RECT* composerRect,
+                                            bool* viaPosition) {
     IUIAutomationElement* root = nullptr;
-    if (FAILED(uia->ElementFromHandle(wnd, &root)) || !root) return nullptr;
+    if (FAILED(uia->ElementFromHandle(rootWnd, &root)) || !root) return nullptr;
 
     IUIAutomationElement* named  = nullptr;
     IUIAutomationElement* placed = nullptr;   // best positional candidate so far
@@ -1029,8 +1129,12 @@ IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
                 if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
                 IUIAutomationElement* el = nullptr;
                 if (FAILED(arr->GetElement(i, &el)) || !el) continue;
-                const DWORD epid = ElementProcessId(el);
-                if (pid && epid && epid != pid) { el->Release(); continue; }
+                // No process filter. The root is a window inside the foreground
+                // app's OWN hierarchy, so anything under it belongs to that app
+                // whichever process draws it — and in a WebView2 app that is
+                // never the process that owns the window. Comparing against the
+                // window's pid rejected every button in the app, which is why
+                // "found no Send button" accompanied every other symptom.
 
                 RECT r{};
                 const bool measured = ElementRect(el, r);
@@ -1065,6 +1169,22 @@ IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
     }
     if (placed && viaPosition) *viaPosition = true;
     return placed;
+}
+
+IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
+                                     long long deadlineMs,
+                                     const RECT* composerRect,
+                                     bool* viaPosition) {
+    if (viaPosition) *viaPosition = false;
+    if (!uia || !wnd) return nullptr;
+    (void)pid;
+    for (HWND cand : ContentRoots(wnd)) {
+        if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
+        IUIAutomationElement* found =
+            SearchSendButtonUnder(uia, cand, deadlineMs, composerRect, viaPosition);
+        if (found) return found;
+    }
+    return nullptr;
 }
 
 // ── The pointer as the cheap search ───────────────────────────────
@@ -1118,24 +1238,11 @@ bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
     return published;
 }
 
-IUIAutomationElement* FindComposerElement(IUIAutomation* uia, HWND wnd, DWORD pid,
+// One root, one pass. Extracted so the same rules about what counts as a
+// composer can be run against several candidate roots without being restated.
+IUIAutomationElement* SearchEditableUnder(IUIAutomation* uia, IUIAutomationElement* root,
                                           long long deadlineMs, int& editableSeen) {
-    if (!uia) return nullptr;
-
-    IUIAutomationElement* focused = nullptr;
-    if (SUCCEEDED(uia->GetFocusedElement(&focused)) && focused) {
-        const DWORD fpid = ElementProcessId(focused);
-        if ((pid == 0 || fpid == 0 || fpid == pid) && ElementIsEditable(focused)) {
-            ++editableSeen;
-            return focused;   // caller releases
-        }
-        focused->Release();
-    }
-
-    if (!wnd) return nullptr;
-    IUIAutomationElement* root = nullptr;
-    if (FAILED(uia->ElementFromHandle(wnd, &root)) || !root) return nullptr;
-
+    if (!uia || !root) return nullptr;
     IUIAutomationElement* best = nullptr;
     for (int controlType : { UIA_EditControlTypeId, UIA_DocumentControlTypeId }) {
         if (best || (deadlineMs && NowSteadyMs() >= deadlineMs)) break;
@@ -1176,8 +1283,49 @@ IUIAutomationElement* FindComposerElement(IUIAutomation* uia, HWND wnd, DWORD pi
         }
         cond->Release();
     }
-    root->Release();
     return best;
+}
+
+// `rootUsed` reports which window actually held the composer, so the Send
+// button search can start there instead of paying for the same discovery twice.
+IUIAutomationElement* FindComposerElement(IUIAutomation* uia, HWND wnd, DWORD pid,
+                                          long long deadlineMs, int& editableSeen,
+                                          HWND* rootUsed = nullptr) {
+    if (rootUsed) *rootUsed = wnd;
+    if (!uia) return nullptr;
+    (void)pid;
+
+    IUIAutomationElement* focused = nullptr;
+    if (SUCCEEDED(uia->GetFocusedElement(&focused)) && focused) {
+        // A cross-process focus is the NORM in the apps this module exists for:
+        // the window belongs to the shell (WhatsApp.Root.exe) and the composer
+        // to the renderer (msedgewebview2.exe). ReadComposer has always accepted
+        // that. Requiring a pid match HERE rejected the composer of every
+        // Chromium-hosted app outright and sent the search down the tree-walk
+        // path, which - rooted at the top-level window - could not reach it
+        // either. Editability is still required, so the WebView2 host pane that
+        // focus resolves to before the tree is built is still not mistaken for
+        // a message box.
+        if (ElementIsEditable(focused)) {
+            ++editableSeen;
+            return focused;   // caller releases
+        }
+        focused->Release();
+    }
+
+    if (!wnd) return nullptr;
+    for (HWND cand : ContentRoots(wnd)) {
+        if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
+        IUIAutomationElement* root = nullptr;
+        if (FAILED(uia->ElementFromHandle(cand, &root)) || !root) continue;
+        IUIAutomationElement* best = SearchEditableUnder(uia, root, deadlineMs, editableSeen);
+        root->Release();
+        if (best) {
+            if (rootUsed) *rootUsed = cand;
+            return best;
+        }
+    }
+    return nullptr;
 }
 
 // Chromium does not build an accessibility tree until something asks it to, and
@@ -1978,6 +2126,10 @@ void LocatorThread() {
 
     IUIAutomationElement* composer = nullptr;
     DWORD     composerPid      = 0;
+    // The window the composer was actually found in, which in a browser-hosted
+    // app is a child of the foreground window rather than the window itself.
+    // Kept so the Send button search starts where the UI demonstrably is.
+    HWND      contentRoot      = nullptr;
     long long lastFindMs       = 0;
     long long findComplainedAt = 0;
 
@@ -2006,6 +2158,7 @@ void LocatorThread() {
                     PublishComposer(nullptr, 0);
                     composer->Release(); composer = nullptr; composerPid = 0;
                 }
+                contentRoot = nullptr;
                 if (sendBtn) {
                     PublishSendBtn(nullptr, 0);
                     sendBtn->Release(); sendBtn = nullptr; sendPid = 0;
@@ -2026,6 +2179,7 @@ void LocatorThread() {
             if (g_refindComposer.exchange(false) && composer) {
                 PublishComposer(nullptr, 0);
                 composer->Release(); composer = nullptr; composerPid = 0;
+                contentRoot = nullptr;
                 lastFindMs = 0;
             }
 
@@ -2033,6 +2187,7 @@ void LocatorThread() {
             if (composer && t.pid != composerPid) {
                 PublishComposer(nullptr, 0);
                 composer->Release(); composer = nullptr; composerPid = 0;
+                contentRoot = nullptr;
             }
             if (sendBtn && (t.pid != sendPid || !ElementAlive(sendBtn))) {
                 PublishSendBtn(nullptr, 0);
@@ -2045,16 +2200,31 @@ void LocatorThread() {
                 if (!lastFindMs || now - lastFindMs >= 3000) {
                     lastFindMs = now;
                     int seen = 0;
-                    composer = FindComposerElement(uia, t.wnd, t.pid, now + 8000, seen);
+                    // Ask the app's embedded browser to build its accessibility
+                    // tree BEFORE looking for anything in it. Chromium keeps it
+                    // switched off until a client asks, and a search that runs
+                    // before the ask finds nothing however long it is given.
+                    NudgeAccessibility(t.wnd);
+                    HWND usedRoot = t.wnd;
+                    composer = FindComposerElement(uia, t.wnd, t.pid, now + 8000,
+                                                   seen, &usedRoot);
                     if (composer) {
                         composerPid = t.pid;
+                        contentRoot = usedRoot;
                         PublishComposer(composer, t.pid);
                         LogInfo("locator locked onto the composer in " + t.exe + " after " +
-                                std::to_string(NowSteadyMs() - now) + "ms");
+                                std::to_string(NowSteadyMs() - now) + "ms" +
+                                (usedRoot != t.wnd
+                                     ? " (inside an embedded browser window)" : ""));
                     } else if (!findComplainedAt || now - findComplainedAt > 60000) {
                         findComplainedAt = now;
+                        // The root count matters: "0 editable nodes across 1
+                        // root" is an app we never looked inside, and "across 6"
+                        // is one we looked inside and genuinely cannot read.
                         LogWarn("locator cannot find a composer in " + t.exe + " (" +
-                                std::to_string(seen) + " editable node(s) seen in " +
+                                std::to_string(seen) + " editable node(s) seen across " +
+                                std::to_string(ContentRoots(t.wnd).size()) +
+                                " window root(s) in " +
                                 std::to_string(NowSteadyMs() - now) + "ms) - typed "
                                 "messages in this app cannot be inspected");
                     }
@@ -2098,7 +2268,8 @@ void LocatorThread() {
                     if (!lastSendFindMs || now - lastSendFindMs >= wait) {
                         lastSendFindMs = now;
                         bool viaPos = false;
-                        sendBtn = FindSendButton(uia, t.wnd, t.pid, 0,
+                        sendBtn = FindSendButton(uia, contentRoot ? contentRoot : t.wnd,
+                                                 t.pid, 0,
                                                  haveCr ? &cr : nullptr, &viaPos);
                         if (sendBtn) {
                             sendPid = t.pid; sendMisses = 0;

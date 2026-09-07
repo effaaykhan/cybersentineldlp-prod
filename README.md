@@ -247,6 +247,17 @@ Replace `<SERVER>` with the DLP manager this endpoint reports to. The manager
 publishes the installer and the agent binary itself — endpoints do not need
 access to GitHub, and the repository being private no longer breaks installs.
 
+To take a build from one server while the agent keeps reporting to another —
+updating a production endpoint from a test server, say — set the source
+explicitly and the script will use it instead of the one in the agent's config:
+
+```powershell
+$env:CSDLP_DIST_BASE='http://<BUILD-SERVER>:55100/api/v1/agent-dist'
+irm "$env:CSDLP_DIST_BASE/manage-windows-agent.ps1" | iex
+```
+
+The override survives the self-elevation prompt, so it is answered once.
+
 The script self-elevates to Administrator, detects any existing agent and its
 status (running / stopped / error / none), then offers:
 

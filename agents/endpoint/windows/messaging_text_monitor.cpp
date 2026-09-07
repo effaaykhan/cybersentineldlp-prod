@@ -175,6 +175,7 @@ std::atomic<bool> g_swallowNextUp{false};
 // Searching is now driven by this instead of by the clock: look when there is
 // something to send, never when there is not.
 std::atomic<bool> g_composerHasText{false};
+std::atomic<long long> g_hoverMissLoggedMs{0};
 // Said once per app, not four times a second, when the pointer probe works out
 // where Send is - it is the line that tells an operator the mouse is covered.
 std::atomic<bool> g_hoverSaidSo{false};
@@ -1387,11 +1388,24 @@ bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
     if (FAILED(uia->ElementFromPoint(p, &el)) || !el) return false;
 
     bool published = false;
-    const DWORD epid = ElementProcessId(el);
     RECT r{};
-    if ((!t.pid || !epid || epid == t.pid) && ElementRect(el, r)) {
+    // No process check on what comes back. In every Chromium-hosted app the Send
+    // button belongs to the renderer - WhatsApp's is msedgewebview2.exe while
+    // the window is WhatsApp.Root.exe - so an equality test against the
+    // foreground pid rejected the exact control it was meant to find, and did so
+    // silently. The same filter had already been dropped from the composer and
+    // Send-button searches; this copy was missed, and it is why the hover probe
+    // never published a rectangle on WhatsApp.
+    //
+    // Nothing is lost by removing it: the cursor is already proven to be inside
+    // the managed window's rectangle above, and the size, control-type and
+    // name/position tests below still have to pass. The rectangle is published
+    // against t.pid either way, so the mouse hook's snapshot check still
+    // compares like with like.
+    if (ElementRect(el, r)) {
         // The hit test returns the innermost node, which for an icon button is
-        // the Image inside it rather than the Button itself.
+        // the Image inside it rather than the Button itself - hence Image
+        // counting as clickable here.
         //
         // The control type gate applies to the NAME test as well, not only the
         // positional one. A conversation row reading "send me the file when you
@@ -1399,12 +1413,32 @@ bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
         // it would be the agent breaking the app.
         const CONTROLTYPEID ct = ElementControlType(el);
         const bool clickable = (ct == kButtonControlTypeId || ct == kImageControlTypeId);
-        if (clickable && ButtonSized(r) &&
-            (ElementSuggestsSend(el) ||
-             (composerRect && RectBesideComposer(r, *composerRect)))) {
-            std::lock_guard<std::mutex> lk(g_sendMx);
-            g_sendRect = r; g_sendPid = t.pid; g_sendAtMs = NowSteadyMs();
-            published = true;
+        if (clickable && ButtonSized(r)) {
+            if (ElementSuggestsSend(el) ||
+                (composerRect && RectBesideComposer(r, *composerRect))) {
+                std::lock_guard<std::mutex> lk(g_sendMx);
+                g_sendRect = r; g_sendPid = t.pid; g_sendAtMs = NowSteadyMs();
+                published = true;
+            } else {
+                // Hovering something clickable and button-sized that we decline
+                // to call Send. Where the composer cannot be read there is no
+                // positional fallback either, so the name is the only test left;
+                // if an app labels its send control in a way this does not
+                // recognise, this line is the difference between knowing that
+                // and guessing. Once a minute, not once a frame.
+                const long long now  = NowSteadyMs();
+                const long long last = g_hoverMissLoggedMs.load(std::memory_order_relaxed);
+                if (!last || now - last > 60000) {
+                    g_hoverMissLoggedMs.store(now, std::memory_order_relaxed);
+                    LogInfo("locator saw a clickable control under the pointer in " +
+                            t.exe + " but does not recognise it as Send - " +
+                            ElementDescription(el) + " size=" +
+                            std::to_string(r.right - r.left) + "x" +
+                            std::to_string(r.bottom - r.top) +
+                            (composerRect ? ""
+                                          : " (no message-box rectangle, so the name was the only test)"));
+                }
+            }
         }
     }
     el->Release();
@@ -2604,6 +2638,34 @@ void SamplerThread() {
             // and on an app whose tree cannot be read the buffer is the only
             // source there is.
             if (readableBox && text.empty()) ClearTypedBuffer();
+
+            // Where the app's tree cannot be read at all - WhatsApp's WebView2
+            // composer being the case this module exists for - every read above
+            // returns nothing and `text` stays empty no matter what is in the
+            // box. The keystroke buffer is then the only account of it, and it
+            // is already what the Enter path falls back to.
+            //
+            // Without the same fallback HERE the sampler stayed blind, and two
+            // things followed that made the Send button unenforceable while
+            // Enter worked perfectly:
+            //
+            //   * g_composerHasText stayed false, so the whole "look for the
+            //     Send control" block in the locator was gated off. The agent
+            //     never went looking for the button while there was a message
+            //     worth blocking.
+            //   * g_snapSensitive stayed false, so even a correctly located
+            //     button would have been clicked straight through: the mouse
+            //     hook cannot classify anything itself - it runs inside a
+            //     low-level hook, where a classifier pass would blow
+            //     LowLevelHooksTimeout and cost us the hook entirely - so it can
+            //     only act on a verdict the sampler reached in advance.
+            //
+            // One asymmetry, two symptoms, and it read as "Enter is enforced,
+            // the mouse is not".
+            if (text.empty()) {
+                const std::string typed = TypedTextFor(t.wnd);
+                if (!typed.empty()) text = typed;
+            }
 
             // What the locator uses to decide whether to look for the Send
             // control at all: it only exists, and only matters, while there is

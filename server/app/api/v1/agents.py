@@ -2044,6 +2044,12 @@ async def network_share_policy(
 class MessagingAppPolicyResponse(BaseModel):
     enforced: bool                        # an active messaging_app_control policy exists
     action: str                           # "alert" (log/event only) | "block" (terminate app)
+    # WHICH policy produced this verdict. The endpoint always knew - it selects a
+    # row to build the answer from - but never said, so every blocked message
+    # reached the console with policy_id null and an analyst had no way to tell
+    # which rule fired, or which one to change to stop it firing again.
+    policy_id: Optional[str] = None
+    policy_name: Optional[str] = None
     apps: List[str]                       # managed messaging exe names (lowercased)
     exception_users: List[str]            # users/groups exempt (lowercased)
     exempt_file_types: List[str]          # extensions never inspected (no leading dot)
@@ -2176,6 +2182,9 @@ async def messaging_app_policy(
         exempt_file_types=[str(t).strip().lower().lstrip(".") for t in (exc.get("file_types") or []) if str(t).strip()],
         inspect_messages=inspect_messages,
         message_data_types=data_types,
+        # Named, so the event the endpoint raises can say which rule decided.
+        policy_id=str(policy.id),
+        policy_name=policy.name,
         generated_at=datetime.now(timezone.utc),
     )
 

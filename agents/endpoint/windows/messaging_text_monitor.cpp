@@ -1674,10 +1674,51 @@ std::string GenerateUuidLike() {
     return buf;
 }
 
+// "whatsapp.root.exe" is what the process is called, not what a person calls
+// the app they were using. An analyst reading an alert at 2am should not have to
+// know that WhatsApp for Windows runs as WhatsApp.Root.exe.
+std::string FriendlyAppName(const std::string& exeLower) {
+    if (exeLower.rfind("whatsapp", 0) == 0)                       return "WhatsApp";
+    if (exeLower.find("teams") != std::string::npos)              return "Microsoft Teams";
+    if (exeLower.rfind("telegram", 0) == 0)                       return "Telegram";
+    if (exeLower.rfind("slack", 0) == 0)                          return "Slack";
+    if (exeLower.rfind("discord", 0) == 0)                        return "Discord";
+    if (exeLower.rfind("signal", 0) == 0)                         return "Signal";
+    std::string n = exeLower;
+    const size_t dot = n.rfind(".exe");
+    if (dot != std::string::npos) n.erase(dot);
+    if (!n.empty()) n[0] = (char)std::toupper((unsigned char)n[0]);
+    return n;
+}
+
+// The title of the window the message was being sent from. On Teams and Slack
+// this names the conversation, which is the single most useful thing an analyst
+// can be told - "sent to which chat" is the first question every time. WhatsApp
+// titles its window with the product name alone, so it is only reported when it
+// says something the app name does not.
+std::string ConversationHint(HWND wnd, const std::string& appName) {
+    if (!wnd) return {};
+    wchar_t buf[256] = {0};
+    const int n = GetWindowTextW(wnd, buf, 255);
+    if (n <= 0) return {};
+    (void)n;
+    // Trimmed inline: TrimText is defined further down and this needs no more
+    // than the edges taken off a window title.
+    std::string title = WideToUtf8(buf);
+    const size_t b = title.find_first_not_of(" \t\r\n");
+    const size_t e = title.find_last_not_of(" \t\r\n");
+    title = (b == std::string::npos) ? std::string() : title.substr(b, e - b + 1);
+    if (title.empty()) return {};
+    const std::string lt = ToLowerAscii(title), la = ToLowerAscii(appName);
+    if (lt == la) return {};                       // just the product name
+    return title;
+}
+
 void EmitEvent(const std::string& exe, DWORD pid, const std::string& action,
                const std::string& severity,
                const NetworkExfilMonitor::ClassifyResult& cls,
-               const std::string& reason, const std::string& text) {
+               const std::string& reason, const std::string& text,
+               const std::string& via = "", HWND wnd = nullptr) {
     if (!g_cfg.sendEvent) return;
     std::ostringstream j;
     j << "{";
@@ -1730,6 +1771,73 @@ void EmitEvent(const std::string& exe, DWORD pid, const std::string& action,
     if (!reason.empty()) {
         j << "\"description\":\"" << EscapeJson(reason) << "\",";
     }
+    // ── What an analyst actually needs ──────────────────────────────────
+    // The same shape the browser-extension events use, so one detail view
+    // serves both. Before this, a blocked message arrived as a severity chip, a
+    // detector name and a sentence - enough to know something happened, not
+    // enough to decide what to do about it.
+    const std::string exeLower = ToLowerAscii(exe);
+    const std::string appName  = FriendlyAppName(exeLower);
+    j << "\"activity\":\"send\",";
+    j << "\"app_category\":\"messaging\",";
+    j << "\"app_name\":\"" << EscapeJson(appName) << "\",";
+    j << "\"app_id\":\"" << EscapeJson(exeLower) << "\",";
+    // How it was sent. This lived only inside the description sentence, so it
+    // could not be filtered, counted, or charted - and the two send paths fail
+    // independently, which is exactly when you want to count them separately.
+    if (!via.empty()) j << "\"transfer_method\":\"" << EscapeJson(via) << "\",";
+    const std::string chat = ConversationHint(wnd, appName);
+    if (!chat.empty()) j << "\"recipients\":\"" << EscapeJson(chat) << "\",";
+    if (!text.empty()) {
+        j << "\"text_content\":\"" << EscapeJson(text) << "\",";
+        j << "\"text_truncated\":" << (text.size() >= kTypedMaxBytes ? "true" : "false") << ",";
+    }
+    if (!cls.labels.empty()) {
+        j << "\"matched_rules\":[";
+        for (size_t i = 0; i < cls.labels.size(); ++i) {
+            if (i) j << ",";
+            j << "\"" << EscapeJson(cls.labels[i]) << "\"";
+        }
+        j << "],";
+    }
+    // WHICH policy decided, by id and by name. policy_id arriving null is what
+    // made a blocked message unanswerable: an analyst could see the verdict and
+    // still not know which rule to change to stop it happening again.
+    {
+        NetworkExfilMonitor::MessagingVerdict pv;
+        if (g_cfg.messagingPolicy) {
+            try { pv = g_cfg.messagingPolicy(exeLower, g_cfg.username); } catch (...) {}
+        }
+        if (!pv.policyId.empty()) {
+            j << "\"policy_id\":\"" << EscapeJson(pv.policyId) << "\",";
+            j << "\"matched_policies\":[\"" << EscapeJson(pv.policyId) << "\"],";
+        }
+        if (!pv.policyName.empty()) {
+            j << "\"governing_policies\":[{\"policy_id\":\"" << EscapeJson(pv.policyId)
+              << "\",\"policy_name\":\"" << EscapeJson(pv.policyName) << "\"}],";
+        }
+        // One sentence saying what was found, where it was going, how it was
+        // sent and under which rule - written server-side for web activity, and
+        // written here for the same reason: the verdict should read as a
+        // decision someone made, not as a status code.
+        std::string why = "Message to " + appName;
+        if (!chat.empty()) why += " (" + chat + ")";
+        if (!cls.labels.empty()) {
+            why += " contained " + cls.labels[0];
+            for (size_t i = 1; i < cls.labels.size(); ++i) why += ", " + cls.labels[i];
+        } else {
+            why += " contained sensitive data";
+        }
+        if (!cls.category.empty()) why += ", classified " + cls.category;
+        why += ". ";
+        why += (action == "BLOCK" ? "The send was blocked" : "The send was allowed and recorded");
+        if (via == "enter_key")        why += " when Enter was pressed";
+        else if (via == "send_button") why += " when the Send button was clicked";
+        if (!pv.policyName.empty()) why += ", under the policy \"" + pv.policyName + "\"";
+        why += ".";
+        j << "\"policy_reason\":\"" << EscapeJson(why) << "\",";
+    }
+
     j << "\"timestamp\":\"" << NowIso8601() << "\"";
     j << "}";
     try { g_cfg.sendEvent(j.str()); } catch (...) {}
@@ -1995,7 +2103,8 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
     // "blocked" then would be a lie in the one record an analyst will trust.
     if (ResolveDrop()) {
         EmitEvent(exe, pid, "BLOCK", severity, cls,
-                  "Blocked sensitive message in " + exe + " (" + cls.category + ")", text);
+                  "Blocked sensitive message in " + exe + " (" + cls.category + ")", text,
+                  "enter_key", wnd);
         LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
                 " detected=[" + what + "] via=" + via);
         ShowBlockedNotice(exe, what);
@@ -2003,7 +2112,8 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
     } else {
         EmitEvent(exe, pid, "ALERT", severity, cls,
                   "Sensitive message sent in " + exe + " (" + cls.category +
-                  ") - inspection did not finish before the send was released", text);
+                  ") - inspection did not finish before the send was released", text,
+                  "enter_key", wnd);
         LogWarn("MESSAGING_TEXT_LATE exe=" + exe + " category=" + cls.category +
                 " detected=[" + what + "] - verdict arrived after the watchdog released the keystroke");
         ClearTypedBuffer();
@@ -2101,7 +2211,8 @@ void AuditAndAct(IUIAutomation* uia, HWND wnd, DWORD pid,
     const std::string severity = (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
     EmitEvent(exe, pid, "ALERT", severity, cls,
               "Sensitive message sent in " + exe + " (" + cls.category +
-              ") - policy is in alert mode, the message was not stopped", text);
+              ") - policy is in alert mode, the message was not stopped", text,
+              "enter_key", wnd);
     LogWarn("MESSAGING_TEXT_ALERT exe=" + exe + " category=" + cls.category +
             " detected=[" + what + "] via=" + via);
 }
@@ -2407,6 +2518,24 @@ void LocatorThread() {
             TargetApp t = ResolveForegroundApp();
             if (t.exe.empty() || !g_cfg.messagingPolicy) continue;
 
+            // Our own block dialog is MB_SETFOREGROUND | MB_SYSTEMMODAL, so the
+            // instant we enforce, WE become the foreground window. The branch
+            // below then read that as "the user left the managed app" and tore
+            // down the composer, the Send button and the click rectangle.
+            //
+            // Every successful block therefore DISARMED the mouse path, which
+            // re-armed only once the app regained focus and both threads had
+            // ticked again. A click inside that window went through unexamined
+            // and in complete silence - the hook simply returns.
+            //
+            // Enter never showed it, because that path classifies at send time
+            // and depends on none of this precomputed state. Which is exactly
+            // the shape of "Enter always blocks, the mouse blocks sometimes" on
+            // a binary that did not change between the two.
+            //
+            // Our own window is not a focus change. Leave everything standing.
+            if (t.pid == GetCurrentProcessId()) continue;
+
             const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
 
             // Focus left everything we care about. Drop what we hold so the
@@ -2593,6 +2722,11 @@ void SamplerThread() {
                 g_managedWnd.store(nullptr, std::memory_order_relaxed);
                 continue;
             }
+
+            // See the locator: our own block dialog takes the foreground, and
+            // treating that as a focus change is what disarmed the mouse path
+            // after every block it performed.
+            if (t.pid == GetCurrentProcessId()) continue;
 
             const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t);
             // Block mode used to be excluded here, on the reasoning that it
@@ -2973,9 +3107,12 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         const std::string severity =
             (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
         try {
+            // Resolved here rather than in the hook: this runs on a detached
+            // thread and the app is still foreground, the block notice not yet up.
             EmitEvent(exe, pid, "BLOCK", severity, cls,
                       "Blocked sensitive message in " + exe + " (" + cls.category +
-                      ") - Send button click", text);
+                      ") - Send button click", text,
+                      "send_button", GetForegroundWindow());
         } catch (...) {}
         LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
                 " detected=[" + what + "] via=send-button-click");

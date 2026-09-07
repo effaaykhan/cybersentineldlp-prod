@@ -66,6 +66,11 @@ using AppActionFn = std::function<bool(const std::string& processName,
 struct MessagingVerdict {
     bool managed = false;                       // is exeLower a managed messaging app?
     bool block   = false;                       // sensitive attach: true = block, false = alert
+    // WHICH policy produced this verdict. Carried so the event an endpoint
+    // raises can name the rule that decided, instead of arriving with a null
+    // policy_id and leaving an analyst to guess which rule to change.
+    std::string policyId;
+    std::string policyName;
     std::vector<std::string> exemptExtensions;  // lowercased, no leading dot
     // Typed chat text, not attachments (see messaging_text_monitor.h). Separate
     // from `managed` because an operator may well want attachment control on a

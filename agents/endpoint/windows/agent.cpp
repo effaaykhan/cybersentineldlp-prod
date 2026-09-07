@@ -2879,6 +2879,9 @@ if (!shouldBlock) {
                          "discord.exe", "signal.exe"};
              }
              bool inspectMessages = JsonBoolTrue(response, "inspect_messages");
+             // Which policy this verdict came from, so a blocked message can name it.
+             std::string policyId   = config.ExtractJsonValue(response, "policy_id");
+             std::string policyName = config.ExtractJsonValue(response, "policy_name");
              // Uppercased to match the classifier's canonical labels.
              auto dataTypes = ParseJsonStrArray(response, "message_data_types");
              for (auto& t : dataTypes) {
@@ -2893,6 +2896,8 @@ if (!shouldBlock) {
                  messagingApps        = std::set<std::string>(apps.begin(), apps.end());
                  messagingExceptUsers = std::set<std::string>(exUsers.begin(), exUsers.end());
                  messagingExemptTypes = exTypes;
+                 messagingPolicyId    = policyId;
+                 messagingPolicyName  = policyName;
              }
              messagingEnforced.store(enforced);
              // The app list is logged in full, not just counted. "apps=9" cannot
@@ -2962,6 +2967,9 @@ if (!shouldBlock) {
      // owning process exe (lowercased) and the current user, report whether it's a
      // managed messaging app, whether to BLOCK (vs alert) on a sensitive attachment,
      // and the exempt file types. Fail-closed to "not managed" when no policy active.
+     std::string messagingPolicyId;
+     std::string messagingPolicyName;
+
      NetworkExfilMonitor::MessagingVerdict GetMessagingVerdict(
              const std::string& exeLower, const std::string& userName) {
          NetworkExfilMonitor::MessagingVerdict v;
@@ -2975,6 +2983,8 @@ if (!shouldBlock) {
              v.exemptExtensions = messagingExemptTypes;
              v.inspectMessages  = messagingInspectMessages;
              v.messageDataTypes = messagingDataTypes;
+             v.policyId         = messagingPolicyId;
+             v.policyName       = messagingPolicyName;
          }
          return v;
      }
@@ -6106,6 +6116,22 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          const auto pollInterval = std::chrono::milliseconds(200);
          const auto idleInterval = std::chrono::seconds(2);
 
+         // Windows increments this on every WRITE to the clipboard. Comparing
+         // CONTENT, as this loop used to, cannot tell "the user copied
+         // something" from "the clipboard already contained something" - and
+         // lastClipboard starts empty, so the first poll after the agent
+         // started reported whatever was already on the clipboard as a fresh
+         // copy, attributed to whichever window happened to be focused at that
+         // instant. Text copied hours earlier, or by another machine over RDP,
+         // surfaced as an event the user knows they did not cause. Reported
+         // from the field as "a clipboard event but I never copied anything",
+         // and every such event spends the credibility of the real ones.
+         //
+         // Primed here, before the loop, so pre-existing content is never
+         // reported: at startup we adopt the current sequence number rather
+         // than treating everything already there as new.
+         DWORD lastClipboardSeq = GetClipboardSequenceNumber();
+
          while (running) {
              if (!hasClipboardPolicies || !allowEvents) {
                  std::this_thread::sleep_for(idleInterval);
@@ -6113,6 +6139,33 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              }
 
              try {
+                 // Nothing has been written since the last look. A read does not
+                 // bump the sequence number, so this also stops the agent's own
+                 // clipboard reads from looking like user activity.
+                 const DWORD seq = GetClipboardSequenceNumber();
+                 if (seq == lastClipboardSeq) {
+                     std::this_thread::sleep_for(pollInterval);
+                     continue;
+                 }
+                 lastClipboardSeq = seq;
+
+                 // WHO put it there. The foreground window is a guess - it is
+                 // whatever the user happened to be looking at - while the
+                 // clipboard owner is the window that actually performed the
+                 // copy. On a real copy they agree; when they disagree, the
+                 // owner is the truthful answer and the foreground window is
+                 // how an innocent app got blamed.
+                 // Its title, not its process: naming the owner window needs no
+                 // extra header or link dependency, and a window title is what
+                 // an analyst recognises anyway ("Book1 - Excel" beats
+                 // "EXCEL.EXE"). Empty when the owner has gone away, which is
+                 // normal - a process may write and exit.
+                 std::string clipOwner;
+                 if (HWND owner = GetClipboardOwner()) {
+                     char ot[256] = {0};
+                     if (GetWindowTextA(owner, ot, sizeof(ot) - 1) > 0) clipOwner = ot;
+                 }
+
                  // Get active window title to detect source file
                  HWND hwnd = GetForegroundWindow();
                  char windowTitle[256] = {0};
@@ -6133,7 +6186,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                              if (!text.empty() && text != lastClipboard) {
                                  lastClipboard = text;
                                  CloseClipboard();   // release BEFORE classify/enforce
-                                 HandleClipboardEvent(text, lastActiveWindow);
+                                 HandleClipboardEvent(text, lastActiveWindow, clipOwner);
                                  std::this_thread::sleep_for(pollInterval);
                                  continue;
                              }
@@ -6149,7 +6202,8 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          }
      }
      
-     void HandleClipboardEvent(const std::string& content, const std::string& windowTitle) {
+     void HandleClipboardEvent(const std::string& content, const std::string& windowTitle,
+                               const std::string& sourceApp = "") {
         try {
             std::cout << "\n[DEBUG] ========================================" << std::endl;
             std::cout << "[DEBUG] HandleClipboardEvent called" << std::endl;
@@ -6380,6 +6434,16 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             if (!windowTitle.empty()) {
                 json.AddString("source_window", windowTitle);
             }
+            // WHICH window performed the copy, as opposed to which one happened
+            // to be in front. These differ exactly when the attribution would
+            // otherwise be wrong, so the difference is worth carrying.
+            if (!sourceApp.empty()) {
+                json.AddString("app_name", sourceApp);
+            }
+            // Renders this in the same detail panel the browser-extension and
+            // messaging events use, instead of a severity chip and one line.
+            json.AddString("activity", "copy");
+            json.AddString("app_category", "clipboard");
 
             json.AddString("timestamp", GetCurrentTimestampISO());
 

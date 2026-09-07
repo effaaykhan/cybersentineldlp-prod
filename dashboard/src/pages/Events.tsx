@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen, Printer , Globe} from 'lucide-react'
+import { Search, Filter, FileText, Calendar, Shield, AlertTriangle, Ban, X, ArrowRight, File, HardDrive, Usb, ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Plus, Edit, Trash, Move, Copy, FilePlus, FileEdit, FileX, FolderOpen, Printer , Globe, MessageSquare} from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { searchEvents, getAllAgents, clearAllEvents, type Event } from '@/lib/api'
@@ -243,6 +243,7 @@ const WEB_ACTIVITY_LABEL: Record<string, string> = {
   send: 'Send',
   post: 'Post / Generate',
   ai_response: 'AI response',
+  copy: 'Copy',
 }
 
 const WEB_CATEGORY_LABEL: Record<string, string> = {
@@ -250,6 +251,19 @@ const WEB_CATEGORY_LABEL: Record<string, string> = {
   cloud_storage: 'Cloud storage',
   collaboration: 'Collaboration',
   genai: 'Generative AI',
+  // Messaging apps report through the same shape as the browser extension, so
+  // one detail view serves both a blocked WhatsApp message and a blocked
+  // ChatGPT prompt.
+  messaging: 'Messaging app',
+  clipboard: 'Clipboard',
+}
+
+// How the message was actually sent. The two send paths are enforced by
+// different machinery and have failed independently, so an analyst looking at a
+// gap needs to see which one this was rather than infer it from a sentence.
+const SEND_METHOD_LABEL: Record<string, string> = {
+  enter_key: 'Enter key',
+  send_button: 'Send button',
 }
 
 function Fact({ label, value }: { label: string; value: React.ReactNode }) {
@@ -442,18 +456,36 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
           {isWeb && (
             <div className="rounded-cs-card border border-cs-hair bg-cs-panel-2 p-6">
               <div className="mb-4 flex items-center gap-2">
-                <Globe className="h-5 w-5 text-cs-indigo" />
+                {event.app_category === 'messaging'
+                  ? <MessageSquare className="h-5 w-5 text-cs-indigo" />
+                  : <Globe className="h-5 w-5 text-cs-indigo" />}
                 <label className="text-sm font-medium uppercase text-cs-ink-2">
-                  {WEB_ACTIVITY_LABEL[event.activity || ''] || 'Web activity'}
+                  {event.app_category === 'messaging' ? 'Message'
+                    : event.app_category === 'clipboard' ? 'Clipboard'
+                    : (WEB_ACTIVITY_LABEL[event.activity || ''] || 'Web activity')}
                   {event.app_name ? ` — ${event.app_name}` : ''}
                 </label>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <Fact label="Destination" value={event.app_name || event.page_host || '—'} />
+                <Fact label={event.app_category === 'clipboard' ? 'Copied from' : 'Destination'}
+                      value={event.app_name || event.page_host || '—'} />
                 <Fact label="Category" value={WEB_CATEGORY_LABEL[event.app_category || ''] || event.app_category || '—'} />
                 <Fact label="Activity" value={WEB_ACTIVITY_LABEL[event.activity || ''] || event.activity || '—'} />
               </div>
+
+              {(event.recipients || event.transfer_method) && (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  {event.recipients && (
+                    <Fact label={event.app_category === 'messaging' ? 'Conversation' : 'Recipients'}
+                          value={event.recipients} />
+                  )}
+                  {event.transfer_method && (
+                    <Fact label="Sent by"
+                          value={SEND_METHOD_LABEL[event.transfer_method] || event.transfer_method} />
+                  )}
+                </div>
+              )}
 
               {event.page_url && (
                 <div className="mt-3">

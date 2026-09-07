@@ -11,7 +11,9 @@
 # The data tier (postgres/mongo/redis/opensearch) is never touched.
 #
 # One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/scripts/install-mirror-autopull.sh | sudo bash
+#   curl -fsSL -H "Authorization: Bearer $TOKEN" \
+#     https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/scripts/install-mirror-autopull.sh | sudo bash
+#   (the repository is private - without the token GitHub answers 404)
 #
 # Env overrides: INSTALL_DIR (default /opt/cybersentineldlp),
 #                COMPOSE_FILE (default docker-compose.prod.yml),

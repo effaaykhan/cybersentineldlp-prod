@@ -6,8 +6,18 @@
 # no source code is ever placed on the production server. All services run from
 # pre-built images on GHCR.
 #
-# Usage (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo bash
+# Usage (one-liner). The repository is PRIVATE, so the fetch of this script
+# needs a token too - GitHub answers 404, not 403, to an anonymous caller, so
+# without one the one-liner looks like a broken URL rather than a login prompt.
+# Passing the token through to the script as well means it is asked for once,
+# here, instead of again half way through the install:
+#   TOKEN=github_pat_...
+#   curl -fsSL -H "Authorization: Bearer $TOKEN" \
+#     https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh \
+#     | sudo GITHUB_TOKEN="$TOKEN" bash
+#
+# If the token is not passed through, the script asks for it on the terminal
+# before the first download.
 #
 # On start it detects any existing installation and shows a menu:
 #   [1] Install   [2] Update   [3] Delete   [4] Exit
@@ -112,6 +122,111 @@ prompt() {
     printf -v "${_var}" '%s' "${_reply}"
 }
 
+# prompt_secret VAR "message" — same, but the typed value is never echoed.
+# A token is a credential; leaving it on screen puts it in the operator's
+# scrollback and in any session recording.
+prompt_secret() {
+    local _var="$1" _msg="$2" _reply=""
+    if [ "${HAVE_TTY}" -eq 1 ]; then
+        printf "%s" "${_msg}" > /dev/tty
+        IFS= read -rs _reply < /dev/tty || _reply=""
+        printf '\n' > /dev/tty
+    fi
+    printf -v "${_var}" '%s' "${_reply}"
+}
+
+# ─── Private-repo access ──────────────────────────────────────────────
+# The repository is private, and raw.githubusercontent.com answers 404 - not
+# 403 - to an anonymous caller. Every download below (compose file, .env
+# template, csdlp, validate.sh) therefore needs a token, and without one they
+# fail looking exactly like deleted files rather than a permission problem.
+# That misdirection is the entire reason this section exists.
+GITHUB_TOKEN="${GITHUB_TOKEN:-${AGENT_DIST_TOKEN:-}}"
+
+# The token reaches curl through a file descriptor, never as an argument: a
+# command line is readable by every user on the box through `ps`.
+_auth_fd() { printf 'Authorization: Bearer %s\n' "${GITHUB_TOKEN}"; }
+
+# fetch URL [extra curl args...]
+fetch() {
+    local url="$1"; shift
+    if [ -n "${GITHUB_TOKEN}" ]; then
+        curl -fsSL -H @<(_auth_fd) "$@" "${url}"
+    else
+        curl -fsSL "$@" "${url}"
+    fi
+}
+
+# "Can I read this?" - asked before anything is downloaded, so a public repo is
+# never prompted for a token it does not need.
+can_fetch() {
+    local url="$1"
+    if [ -n "${GITHUB_TOKEN}" ]; then
+        curl -fsI --connect-timeout 15 --max-time 45 -H @<(_auth_fd) "${url}" >/dev/null 2>&1
+    else
+        curl -fsI --connect-timeout 15 --max-time 45 "${url}" >/dev/null 2>&1
+    fi
+}
+
+ensure_repo_access() {
+    if can_fetch "${RAW_BASE}/${COMPOSE_FILE}"; then
+        [ -n "${GITHUB_TOKEN}" ] && say "Repository access: token accepted"
+        return 0
+    fi
+
+    [ -n "${GITHUB_TOKEN}" ] && c_yellow "[!] The token provided cannot read ${GITHUB_REPO}."
+
+    echo
+    _top "This repository is private"
+    _bar "GitHub answers 404 - not 403 - to an anonymous caller, so without a"
+    _bar "token the downloads below fail looking like missing files."
+    _bar ""
+    _bar "Paste a token with read access to ${GITHUB_REPO}."
+    _bar "It is saved to ${INSTALL_DIR}/${ENV_FILE} (mode 600, root only) as"
+    _bar "AGENT_DIST_TOKEN, which also lets this server publish the Windows"
+    _bar "agent to your endpoints - so they never need a token of their own."
+    _end
+    echo
+
+    if [ "${HAVE_TTY}" -ne 1 ]; then
+        c_red "[FATAL] No terminal available to ask on."
+        c_red "        Re-run with the token in the environment, e.g."
+        c_red "          ... | sudo GITHUB_TOKEN=github_pat_... bash"
+        exit 1
+    fi
+
+    local attempt=0
+    while [ "${attempt}" -lt 3 ]; do
+        attempt=$((attempt + 1))
+        prompt_secret GITHUB_TOKEN "  ${C_BOLD}➜${C_RESET}  GitHub token ${C_DIM}(hidden; blank to continue without one)${C_RESET}: "
+        if [ -z "${GITHUB_TOKEN}" ]; then
+            c_yellow "[!] Continuing without a token - downloads from the private repo will fail."
+            return 0
+        fi
+        if can_fetch "${RAW_BASE}/${COMPOSE_FILE}"; then
+            say "Repository access: token accepted"
+            return 0
+        fi
+        c_red "  That token cannot read ${GITHUB_REPO} (attempt ${attempt}/3)."
+    done
+    die "Could not authenticate to ${GITHUB_REPO}."
+}
+
+# Write KEY=VALUE into .env, replacing any existing line. awk rather than sed so
+# a value containing regex or delimiter characters cannot corrupt the file.
+set_env_var() {
+    local key="$1" val="$2" f="${ENV_FILE}"
+    [ -f "${f}" ] || return 0
+    if grep -qE "^${key}=" "${f}" 2>/dev/null; then
+        awk -v k="${key}" -v v="${val}" \
+            '{ if (index($0, k "=") == 1) print k "=" v; else print }' "${f}" > "${f}.tmp" \
+            && mv "${f}.tmp" "${f}"
+    else
+        printf '%s=%s\n' "${key}" "${val}" >> "${f}"
+    fi
+    chmod 600 "${f}" 2>/dev/null || true
+}
+
 install_docker() {
     say "Docker not found — installing via official convenience script."
     curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
@@ -200,6 +315,11 @@ echo
 # ─── 1. Ensure Docker ─────────────────────────────────────────────────
 ensure_docker
 
+# Ask for repository access BEFORE anything is downloaded. Failing four
+# downloads in a row with a 404 each, then leaving a half-populated install
+# directory behind, is a far worse first impression than one question.
+ensure_repo_access
+
 # ─── 2. Create install dir ────────────────────────────────────────────
 mkdir -p "${INSTALL_DIR}"
 cd "${INSTALL_DIR}"
@@ -207,11 +327,11 @@ say "Working in ${INSTALL_DIR}"
 
 # ─── 3. Download compose + env template ───────────────────────────────
 say "Downloading ${COMPOSE_FILE}"
-curl -fsSL "${RAW_BASE}/${COMPOSE_FILE}" -o "${COMPOSE_FILE}"
+fetch "${RAW_BASE}/${COMPOSE_FILE}" -o "${COMPOSE_FILE}"
 
 if [ ! -f "${ENV_FILE}" ]; then
     say "Downloading ${ENV_EXAMPLE}"
-    curl -fsSL "${RAW_BASE}/${ENV_EXAMPLE}" -o "${ENV_EXAMPLE}"
+    fetch "${RAW_BASE}/${ENV_EXAMPLE}" -o "${ENV_EXAMPLE}"
 fi
 
 # Fetch the validation script NOW, in the same healthy network window as the
@@ -219,8 +339,8 @@ fi
 # (as seen in the field). It only runs later (section 8c); running it needs no
 # internet. Non-fatal: validation is optional, so a miss here never aborts.
 say "Downloading validate.sh"
-if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
-        "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh"; then
+if fetch "${RAW_BASE}/validate.sh" --retry 4 --retry-delay 2 --retry-all-errors \
+        --connect-timeout 15 -o "${INSTALL_DIR}/validate.sh"; then
     chmod +x "${INSTALL_DIR}/validate.sh"
 else
     c_yellow "[!] Could not download validate.sh now — will retry after startup."
@@ -230,14 +350,15 @@ fi
 # csdlp — the single operations CLI (status/doctor/logs/update/rollback/backup).
 # Installed to the deployment dir and symlinked onto PATH so `csdlp` works anywhere.
 say "Downloading csdlp (operations CLI)"
-if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
-        "${RAW_BASE}/csdlp" -o "${INSTALL_DIR}/csdlp"; then
+if fetch "${RAW_BASE}/csdlp" --retry 4 --retry-delay 2 --retry-all-errors \
+        --connect-timeout 15 -o "${INSTALL_DIR}/csdlp"; then
     chmod +x "${INSTALL_DIR}/csdlp"
     ln -sf "${INSTALL_DIR}/csdlp" /usr/local/bin/csdlp 2>/dev/null \
         && say "csdlp installed — run 'csdlp help'" \
         || c_yellow "[!] csdlp saved to ${INSTALL_DIR}/csdlp (could not symlink to /usr/local/bin)"
 else
-    c_yellow "[!] Could not download csdlp now — fetch later: curl -fsSL ${RAW_BASE}/csdlp -o ${INSTALL_DIR}/csdlp"
+    c_yellow "[!] Could not download csdlp now — fetch later with:"
+    c_yellow "      curl -fsSL -H \"Authorization: Bearer \$GITHUB_TOKEN\" ${RAW_BASE}/csdlp -o ${INSTALL_DIR}/csdlp"
 fi
 
 # ─── 4. Generate .env with secure random secrets ──────────────────────
@@ -294,6 +415,18 @@ if [ ! -f "${ENV_FILE}" ]; then
     say "${ENV_FILE} created with mode 600 (root only)"
 else
     say "${ENV_FILE} already exists — keeping existing secrets"
+fi
+
+# The same token that fetched the files above also lets the manager keep the
+# Windows agent published at /api/v1/agent-dist. Storing it here is what keeps
+# endpoints out of the credential business entirely: they download the agent
+# from this server, which needs no token of their own.
+if [ -n "${GITHUB_TOKEN}" ]; then
+    CURRENT_ADT="$(grep -E '^AGENT_DIST_TOKEN=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | head -1 || true)"
+    if [ "${CURRENT_ADT}" != "${GITHUB_TOKEN}" ]; then
+        set_env_var AGENT_DIST_TOKEN "${GITHUB_TOKEN}"
+        say "Stored AGENT_DIST_TOKEN in ${ENV_FILE} — this server will publish the Windows agent"
+    fi
 fi
 
 # ─── 5. Generate self-signed TLS certs if missing ─────────────────────
@@ -377,7 +510,7 @@ if [ -n "${OS_VOL}" ]; then
         c_red "If this box holds no data you need (a failed/first install), reset and re-run:"
         c_red "  cd ${INSTALL_DIR}"
         c_red "  docker compose -f ${COMPOSE_FILE} down -v      # deletes ALL volumes"
-        c_red "  curl -fsSL ${RAW_BASE}/install.sh | sudo bash"
+        c_red "  curl -fsSL -H \"Authorization: Bearer \$TOKEN\" ${RAW_BASE}/install.sh | sudo GITHUB_TOKEN=\"\$TOKEN\" bash"
         c_red ""
         c_red "If you DO have data to keep, restore the original OPENSEARCH_PASSWORD into"
         c_red "${ENV_FILE} instead — that value is the only one this volume will accept."
@@ -435,7 +568,7 @@ if [ -n "${PG_VOL}" ]; then
         c_red "If this box holds no data you need (a failed/first install), reset and re-run:"
         c_red "  cd ${INSTALL_DIR}"
         c_red "  docker compose -f ${COMPOSE_FILE} down -v      # deletes ALL volumes"
-        c_red "  curl -fsSL ${RAW_BASE}/install.sh | sudo bash"
+        c_red "  curl -fsSL -H \"Authorization: Bearer \$TOKEN\" ${RAW_BASE}/install.sh | sudo GITHUB_TOKEN=\"\$TOKEN\" bash"
         c_red ""
         c_red "If you DO have data to keep, restore the original POSTGRES_PASSWORD into"
         c_red "${ENV_FILE} instead — that value is the only one this volume will accept."
@@ -491,8 +624,8 @@ fi
 # itself needs no internet (docker + curl to localhost only).
 if [ ! -x "${INSTALL_DIR}/validate.sh" ]; then
     say "Fetching validate.sh (deferred from earlier)"
-    curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
-        "${RAW_BASE}/validate.sh" -o "${INSTALL_DIR}/validate.sh" 2>/dev/null \
+    fetch "${RAW_BASE}/validate.sh" --retry 4 --retry-delay 2 --retry-all-errors \
+        --connect-timeout 15 -o "${INSTALL_DIR}/validate.sh" 2>/dev/null \
         && chmod +x "${INSTALL_DIR}/validate.sh" || true
 fi
 
@@ -510,7 +643,7 @@ if [ -x "${INSTALL_DIR}/validate.sh" ]; then
 else
     c_yellow "[!] validate.sh unavailable (network was down) — skipping automated validation."
     c_yellow "    Run it manually once the network settles:"
-    c_yellow "      curl -fsSL ${RAW_BASE}/validate.sh -o ${INSTALL_DIR}/validate.sh && sudo bash ${INSTALL_DIR}/validate.sh"
+    c_yellow "      curl -fsSL -H \"Authorization: Bearer \$GITHUB_TOKEN\" ${RAW_BASE}/validate.sh -o ${INSTALL_DIR}/validate.sh && sudo bash ${INSTALL_DIR}/validate.sh"
 fi
 
 # ─── 8d. Auto-update (hourly image pull) ──────────────────────────────
@@ -649,7 +782,17 @@ echo "  crontab -e   # edit/disable the auto-update schedule (or reinstall with 
 fi
 echo
 c_blue "Next: install agents on endpoints (run on Windows boxes):"
-echo "  powershell -ExecutionPolicy Bypass -Command \"irm ${RAW_BASE}/manage-windows-agent.ps1 | iex\""
+# Points at THIS server, not at GitHub. The installer script is in the private
+# repo too, so an endpoint cannot fetch it from GitHub without a token - and
+# handing every endpoint a token that reads private source is exactly what
+# serving it from here avoids.
+SRV_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'YOUR-SERVER')"
+echo "  powershell -ExecutionPolicy Bypass -Command \"irm http://${SRV_IP}:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex\""
+if [ -z "${GITHUB_TOKEN}" ]; then
+    c_yellow "  [!] No AGENT_DIST_TOKEN is set, so this server can only serve the agent"
+    c_yellow "      build baked into its image. Add one to ${INSTALL_DIR}/${ENV_FILE} to"
+    c_yellow "      keep endpoints on the latest published build."
+fi
 echo
 }
 # ── end do_install ────────────────────────────────────────────────────
@@ -664,14 +807,15 @@ do_update() {
         die "No installation found at ${INSTALL_DIR} — choose Install first."
     fi
     ensure_docker
+    ensure_repo_access
     cd "${INSTALL_DIR}"
     say "Updating deployment in ${INSTALL_DIR}"
 
     # Refresh the compose file + helper tools from the repo — an update may ship
     # compose changes (new service, new env var). .env and certs are left alone.
     say "Refreshing ${COMPOSE_FILE}"
-    if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
-            "${RAW_BASE}/${COMPOSE_FILE}" -o "${COMPOSE_FILE}.new"; then
+    if fetch "${RAW_BASE}/${COMPOSE_FILE}" --retry 4 --retry-delay 2 --retry-all-errors \
+            --connect-timeout 15 -o "${COMPOSE_FILE}.new"; then
         mv "${COMPOSE_FILE}.new" "${COMPOSE_FILE}"
     else
         rm -f "${COMPOSE_FILE}.new"
@@ -679,8 +823,8 @@ do_update() {
     fi
 
     for f in csdlp validate.sh; do
-        if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors --connect-timeout 15 \
-                "${RAW_BASE}/${f}" -o "${INSTALL_DIR}/${f}.new" 2>/dev/null; then
+        if fetch "${RAW_BASE}/${f}" --retry 4 --retry-delay 2 --retry-all-errors \
+                --connect-timeout 15 -o "${INSTALL_DIR}/${f}.new" 2>/dev/null; then
             mv "${INSTALL_DIR}/${f}.new" "${INSTALL_DIR}/${f}"
             chmod +x "${INSTALL_DIR}/${f}"
         else

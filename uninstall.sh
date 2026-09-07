@@ -8,7 +8,12 @@
 # IRREVERSIBLE and wipes events, agents, policies and users.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash
+#   TOKEN=github_pat_...
+#   curl -fsSL -H "Authorization: Bearer $TOKEN" https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash
+#
+# The repository is private, so the fetch needs the token: GitHub answers 404,
+# not 403, to an anonymous caller, which makes an unauthenticated one-liner look
+# like a dead URL rather than a login problem.
 #   curl -fsSL .../uninstall.sh | sudo bash -s -- --purge          # also delete all data
 #   sudo INSTALL_DIR=/srv/cybersentineldlp bash uninstall.sh       # custom dir
 #
@@ -103,7 +108,8 @@ if [ "$PURGE" -eq 1 ]; then
     c_green "CyberSentinel DLP fully removed — containers, data volumes and ${INSTALL_DIR} deleted."
 else
     c_green "CyberSentinel DLP stopped and removed. Data volumes were KEPT."
-    say "Reinstall over the existing data:  curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo bash"
+    say "Reinstall over the existing data (private repo - token required):"
+    say "  curl -fsSL -H \"Authorization: Bearer \$TOKEN\" https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo GITHUB_TOKEN=\"\$TOKEN\" bash"
     say "Delete the data later:             sudo bash uninstall.sh --purge"
 fi
 echo

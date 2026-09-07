@@ -41,7 +41,9 @@ It covers:
 ### One-liner install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo bash
+TOKEN=github_pat_...          # the repository is private
+curl -fsSL -H "Authorization: Bearer $TOKEN" \
+  https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo GITHUB_TOKEN="$TOKEN" bash
 ```
 
 What this does, in order:
@@ -181,7 +183,7 @@ If it isn't on `PATH` (e.g. the symlink step needed root):
 ```bash
 sudo /opt/cybersentineldlp/csdlp self-install     # copies to /usr/local/bin/csdlp
 # or fetch standalone:
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/csdlp \
+curl -fsSL -H "Authorization: Bearer $TOKEN" https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/csdlp \
   -o /usr/local/bin/csdlp && chmod +x /usr/local/bin/csdlp
 ```
 
@@ -428,6 +430,34 @@ A refresh that fails for any reason leaves the last known-good set in place; the
 binary and its checksum are only ever moved forward together, because publishing
 a new checksum beside an old binary would make every endpoint report a tampered
 download.
+
+#### If the manager is not publishing (break-glass)
+
+`manage-windows-agent.ps1` lives in the private repository too, so an endpoint
+cannot fall back to GitHub silently — that fetch needs a token, and a token that
+can read private source is the last thing that should be sitting on a laptop.
+
+The script therefore checks its source **at startup**, before it touches
+anything. If the manager publishes nothing it says so, points at the real fix
+(set `AGENT_DIST_TOKEN` on the server), and only then offers to pull from GitHub
+for that one session. A token given there is held in memory, never written to
+disk on the endpoint, and asked for again next run.
+
+Bootstrapping that case needs the token on the *first* fetch as well, because
+the script itself is private. Run this in an **elevated** PowerShell — elevated
+because the script cannot re-fetch itself to self-elevate without putting the
+token on a command line, where Task Manager would show it to anyone on the box:
+
+```powershell
+$t = Read-Host "GitHub token" -AsSecureString
+$p = [Runtime.InteropServices.Marshal]::PtrToStringBSTR(
+      [Runtime.InteropServices.Marshal]::SecureStringToBSTR($t))
+irm -Headers @{Authorization="Bearer $p"} `
+  https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex
+```
+
+Treat this as recovery, not as a deployment method. Fixing the server means
+every endpoint installs and updates with no credential at all.
 
 ### One-liner install
 

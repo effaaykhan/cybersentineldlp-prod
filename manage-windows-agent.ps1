@@ -23,6 +23,12 @@
   manager this device reports to:
     powershell -ExecutionPolicy Bypass -Command "irm http://SERVER:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
     powershell -ExecutionPolicy Bypass -File .\manage-windows-agent.ps1
+
+  Neither needs a credential: the manager publishes this script and the agent
+  binary. If it is publishing nothing, the startup check below says so and
+  offers a one-session fallback to the (private) GitHub repo, which does need a
+  token - see "break-glass" in DEPLOYMENT.md for how to bootstrap that, since
+  this file is private too.
 #>
 
 # On 64-bit Windows a 32-bit PowerShell has every HKLM:\SOFTWARE\Policies\...
@@ -69,6 +75,16 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # somebody else's server.
   $SCRIPT_FILE = 'manage-windows-agent.ps1'
   $DIST_PATH   = 'api/v1/agent-dist'
+
+  # GitHub is the BREAK-GLASS source, used only when the manager publishes
+  # nothing. The repository is private, so this path needs a token - and unlike
+  # the manager path, that token can read private source. It is therefore held
+  # in memory for this session only, never written to disk on the endpoint, and
+  # asked for again next run. That is a deliberate trade: an endpoint is the
+  # worst place in the estate to store a credential of that reach.
+  $GH_REPO     = 'effaaykhan/cybersentineldlp-prod'
+  $GH_RAW_BASE = "https://raw.githubusercontent.com/$GH_REPO/main"
+  $GH_HEADERS  = @{}
   $DIST_BASE   = $null
   $SELF_URL    = $null    # for self-elevation re-fetch
   $EXE_URL     = $null    # agent binary artifact
@@ -211,10 +227,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     return $?
   }
   function Get-RemoteSha {
-    param([string]$Url)
+    param([string]$Url, [hashtable]$Headers = @{})
     try {
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-      $c = (Invoke-WebRequest -Uri $Url -UseBasicParsing -ErrorAction Stop).Content
+      $c = (Invoke-WebRequest -Uri $Url -UseBasicParsing -Headers $Headers -ErrorAction Stop).Content
       return $c.Trim().Split()[0].ToUpper()
     } catch { return $null }
   }
@@ -239,6 +255,44 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # land on the same place instead of /api/v1/api/v1/agent-dist.
     $u = [regex]::Replace($u, '(?i)/api/v1.*$', '')
     return "$u/$DIST_PATH"
+  }
+
+  # The GitHub layout is not the manager's: there the artifacts sit under
+  # agents/endpoint/windows/, not flat at the base.
+  function Get-GithubUrls {
+    [PSCustomObject]@{
+      Base = $GH_RAW_BASE
+      Self = "$GH_RAW_BASE/$SCRIPT_FILE"
+      Exe  = "$GH_RAW_BASE/agents/endpoint/windows/$EXE_NAME"
+      Sum  = "$GH_RAW_BASE/agents/endpoint/windows/$EXE_NAME.sha256"
+      Ver  = "$GH_RAW_BASE/agents/endpoint/windows/$EXE_NAME.version"
+    }
+  }
+
+  # Is this URL actually serving? HEAD, so probing costs nothing on a 4.5MB
+  # binary. Used to decide whether a token needs asking for at all - a server
+  # that publishes the agent should never prompt for one.
+  function Test-ArtifactUrl {
+    param([string]$Url, [hashtable]$Headers = @{})
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
+    try {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      $null = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing `
+                -TimeoutSec 20 -Headers $Headers -ErrorAction Stop
+      return $true
+    } catch { return $false }
+  }
+
+  # Reads a credential without echoing it. -AsSecureString keeps it off the
+  # screen and out of the console's scrollback.
+  function Read-SecretLine {
+    param([string]$Prompt)
+    $sec = $null
+    try { $sec = Read-Host $Prompt -AsSecureString } catch { return $null }
+    if (-not $sec -or $sec.Length -eq 0) { return $null }
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
   }
 
   function Get-DistUrls {
@@ -307,6 +361,32 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
           $_d = Get-DistUrls $DIST_BASE
           if ($_d) { $SELF_URL = $_d.Self }
         }
+        # Re-fetching only works if the manager is actually publishing this
+        # script. It might not be - a server installed before agent-dist
+        # existed, or one with no artifacts staged - and this script lives in a
+        # PRIVATE repository, so the elevated window cannot silently fall back
+        # to GitHub: that fetch needs a token, and a token on a command line is
+        # readable in Task Manager by anyone on the box. Print the command to
+        # run instead of quietly doing the unsafe thing.
+        if (-not (Test-ArtifactUrl $SELF_URL)) {
+          Blank
+          Err "This server is not publishing the agent installer."
+          Hint "  $SELF_URL"
+          Blank
+          Warn 'Fix it on the DLP server (preferred) - set AGENT_DIST_TOKEN in its'
+          Warn '.env and restart the manager, then re-run this one-liner.'
+          Blank
+          Hint 'Or, to install from GitHub this once, open PowerShell AS ADMINISTRATOR'
+          Hint 'and run (the repository is private, so the token is required):'
+          Blank
+          Hint '  $t = Read-Host "GitHub token" -AsSecureString'
+          Hint '  $p = [Runtime.InteropServices.Marshal]::PtrToStringBSTR(' 
+          Hint '        [Runtime.InteropServices.Marshal]::SecureStringToBSTR($t))'
+          Hint "  irm -Headers @{Authorization=\"Bearer `$p\"} ``"
+          Hint "    '$GH_RAW_BASE/$SCRIPT_FILE' | iex"
+          Blank
+          return
+        }
         # The elevated copy is handed the same source this one resolved, so it
         # does not repeat the question above in the new window.
         Start-Process powershell.exe -Verb RunAs -ArgumentList @(
@@ -318,6 +398,59 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Warn "Re-open PowerShell with 'Run as administrator' and run this again."
     }
     return
+  }
+
+  # ============================================================
+  #  Artifact source check  (runs once, before anything else)
+  # ============================================================
+  # The normal path asks for nothing: the manager publishes the agent, this
+  # device already knows its manager, and no credential is involved anywhere.
+  # The prompt below is only reached when that is not true - and it is reached
+  # HERE, at the start, rather than half way through an install with a directory
+  # already created and a service already stopped.
+  if (-not (Test-ArtifactUrl $SUM_URL)) {
+    Blank
+    Hr '=' 'Yellow'
+    Write-Host '   AGENT SOURCE' -ForegroundColor Yellow
+    Hr '=' 'Yellow'
+    if ($SUM_URL) {
+      Warn 'The DLP server is not publishing the agent binary:'
+      Hint "  $SUM_URL"
+    } else {
+      Warn 'No DLP server is known for this device yet.'
+    }
+    Blank
+    Hint 'Preferred fix, on the DLP server: set AGENT_DIST_TOKEN in its .env and'
+    Hint 'restart the manager. Endpoints then need no credential at all.'
+    Blank
+    Hint "Otherwise this device can pull from $GH_REPO directly."
+    Hint 'That repository is private, so it needs a token with read access.'
+    Hint 'It is used for this session only and is never written to disk here.'
+    Blank
+    $ghTok = Read-SecretLine '   GitHub token (leave blank to skip)'
+    if ($ghTok) {
+      $tryHeaders = @{ Authorization = "Bearer $ghTok" }
+      $ghUrls = Get-GithubUrls
+      if (Test-ArtifactUrl $ghUrls.Sum -Headers $tryHeaders) {
+        $GH_HEADERS = $tryHeaders
+        $DIST_BASE  = $ghUrls.Base
+        $SELF_URL   = $ghUrls.Self
+        $EXE_URL    = $ghUrls.Exe
+        $SUM_URL    = $ghUrls.Sum
+        $VER_URL    = $ghUrls.Ver
+        Ok 'Token accepted - the agent will be fetched from GitHub for this session.'
+      } else {
+        Err "That token cannot read $GH_REPO."
+        Warn 'Continuing without it. Install and Update will not be able to'
+        Warn 'download a binary until the server publishes one.'
+      }
+      $ghTok = $null
+    } else {
+      Warn 'No token given. Install and Update cannot download a binary until'
+      Warn 'the DLP server publishes one.'
+    }
+    Remove-Variable ghTok -ErrorAction SilentlyContinue
+    Blank
   }
 
   # ============================================================
@@ -625,7 +758,13 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # answer just given removes any way to install one server's build onto an
     # agent that then reports to a different one.
     $_di = Get-DistUrls (ConvertTo-DistBase $serverURL)
-    $EXE_URL = $_di.Exe; $SUM_URL = $_di.Sum; $VER_URL = $_di.Ver
+    if (Test-ArtifactUrl $_di.Sum) {
+      $EXE_URL = $_di.Exe; $SUM_URL = $_di.Sum; $VER_URL = $_di.Ver
+      $GH_HEADERS = @{}
+    } else {
+      Warn 'This server is not publishing the agent binary - keeping the source'
+      Warn 'chosen at startup for this install.'
+    }
 
     $reachable = Invoke-Spinner -Text "Testing server at ${serverIP}:55100" -ArgumentList @($serverIP) -Work {
       param($ip)
@@ -754,17 +893,17 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Step 5 $TOTAL 'Downloading + verifying the agent binary'
     $exePath = Join-Path $INSTALL_DIR $EXE_NAME
     try {
-      Invoke-Spinner -Text 'Downloading binary' -ArgumentList @($EXE_URL, $exePath) -Work {
-        param($u,$out)
+      Invoke-Spinner -Text 'Downloading binary' -ArgumentList @($EXE_URL, $exePath, $GH_HEADERS) -Work {
+        param($u,$out,$hdr)
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing
+        Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing -Headers $hdr
       } | Out-Null
     } catch { Err "Download failed: $($_.Exception.Message)"; return }
     if (-not (Test-Path $exePath)) { Err 'Download failed (no file written).'; return }
     $sizeMB = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
     Ok "Downloaded ($sizeMB MB)"
 
-    $expected = Get-RemoteSha $SUM_URL
+    $expected = Get-RemoteSha $SUM_URL $GH_HEADERS
     if ($expected) {
       $actual = (Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToUpper()
       if ($actual -ne $expected) {
@@ -922,15 +1061,15 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
     Info 'Downloading the latest published binary...'
     try {
-      Invoke-Spinner -Text 'Downloading + verifying' -ArgumentList @($EXE_URL, $tmpExe) -Work {
-        param($u,$out)
+      Invoke-Spinner -Text 'Downloading + verifying' -ArgumentList @($EXE_URL, $tmpExe, $GH_HEADERS) -Work {
+        param($u,$out,$hdr)
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing
+        Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing -Headers $hdr
       } | Out-Null
     } catch { Err "Download failed: $($_.Exception.Message)"; return }
     if (-not (Test-Path $tmpExe)) { Err 'Download failed (no file written).'; return }
 
-    $expected = Get-RemoteSha $SUM_URL
+    $expected = Get-RemoteSha $SUM_URL $GH_HEADERS
     $actual   = (Get-FileHash -Algorithm SHA256 -Path $tmpExe).Hash.ToUpper()
     if ($expected -and $expected -ne $actual) {
       Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
@@ -3486,12 +3625,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       # One spinner, both sidecars: the sha decides whether an update exists, the
       # version says what it is called. The .version file is absent on builds
       # made before versioning, so a missing one is not an error.
-      $remote = Invoke-Spinner -Text 'Checking for the latest agent build' -ArgumentList @($SUM_URL, $VER_URL) -Work {
-        param($sumUrl, $verUrl)
+      $remote = Invoke-Spinner -Text 'Checking for the latest agent build' -ArgumentList @($SUM_URL, $VER_URL, $GH_HEADERS) -Work {
+        param($sumUrl, $verUrl, $hdr)
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $h = $null; $v = $null
-        try { $h = ((Invoke-WebRequest -Uri $sumUrl -UseBasicParsing -ErrorAction Stop).Content).Trim().Split()[0].ToUpper() } catch { }
-        try { $v = ((Invoke-WebRequest -Uri $verUrl -UseBasicParsing -ErrorAction Stop).Content).Trim() } catch { }
+        try { $h = ((Invoke-WebRequest -Uri $sumUrl -UseBasicParsing -Headers $hdr -ErrorAction Stop).Content).Trim().Split()[0].ToUpper() } catch { }
+        try { $v = ((Invoke-WebRequest -Uri $verUrl -UseBasicParsing -Headers $hdr -ErrorAction Stop).Content).Trim() } catch { }
         [PSCustomObject]@{ Hash = $h; Version = $v }
       }
       if ($remote) { $remoteHash = $remote.Hash; $remoteVersion = $remote.Version }

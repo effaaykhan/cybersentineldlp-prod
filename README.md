@@ -27,7 +27,9 @@ Data Loss Prevention (DLP) is the practice of detecting and preventing unauthori
 **Requirements:** Docker Engine 24+, Docker Compose v2+, Python 3, 8 GB RAM
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh)
+TOKEN=github_pat_...          # the repository is private
+curl -fsSL -H "Authorization: Bearer $TOKEN" \
+  https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo GITHUB_TOKEN="$TOKEN" bash
 ```
 
 This clones the repo, generates secure passwords, starts all services, and prints the admin credentials.
@@ -219,10 +221,10 @@ domain. The super admin retains visibility across all domains.
 
 ```bash
 # Stop and remove the stack; KEEP data volumes (safe — you can reinstall over it)
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash
+curl -fsSL -H "Authorization: Bearer $TOKEN" https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash
 
 # Or wipe everything — containers, data volumes AND the install dir (IRREVERSIBLE)
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash -s -- --purge
+curl -fsSL -H "Authorization: Bearer $TOKEN" https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/uninstall.sh | sudo bash -s -- --purge
 ```
 
 Default keeps your Postgres/Mongo/OpenSearch/Redis data so a later reinstall

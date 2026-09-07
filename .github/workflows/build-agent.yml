@@ -36,6 +36,7 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write        # commit the built binary back to the repo
+      actions: write         # dispatch the image build (see the last step)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,6 +107,7 @@ jobs:
           retention-days: 30
 
       - name: Commit the built binary back to the repo
+        id: commitback
         shell: bash
         run: |
           git config user.name  "github-actions[bot]"
@@ -115,9 +117,27 @@ jobs:
                   agents/endpoint/windows/cybersentineldlp_agent.exe.version
           if git diff --cached --quiet; then
             echo "agent binary unchanged — nothing to commit"
+            echo "committed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           ver=$(tr -d ' \t\r\n' < agents/endpoint/windows/cybersentineldlp_agent.exe.version)
           git commit -m "build(agent): v${ver} CI-compiled binary + sha256 [skip ci]"
           git pull --rebase origin main
           git push origin main
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+
+      # The manager publishes this binary to endpoints at /api/v1/agent-dist, and
+      # the image is seeded with it at build time. But the commit above carries
+      # [skip ci] - correctly, or the image build would loop - so the image
+      # workflow's push trigger does NOT fire here. Without this dispatch the
+      # manager image would keep shipping the PREVIOUS agent until some unrelated
+      # push happened to rebuild it, and a fresh deployment would hand endpoints
+      # a stale binary while reporting success. Dispatch it explicitly instead.
+      #
+      # No loop: the image workflow commits nothing.
+      - name: Rebuild the manager image so it ships this agent
+        if: steps.commitback.outputs.committed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run build-images.yml --ref main

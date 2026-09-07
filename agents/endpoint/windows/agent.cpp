@@ -10528,7 +10528,55 @@ int HandleBlockedLaunch(int argc, char* argv[]) {
     return 0;   // never run fsquirt
 }
 
+// Windows lies about coordinates to a DPI-UNAWARE process. GetCursorPos,
+// GetWindowRect and the point a low-level mouse hook is handed all arrive in a
+// virtualised 96-DPI space, while UI Automation reports BoundingRectangle in
+// real physical pixels. At the 125% or 150% scaling nearly every laptop ships
+// with, those two spaces differ by exactly the scale factor - so a Send button
+// measured through UIA at x=1500 was compared against a click reported at
+// x=1000 and could never match, no matter how correctly the button was found.
+//
+// That is the whole reason blocking worked on Enter and not on the mouse: Enter
+// involves no coordinates at all. It also defeats ElementFromPoint, which is
+// handed a virtualised cursor position and answers about whatever sits at that
+// point in physical space - usually the wrong control, sometimes none.
+//
+// Declared here in code rather than in a manifest so a build that skips windres
+// cannot silently drop it, and resolved dynamically so one binary still starts
+// on Windows versions predating each API. Newest first; each is a superset of
+// the next. Called before anything creates a window or touches UIA.
+void EnsureDpiAwareness() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        typedef BOOL (WINAPI *SetCtxFn)(HANDLE);
+        SetCtxFn setCtx = (SetCtxFn)(void*)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is the literal (HANDLE)-4.
+        // Spelled out because the mingw headers in CI may not define it.
+        if (setCtx && setCtx((HANDLE)(INT_PTR)-4)) return;
+    }
+    // Windows 8.1 .. 10/1607: per-monitor v1.
+    HMODULE shcore = LoadLibraryW(L"Shcore.dll");   // deliberately not freed
+    if (shcore) {
+        typedef HRESULT (WINAPI *SetAwareFn)(int);
+        SetAwareFn setAware = (SetAwareFn)(void*)GetProcAddress(shcore, "SetProcessDpiAwareness");
+        if (setAware && SUCCEEDED(setAware(2))) return;   // PROCESS_PER_MONITOR_DPI_AWARE
+    }
+    // Vista .. 8.0: system-DPI aware. Still puts UIA rectangles and cursor
+    // positions in the same space on a single-display machine, which is the
+    // case that matters here.
+    if (user32) {
+        typedef BOOL (WINAPI *SetLegacyFn)(void);
+        SetLegacyFn setLegacy = (SetLegacyFn)(void*)GetProcAddress(user32, "SetProcessDPIAware");
+        if (setLegacy) setLegacy();
+    }
+}
+
 int main(int argc, char* argv[]) {
+    // Before anything else: a window created, or a UIA rectangle read, while the
+    // process is still DPI-unaware is measured in the wrong coordinate space for
+    // the rest of the run.
+    EnsureDpiAwareness();
+
     // Blocked-launch hook: we were run in place of fsquirt.exe (Bluetooth file
     // transfer) because the wireless policy blocks it. Log + emit an event, then
     // exit without running fsquirt. Handle this BEFORE any normal startup.

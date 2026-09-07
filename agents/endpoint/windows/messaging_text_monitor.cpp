@@ -1361,6 +1361,34 @@ IUIAutomationElement* FindSendButton(IUIAutomation* uia, HWND wnd, DWORD pid,
     return nullptr;
 }
 
+// Reports the display scaling this process actually sees. Worth a line at
+// startup because it is the one thing that decides whether the mouse path can
+// work at all: a DPI-UNAWARE process is handed cursor positions in a virtualised
+// 96-DPI space while UI Automation reports rectangles in physical pixels, and on
+// a scaled display the two differ by exactly this factor - so a correctly found
+// Send button is compared against a click that can never fall inside it.
+//
+// The number is therefore also the proof that the awareness call at startup
+// took: an unaware process reads 96 here no matter how the display is set.
+std::string DescribeDisplayScaling() {
+    UINT dpi = 0;
+    if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+        typedef UINT (WINAPI *GetDpiFn)(void);
+        GetDpiFn f = (GetDpiFn)(void*)GetProcAddress(user32, "GetDpiForSystem");
+        if (f) dpi = f();
+    }
+    if (!dpi) {
+        if (HDC dc = GetDC(nullptr)) {
+            const int d = GetDeviceCaps(dc, LOGPIXELSX);
+            if (d > 0) dpi = (UINT)d;
+            ReleaseDC(nullptr, dc);
+        }
+    }
+    if (!dpi) dpi = 96;
+    const unsigned pct = (dpi * 100u + 48u) / 96u;
+    return std::to_string(pct) + "% (" + std::to_string(dpi) + " dpi)";
+}
+
 // ── The pointer as the cheap search ───────────────────────────────
 //
 // FindSendButton walks the whole descendant tree, which on a Chromium document
@@ -2996,9 +3024,16 @@ bool InstallHooks(bool reinstall) {
     // The one line that says which capability this build has. Without it, an
     // operator cannot tell a machine that fell back to typed text from one
     // still relying entirely on an accessibility tree it cannot read.
-    if (!reinstall)
+    if (!reinstall) {
         LogInfo("typed-text capture armed - a message can now be inspected even where "
                 "the app's accessibility tree cannot be read");
+        // If this reads 100% on a display that is actually scaled, the process
+        // is still DPI-unaware and no Send-button rectangle will ever contain
+        // the click reported to the mouse hook.
+        LogInfo("display scaling seen by this process: " + DescribeDisplayScaling() +
+                " - Send-button rectangles and click positions are compared in "
+                "this space");
+    }
     return true;
 }
 

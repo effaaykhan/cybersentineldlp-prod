@@ -430,6 +430,117 @@ _ACTION_RANK = {"log": 1, "alert": 2, "quarantine": 3, "block": 4}
 _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
+# ── Analyst-facing shape, derived for every event type ────────────────────
+# The browser-extension and messaging events describe themselves: what the
+# activity was, which app, and one sentence saying why it fired. Every other
+# type - USB, print, network share, Bluetooth, screen capture, ransomware -
+# arrived as a severity chip, a detector name and a bare description, which
+# says that something happened but not enough to decide what to do about it.
+#
+# Derived HERE rather than in each of the agent's sixteen emitters: one place
+# to get right, one place to test, and it also upgrades events from agents
+# already in the field that will never be rebuilt.
+# Channels the endpoint agent reports directly. These are NOT browser activity
+# and must not be folded into the extension's four web categories.
+_NATIVE_CATEGORIES = {
+    "messaging", "clipboard", "usb", "printer",
+    "network_share", "bluetooth", "screen", "endpoint",
+}
+
+_EVENT_SHAPE = {
+    # event_type -> (activity, app_category, fields to use as the app/target name)
+    "usb":                     ("transfer", "usb",           ("volume_label", "product_name", "device_name", "drive_letter")),
+    "print":                   ("print",    "printer",       ("printer_name", "destination")),
+    "network_share_transfer":  ("transfer", "network_share", ("destination", "destination_host")),
+    "bluetooth_file_transfer": ("transfer", "bluetooth",     ("device_name", "destination")),
+    "screen_capture":          ("capture",  "screen",        ("process_name", "destination")),
+    "ransomware":              ("modify",   "endpoint",      ("process_name",)),
+}
+
+# How to open the sentence. Written per type because "a file transfer to E:"
+# and "a print job sent to HP LaserJet" are not interchangeable, and a generic
+# "an event occurred" sentence would be worth less than the description it
+# replaces.
+_EVENT_SUBJECT = {
+    "usb":                     "A file transfer to {where}",
+    "print":                   "A print job sent to {where}",
+    "network_share_transfer":  "A file transfer to {where}",
+    "bluetooth_file_transfer": "A Bluetooth transfer to {where}",
+    "screen_capture":          "A screen capture in {where}",
+    "ransomware":              "Rapid file modification by {where}",
+    "clipboard":               "Content copied from {where}",
+    "file":                    "A file operation on {where}",
+    "messaging":               "A message sent in {where}",
+}
+
+_ACTION_PHRASE = {
+    "block": "was blocked", "blocked": "was blocked",
+    "alert": "was allowed and recorded", "alerted": "was allowed and recorded",
+    "allow": "was allowed and recorded", "allowed": "was allowed and recorded",
+    "quarantine": "was quarantined", "quarantined": "was quarantined",
+    "delete": "was deleted", "deleted": "was deleted",
+    "log": "was recorded", "logged": "was recorded",
+}
+
+
+def _derive_analyst_shape(doc: Dict[str, Any]) -> None:
+    """Fill activity/app_category/app_name and a policy_reason sentence in place.
+
+    Never raises and never overwrites anything the agent already sent - an
+    agent that knows more about its own event (the conversation a message went
+    to, the send method) stays authoritative. Cosmetic by nature, so it is
+    wrapped by the caller: an event must never fail to ingest over a sentence.
+    """
+    et = (doc.get("event_type") or "").lower()
+
+    shape = _EVENT_SHAPE.get(et)
+    if shape and not doc.get("activity") and not doc.get("app_category"):
+        activity, category, name_fields = shape
+        doc["activity"] = activity
+        doc["app_category"] = category
+        if not doc.get("app_name"):
+            for f in name_fields:
+                v = doc.get(f)
+                if v:
+                    doc["app_name"] = str(v)
+                    break
+
+    if doc.get("policy_reason"):
+        return
+
+    where = (doc.get("app_name") or doc.get("destination") or doc.get("printer_name")
+             or doc.get("file_name") or doc.get("process_name") or "this endpoint")
+    subject = _EVENT_SUBJECT.get(et, "This activity on {where}").format(where=where)
+
+    labels = [str(x) for x in (doc.get("classification_labels") or []) if x]
+    if labels:
+        found = "contained " + ", ".join(labels[:4])
+        if len(labels) > 4:
+            found += f" and {len(labels) - 4} more"
+    else:
+        found = "was inspected"
+
+    level = doc.get("classification_level") or doc.get("classification_category")
+    if level and labels:
+        found += f", classified {level}"
+
+    action = str(doc.get("action_taken") or doc.get("action") or "").lower()
+    if doc.get("blocked") and action not in _ACTION_PHRASE:
+        action = "blocked"
+    phrase = _ACTION_PHRASE.get(action, "was recorded")
+
+    # Name the rule. "Which policy made this fire" is the first question asked
+    # of any alert and the last one these events could answer.
+    policy_name = None
+    for mp in (doc.get("matched_policies") or []):
+        if isinstance(mp, dict) and mp.get("policy_name"):
+            policy_name = mp["policy_name"]
+            break
+    tail = f', under the policy "{policy_name}"' if policy_name else ""
+
+    doc["policy_reason"] = f"{subject} {found}. It {phrase}{tail}."
+
+
 def _normalize_agent_matched_ids(raw: Optional[List[Any]]) -> List[str]:
     """Agent sends either bare UUID strings or {policy_id: ...} dicts."""
     if not raw:
@@ -678,9 +789,18 @@ async def create_event(
     # normalised so a slightly-off agent build ("ai"/"generate") still lands on
     # the canonical row instead of creating a parallel vocabulary in the event
     # store that no dashboard filter will ever match.
+    # The category normaliser speaks the BROWSER EXTENSION's vocabulary, where
+    # "messaging" is an alias for collaboration - correct for a web chat app,
+    # wrong for a native one. A blocked WhatsApp message was therefore stored
+    # and displayed as "Collaboration", losing the channel it actually came
+    # from. Categories the endpoint itself reports are passed through as sent;
+    # anything else still gets normalised, so an extension built against an
+    # older vocabulary keeps landing on the right row.
+    _native_cat = (event.app_category or "").strip().lower() in _NATIVE_CATEGORIES
     web_event_fields = {
         "activity": _WA.normalize_activity(event.activity) or (event.activity or None),
-        "app_category": _WA.normalize_category(event.app_category) or (event.app_category or None),
+        "app_category": (event.app_category if _native_cat
+                         else (_WA.normalize_category(event.app_category) or (event.app_category or None))),
         "app_id": event.app_id,
         "app_name": event.app_name,
         "page_url": event.page_url,
@@ -823,6 +943,13 @@ async def create_event(
             # analyst has when they open one.
             if not event_doc.get("policy_reason") and derived_matches[0].get("reason"):
                 event_doc["policy_reason"] = derived_matches[0]["reason"]
+
+    # Describe the event in the shape the detail view can render. Cosmetic, so
+    # it can never be the reason an event fails to be recorded.
+    try:
+        _derive_analyst_shape(event_doc)
+    except Exception:
+        logger.warning("event_shape_derivation_failed", event_id=event.event_id)
 
     # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
     result = await events_collection.update_one(

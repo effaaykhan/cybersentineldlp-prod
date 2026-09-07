@@ -244,6 +244,10 @@ const WEB_ACTIVITY_LABEL: Record<string, string> = {
   post: 'Post / Generate',
   ai_response: 'AI response',
   copy: 'Copy',
+  transfer: 'Transfer',
+  print: 'Print',
+  capture: 'Capture',
+  modify: 'Modify',
 }
 
 const WEB_CATEGORY_LABEL: Record<string, string> = {
@@ -256,6 +260,12 @@ const WEB_CATEGORY_LABEL: Record<string, string> = {
   // ChatGPT prompt.
   messaging: 'Messaging app',
   clipboard: 'Clipboard',
+  usb: 'USB device',
+  printer: 'Printer',
+  network_share: 'Network share',
+  bluetooth: 'Bluetooth',
+  screen: 'Screen capture',
+  endpoint: 'Endpoint',
 }
 
 // How the message was actually sent. The two send paths are enforced by
@@ -285,6 +295,7 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
   // These had no branch at all, so a redacted GenAI prompt — the event with the
   // most to say — rendered as a severity chip and a one-line description.
   const isWeb = !!(event.activity || event.app_category || event.app_name)
+    && !isClipboard && !isFile
   
   // Get content to display
   const displayContent = isClipboard 
@@ -444,11 +455,38 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
                 <Clipboard className="w-5 h-5 text-cs-indigo" />
                 <label className="text-sm text-cs-ink-2 uppercase font-medium">Clipboard Content</label>
               </div>
+              {/*
+                The window that performed the copy, which is not always the one
+                that was in front. Naming it is the difference between "someone
+                copied a card number" and knowing where it came from.
+              */}
+              {event.app_name && (
+                <div className="mb-4">
+                  <Fact label="Copied from" value={event.app_name} />
+                </div>
+              )}
               <div className="bg-cs-panel rounded-cs-sm p-4 border border-cs-hair">
                 <p className="text-cs-ink font-mono text-sm whitespace-pre-wrap break-words">
                   {displayContent}
                 </p>
               </div>
+            </div>
+          )}
+
+          {/*
+            Why it fired, for the event types that have their own detail block
+            and so never reach the activity panel below — clipboard, file, and
+            anything the server does not have a shape for. Without this the
+            sentence naming the triggering policy would be written at ingest and
+            then shown nowhere.
+          */}
+          {!isWeb && event.policy_reason && (
+            <div className="rounded-cs-card border border-cs-hair bg-cs-panel-2 p-6">
+              <div className="mb-2 flex items-center gap-2">
+                <Shield className="h-5 w-5 text-cs-indigo" />
+                <label className="text-sm font-medium uppercase text-cs-ink-2">Why this fired</label>
+              </div>
+              <p className="text-sm leading-relaxed text-cs-ink-2">{event.policy_reason}</p>
             </div>
           )}
 
@@ -461,15 +499,15 @@ function Fact({ label, value }: { label: string; value: React.ReactNode }) {
                   : <Globe className="h-5 w-5 text-cs-indigo" />}
                 <label className="text-sm font-medium uppercase text-cs-ink-2">
                   {event.app_category === 'messaging' ? 'Message'
-                    : event.app_category === 'clipboard' ? 'Clipboard'
-                    : (WEB_ACTIVITY_LABEL[event.activity || ''] || 'Web activity')}
+                    : WEB_CATEGORY_LABEL[event.app_category || '']
+                      || WEB_ACTIVITY_LABEL[event.activity || '']
+                      || 'Web activity'}
                   {event.app_name ? ` — ${event.app_name}` : ''}
                 </label>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <Fact label={event.app_category === 'clipboard' ? 'Copied from' : 'Destination'}
-                      value={event.app_name || event.page_host || '—'} />
+                <Fact label="Destination" value={event.app_name || event.page_host || '—'} />
                 <Fact label="Category" value={WEB_CATEGORY_LABEL[event.app_category || ''] || event.app_category || '—'} />
                 <Fact label="Activity" value={WEB_ACTIVITY_LABEL[event.activity || ''] || event.activity || '—'} />
               </div>

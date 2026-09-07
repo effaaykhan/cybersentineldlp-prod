@@ -6440,10 +6440,6 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             if (!sourceApp.empty()) {
                 json.AddString("app_name", sourceApp);
             }
-            // Renders this in the same detail panel the browser-extension and
-            // messaging events use, instead of a severity chip and one line.
-            json.AddString("activity", "copy");
-            json.AddString("app_category", "clipboard");
 
             json.AddString("timestamp", GetCurrentTimestampISO());
 

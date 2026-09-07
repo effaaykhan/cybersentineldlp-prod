@@ -130,8 +130,13 @@ The executable should be around 3-4 MB.
 ### Option 2: re-run the canonical interactive manager
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm http://<SERVER>:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
 ```
+
+`<SERVER>` is the DLP manager this endpoint reports to. The manager publishes
+the installer and the agent binary itself, so endpoints need no access to
+GitHub - see "Publishing the agent to endpoints" in `DEPLOYMENT.md`.
+
 
 This is the recommended path. Pick **Install** for a full (re)install (it cleans
 the previous install first) or **Update** to hot-swap just the binary; both verify

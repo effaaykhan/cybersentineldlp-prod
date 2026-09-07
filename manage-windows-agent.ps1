@@ -8,7 +8,9 @@
 
   Everything (install, update, uninstall) is implemented INLINE in this one file -
   it does not download or depend on any other script. The only things it fetches
-  from GitHub are the agent binary and its SHA-256 sidecar (the actual artifacts).
+  are the agent binary and its SHA-256 sidecar (the actual artifacts), and it
+  fetches them from the DLP manager rather than from GitHub - see the note above
+  the constants below for why.
 
   KEEP THIS FILE PURE ASCII WITH NO BOM. It is fetched and executed as a
   STRING (irm | iex), and a UTF-8 BOM survives that trip: the parser then sees
@@ -17,8 +19,9 @@
   path safe for non-ASCII under Windows PowerShell 5.1, so with no BOM the file
   must avoid non-ASCII entirely - no em dashes, no box drawing.
 
-  Run either form (both self-elevate to Administrator):
-    powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
+  Run either form (both self-elevate to Administrator), where SERVER is the DLP
+  manager this device reports to:
+    powershell -ExecutionPolicy Bypass -Command "irm http://SERVER:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
     powershell -ExecutionPolicy Bypass -File .\manage-windows-agent.ps1
 #>
 
@@ -50,12 +53,27 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # ============================================================
   #  Constants
   # ============================================================
-  $GITHUB_REPO = 'effaaykhan/cybersentineldlp-prod'
-  $RAW_BASE    = "https://raw.githubusercontent.com/$GITHUB_REPO/main"
-  $SELF_URL    = "$RAW_BASE/manage-windows-agent.ps1"                                   # for self-elevation re-fetch
-  $EXE_URL     = "$RAW_BASE/agents/endpoint/windows/cybersentineldlp_agent.exe"         # agent binary artifact
-  $SUM_URL     = "$EXE_URL.sha256"                                                      # its checksum sidecar
-  $VER_URL     = "$EXE_URL.version"                                                     # the version that binary IS
+  # Where the artifacts come from. These were raw.githubusercontent.com URLs,
+  # which worked only while the repository was public: GitHub answers 404 - not
+  # 403 - to an anonymous caller, so the day the repo went private, Install,
+  # Update AND the "is there a newer build?" check all began reporting a missing
+  # file on a repository where the file is present and correct.
+  #
+  # The manager serves them now. It is the one host a managed device can reach by
+  # definition - if it cannot, the agent has nothing to report to either - and
+  # reaching it needs no credential on the endpoint, which is what putting a
+  # GitHub token in the install one-liner would have meant.
+  #
+  # Deliberately left empty here and resolved below from the server this device
+  # already reports to. A hardcoded default would quietly pull the binary from
+  # somebody else's server.
+  $SCRIPT_FILE = 'manage-windows-agent.ps1'
+  $DIST_PATH   = 'api/v1/agent-dist'
+  $DIST_BASE   = $null
+  $SELF_URL    = $null    # for self-elevation re-fetch
+  $EXE_URL     = $null    # agent binary artifact
+  $SUM_URL     = $null    # its checksum sidecar
+  $VER_URL     = $null    # the version that binary IS
 
   $INSTALL_DIR = 'C:\Program Files\CyberSentinelDLP'
   $DATA_DIR    = 'C:\ProgramData\CyberSentinelDLP'
@@ -202,6 +220,68 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   }
 
   # ============================================================
+  #  Artifact source resolution
+  # ============================================================
+  # Accepts every shape the server address turns up in - what the agent config
+  # holds ("http://10.0.0.5:55100/api/v1"), a bare host, or host:port - and
+  # returns the artifact base on that same server. One function so the install
+  # prompt, the saved config and the machine environment variable can never
+  # disagree about which server a build came from.
+  function ConvertTo-DistBase {
+    param([string]$ServerUrl)
+    if ([string]::IsNullOrWhiteSpace($ServerUrl)) { return $null }
+    $u = $ServerUrl.Trim().TrimEnd('/')
+    if ($u -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://') {
+      if ($u -notmatch ':\d+$') { $u = "${u}:55100" }
+      $u = "http://$u"
+    }
+    # Drop /api/v1 and anything after it, so an origin and a full API base both
+    # land on the same place instead of /api/v1/api/v1/agent-dist.
+    $u = [regex]::Replace($u, '(?i)/api/v1.*$', '')
+    return "$u/$DIST_PATH"
+  }
+
+  function Get-DistUrls {
+    param([string]$Base)
+    if ([string]::IsNullOrWhiteSpace($Base)) { return $null }
+    $b = $Base.TrimEnd('/')
+    [PSCustomObject]@{
+      Base = $b
+      Self = "$b/$SCRIPT_FILE"
+      Exe  = "$b/$EXE_NAME"
+      Sum  = "$b/$EXE_NAME.sha256"
+      Ver  = "$b/$EXE_NAME.version"
+    }
+  }
+
+  # Runs BEFORE elevation, so every source it reads has to be readable by an
+  # ordinary user. Program Files and a Machine environment variable both are.
+  function Get-KnownServerUrl {
+    foreach ($dir in @($INSTALL_DIR, $LEGACY_DIR)) {
+      $cfg = Join-Path $dir $CONFIG_NAME
+      if (Test-Path $cfg) {
+        try {
+          $c = Get-Content $cfg -Raw -ErrorAction Stop | ConvertFrom-Json
+          if ($c.server_url) { return [string]$c.server_url }
+        } catch {}
+      }
+    }
+    try {
+      $envUrl = [Environment]::GetEnvironmentVariable('CYBERSENTINELDLP_SERVER_URL','Machine')
+      if ($envUrl) { return $envUrl }
+    } catch {}
+    return $null
+  }
+
+  # Order matters. The environment variable is first because the elevated copy of
+  # this script is handed it explicitly - without that it would re-resolve from
+  # scratch and ask for the server a second time in the new window.
+  $DIST_BASE = ConvertTo-DistBase $env:CSDLP_DIST_BASE
+  if (-not $DIST_BASE) { $DIST_BASE = ConvertTo-DistBase (Get-KnownServerUrl) }
+  $_d = Get-DistUrls $DIST_BASE
+  if ($_d) { $SELF_URL = $_d.Self; $EXE_URL = $_d.Exe; $SUM_URL = $_d.Sum; $VER_URL = $_d.Ver }
+
+  # ============================================================
   #  Elevation
   # ============================================================
   $isAdmin = ([Security.Principal.WindowsPrincipal] `
@@ -214,8 +294,24 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
         Start-Process powershell.exe -Verb RunAs -ArgumentList @(
           '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"")
       } else {
+        # Re-fetching means knowing where from. On a device with an agent already
+        # installed that is answered from its config; on a bare one nothing knows
+        # yet, so ask once here rather than let the elevated window come up empty.
+        if (-not $SELF_URL) {
+          Blank
+          Hint 'This device has no agent yet, so the server it should install from is not known.'
+          do {
+            $bootIP = Read-Host '   DLP server IP or hostname'
+          } while (-not (Test-ServerHost $bootIP))
+          $DIST_BASE = ConvertTo-DistBase $bootIP
+          $_d = Get-DistUrls $DIST_BASE
+          if ($_d) { $SELF_URL = $_d.Self }
+        }
+        # The elevated copy is handed the same source this one resolved, so it
+        # does not repeat the question above in the new window.
         Start-Process powershell.exe -Verb RunAs -ArgumentList @(
-          '-NoProfile','-ExecutionPolicy','Bypass','-Command',"irm $SELF_URL | iex")
+          '-NoProfile','-ExecutionPolicy','Bypass','-Command',
+          "`$env:CSDLP_DIST_BASE='$DIST_BASE'; irm $SELF_URL | iex")
       }
     } catch {
       Err "Could not self-elevate: $($_.Exception.Message)"
@@ -523,6 +619,14 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     } while (-not (Test-ServerHost $serverIP))
     $serverURL = "http://${serverIP}:55100/api/v1"
 
+    # Pull the binary from the very server this agent is about to report to.
+    # These shadow the outer URLs for the rest of this function on purpose: on a
+    # first install nothing had resolved them yet, and deriving them from the
+    # answer just given removes any way to install one server's build onto an
+    # agent that then reports to a different one.
+    $_di = Get-DistUrls (ConvertTo-DistBase $serverURL)
+    $EXE_URL = $_di.Exe; $SUM_URL = $_di.Sum; $VER_URL = $_di.Ver
+
     $reachable = Invoke-Spinner -Text "Testing server at ${serverIP}:55100" -ArgumentList @($serverIP) -Work {
       param($ip)
       try {
@@ -784,6 +888,18 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Blank
     Header 'UPDATE agent binary' 'Cyan'
     $exePath = Join-Path $INSTALL_DIR $EXE_NAME
+
+    # An install written by an older build, or a repaired one whose config was
+    # lost, leaves nothing to say which server publishes the binary. Ask instead
+    # of failing on an empty URL, which reads as "the download is broken".
+    if (-not $EXE_URL) {
+      Warn 'This install does not record which DLP server it belongs to.'
+      do {
+        $updIP = Read-Host '   DLP server IP or hostname'
+      } while (-not (Test-ServerHost $updIP))
+      $_du = Get-DistUrls (ConvertTo-DistBase $updIP)
+      $EXE_URL = $_du.Exe; $SUM_URL = $_du.Sum; $VER_URL = $_du.Ver
+    }
 
     # Staged inside the install directory, never %TEMP%. An unsigned PE written
     # into AppData\Local\Temp is one of the most heavily weighted signals

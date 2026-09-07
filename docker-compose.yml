@@ -139,6 +139,13 @@ services:
       - OPENSEARCH_USE_SSL=false
       - OPENSEARCH_VERIFY_CERTS=false
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:4000,http://127.0.0.1:4000}
+      # Windows agent distribution. Must be listed here or .env can never reach
+      # the container - the endpoint reads these with os.getenv. Blank token =
+      # serve whatever was baked into server/agent_dist at image build time.
+      - AGENT_DIST_TOKEN=${AGENT_DIST_TOKEN:-}
+      - AGENT_DIST_REPO=${AGENT_DIST_REPO:-effaaykhan/cybersentineldlp-prod}
+      - AGENT_DIST_REF=${AGENT_DIST_REF:-main}
+      - AGENT_DIST_REFRESH_SECONDS=${AGENT_DIST_REFRESH_SECONDS:-300}
       - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
       # SSO shared secret for SIEM integration (empty = SSO disabled)
       - DLP_SSO_SECRET=${DLP_SSO_SECRET:-}

@@ -362,12 +362,18 @@ Use a more descriptive message if you prefer, e.g.
 ### Verify the upload landed
 
 ```bash
-curl -fsI https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe | head -1
-curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256
+curl -fsS http://<SERVER>:55100/api/v1/agent-dist/info
 ```
 
-Both should return successfully. The SHA-256 should match what you
-generated locally.
+That reports the version and SHA-256 the manager is currently publishing to
+endpoints, and whether it can refresh itself from the repository. The SHA-256
+should match what you generated locally.
+
+> The endpoints fetch from the **manager**, not from GitHub. The repository is
+> private, and GitHub answers `404` (not `403`) to an anonymous caller, so
+> pointing endpoints at `raw.githubusercontent.com` makes every install, update
+> and update-check fail while looking like a deleted file. See
+> [Publishing the agent to endpoints](#publishing-the-agent-to-endpoints).
 
 > **Re-builds:** every time you change `agent.cpp` or one of the
 > `*_monitor.cpp` files, repeat compile + sha256sum + commit + push.
@@ -378,13 +384,58 @@ generated locally.
 
 ## 3. Installing the Windows agent on endpoints
 
+### Publishing the agent to endpoints
+
+Endpoints download the installer and the binary **from the manager**, at
+`/api/v1/agent-dist`. They used to fetch them from `raw.githubusercontent.com`,
+which worked only while the repository was public. GitHub answers `404` — not
+`403` — to an anonymous caller, so the day the repository went private, Install,
+Update *and* the "is there a newer build?" check all began reporting a missing
+file on a repository where the file was present and correct.
+
+Serving from the manager is the right fix rather than re-publishing source:
+every managed device can already reach the manager (if it cannot, the agent has
+nothing to report to either), and it needs no credential to do so — which is
+what putting a GitHub token in the install one-liner would have required.
+
+The routes are unauthenticated and exempt from the portal IP allowlist, for the
+same reason the browser-extension feed is: a device mid-install has no session,
+and a laptop off the corporate network must still be able to take an update.
+
+| route | serves |
+|---|---|
+| `GET /api/v1/agent-dist/info` | version, SHA-256, and whether refresh is configured |
+| `GET /api/v1/agent-dist/manage-windows-agent.ps1` | the installer/updater console |
+| `GET /api/v1/agent-dist/cybersentineldlp_agent.exe` | the agent binary |
+| `GET /api/v1/agent-dist/cybersentineldlp_agent.exe.sha256` | its checksum |
+| `GET /api/v1/agent-dist/cybersentineldlp_agent.exe.version` | the version that binary is |
+
+**Keeping it current.** Set `AGENT_DIST_TOKEN` in the server's `.env` to a token
+with read access to the repository, and the manager refreshes the artifacts on
+its own (every `AGENT_DIST_REFRESH_SECONDS`, default 300). The token stays on the
+server; nothing that can read private source is ever handed to an endpoint.
+
+```bash
+# on the DLP server
+echo 'AGENT_DIST_TOKEN=ghp_...' >> /opt/cybersentineldlp/.env
+docker compose -f docker-compose.prod.yml up -d manager
+curl -fsS http://localhost:55100/api/v1/agent-dist/info
+```
+
+Without a token the manager serves whatever is in `server/agent_dist` — seeded
+into the image at build time, and stageable by hand on a site with no egress.
+A refresh that fails for any reason leaves the last known-good set in place; the
+binary and its checksum are only ever moved forward together, because publishing
+a new checksum beside an old binary would make every endpoint report a tampered
+download.
+
 ### One-liner install
 
 Run this **as Administrator** on each Windows endpoint. It launches the interactive
 manager (`manage-windows-agent.ps1`) — pick **Install** from its menu:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm http://<SERVER>:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
 ```
 
 The same script also handles **Update** and **Uninstall** from its menu. What the
@@ -401,7 +452,9 @@ The same script also handles **Update** and **Uninstall** from its menu. What th
 4. **Step 4 — OCR deps.** Installs Chocolatey + Tesseract if missing
    (used by the screen-capture classifier's Stage 4 OCR fallback).
 5. **Step 5 — Agent binary download with SHA-256 verification.**
-   - Pulls `cybersentineldlp_agent.exe` from `raw.githubusercontent.com`.
+   - Pulls `cybersentineldlp_agent.exe` from the manager it just tested
+     in Step 1, so a device can never install one server's build and then
+     report to a different one.
    - Pulls the sidecar `.sha256` from the same location.
    - Computes the local SHA-256 with `Get-FileHash`.
    - **If the hashes don't match, deletes the binary and exits with
@@ -463,12 +516,12 @@ For just updating the binary without rerunning the full installer:
 Stop-Process -Name "cybersentineldlp_agent" -Force -ErrorAction SilentlyContinue
 Start-Sleep 2
 Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe" `
+    -Uri "http://<SERVER>:55100/api/v1/agent-dist/cybersentineldlp_agent.exe" `
     -OutFile "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe"
 
 # Verify hash
 $expected = (Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256").Content.Trim().Split()[0].ToUpper()
+    -Uri "http://<SERVER>:55100/api/v1/agent-dist/cybersentineldlp_agent.exe.sha256").Content.Trim().Split()[0].ToUpper()
 $actual = (Get-FileHash -Algorithm SHA256 "C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe").Hash.ToUpper()
 if ($expected -ne $actual) {
     Write-Host "HASH MISMATCH — refusing to start" -ForegroundColor Red

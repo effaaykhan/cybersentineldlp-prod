@@ -238,8 +238,12 @@ A single interactive manager handles **install, update, and uninstall**. Run it
 elevated and pick from the menu:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm http://<SERVER>:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
 ```
+
+Replace `<SERVER>` with the DLP manager this endpoint reports to. The manager
+publishes the installer and the agent binary itself — endpoints do not need
+access to GitHub, and the repository being private no longer breaks installs.
 
 The script self-elevates to Administrator, detects any existing agent and its
 status (running / stopped / error / none), then offers:
@@ -278,7 +282,7 @@ you're current:
 ```powershell
 $exe = 'C:\Program Files\CyberSentinelDLP\cybersentineldlp_agent.exe'
 $installed = (Get-FileHash $exe -Algorithm SHA256).Hash.ToUpper()
-$published = (Invoke-WebRequest 'https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/agents/endpoint/windows/cybersentineldlp_agent.exe.sha256' -UseBasicParsing).Content.Trim().Split()[0].ToUpper()
+$published = (Invoke-WebRequest 'http://<SERVER>:55100/api/v1/agent-dist/cybersentineldlp_agent.exe.sha256' -UseBasicParsing).Content.Trim().Split()[0].ToUpper()
 if ($installed -eq $published) { 'MATCH - latest build' } else { 'MISMATCH - not updated' }
 ```
 

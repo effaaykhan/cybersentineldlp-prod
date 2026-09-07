@@ -86,7 +86,7 @@ New-Item -ItemType Directory -Path "C:\ProgramData\CyberSentinelDLP\cache" -Forc
 > binary:
 >
 > ```powershell
-> powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
+> powershell -ExecutionPolicy Bypass -Command "irm http://<SERVER>:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
 > ```
 
 If you are registering manually, create a scheduled task named

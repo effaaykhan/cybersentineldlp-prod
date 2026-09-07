@@ -114,8 +114,13 @@ The canonical install / update / uninstall path is the interactive manager at th
 repo root. Run it elevated and pick from the menu:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/manage-windows-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm http://<SERVER>:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
 ```
+
+`<SERVER>` is the DLP manager this endpoint reports to. The manager publishes
+the installer and the agent binary itself, so endpoints need no access to
+GitHub - see "Publishing the agent to endpoints" in `DEPLOYMENT.md`.
+
 
 Pick **Update** to hot-swap just the binary (SHA-256 verified, config/task left
 untouched), or **Install** for a full (re)install — it's safe to re-run on a host

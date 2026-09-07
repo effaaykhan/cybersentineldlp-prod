@@ -1,0 +1,13 @@
+# The published artifacts are CACHE, not source. They are byte-for-byte copies of
+# files that already live in this repository (manage-windows-agent.ps1 at the
+# root, the binary and its sidecars under agents/endpoint/windows/), so committing
+# them here would duplicate a 4.5MB binary on every agent build and, worse, give
+# the duplicate its own chance to drift from the original.
+#
+# The directory is populated one of three ways, any of which is enough:
+#   * the manager refreshes it from the private repo   (AGENT_DIST_TOKEN set)
+#   * the image build seeds it                          (.github/workflows/build-images.yml)
+#   * an operator stages the files by hand              (air-gapped sites)
+*
+!.gitignore
+!README.md

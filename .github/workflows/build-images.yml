@@ -72,6 +72,29 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
+      # The manager publishes the Windows installer and agent binary to endpoints
+      # at /api/v1/agent-dist (endpoints can no longer fetch them from GitHub -
+      # the repository is private, and GitHub answers 404 to an anonymous
+      # caller). The build context is ./server, so the artifacts have to be
+      # copied inside it before the image is built. Seeding them here means a
+      # fresh deployment can install agents before anyone has configured
+      # AGENT_DIST_TOKEN; once that token is set the manager keeps the directory
+      # current at runtime and this seed is only ever the starting point.
+      - name: Seed agent artifacts into the manager image
+        if: matrix.service == 'manager'
+        run: |
+          mkdir -p server/agent_dist
+          cp manage-windows-agent.ps1 server/agent_dist/
+          cp agents/endpoint/windows/cybersentineldlp_agent.exe \
+             agents/endpoint/windows/cybersentineldlp_agent.exe.sha256 \
+             agents/endpoint/windows/cybersentineldlp_agent.exe.version \
+             server/agent_dist/
+          # A binary that does not match its own sidecar would make every
+          # endpoint report a tampered download. Fail the build instead.
+          cd server/agent_dist
+          sha256sum -c cybersentineldlp_agent.exe.sha256
+          ls -l
+
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:

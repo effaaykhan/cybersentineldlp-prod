@@ -155,6 +155,13 @@ services:
       # only the curated default_policies.json. Must be listed here or .env can
       # never reach the container (the seeder reads it via os.getenv).
       - DLP_SEED_EXPORTED_POLICIES=${DLP_SEED_EXPORTED_POLICIES:-0}
+      # Windows agent distribution. Must be listed here or .env can never reach
+      # the container - the endpoint reads these with os.getenv. Blank token =
+      # serve whatever was baked into server/agent_dist at image build time.
+      - AGENT_DIST_TOKEN=${AGENT_DIST_TOKEN:-}
+      - AGENT_DIST_REPO=${AGENT_DIST_REPO:-effaaykhan/cybersentineldlp-prod}
+      - AGENT_DIST_REF=${AGENT_DIST_REF:-main}
+      - AGENT_DIST_REFRESH_SECONDS=${AGENT_DIST_REFRESH_SECONDS:-300}
 
       # OpenSearch
       - OPENSEARCH_HOST=opensearch

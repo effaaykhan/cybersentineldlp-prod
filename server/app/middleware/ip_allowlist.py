@@ -50,6 +50,12 @@ _APP_CATALOG_SYNC = re.compile(r"^/api/v1/app-catalog/sync/?$")
 # process, with no credentials — and an endpoint must keep receiving extension
 # updates from any network, exactly like the agent routes above.
 _EXTENSION_DIST = re.compile(r"^/api/v1/extension/[^/]*$")
+# Windows agent installer + binary. A device being installed has no session to
+# present, and a laptop off the corporate network must still be able to take an
+# agent update - the same argument as the extension feed directly above. This
+# replaced a public raw.githubusercontent.com fetch, so gating it by source IP
+# would make the manager a strictly worse origin than the one it took over from.
+_AGENT_DIST = re.compile(r"^/api/v1/agent-dist/[^/]*$")
 
 
 def bump_ip_allowlist_cache() -> None:
@@ -145,6 +151,8 @@ def _is_exempt(method: str, path: str) -> bool:
     # serving the package fine — indistinguishable, from the endpoint's side,
     # from the feed being down.
     if method in ("GET", "HEAD") and _EXTENSION_DIST.match(path):
+        return True
+    if method in ("GET", "HEAD") and _AGENT_DIST.match(path):
         return True
     if method == "DELETE" and _AGENT_UNREG.match(path):
         return True

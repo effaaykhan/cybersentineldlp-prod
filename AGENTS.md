@@ -44,6 +44,13 @@ This is the quick-reference checklist for LLMs working in this repo. The source 
 - Conventional commits (`feat|fix|chore|docs|test|refactor[:scope]: summary`).
 - Before PR: run lint, tests, type checks; call out skips. Provide summary, linked issue, screenshots for UI changes, deployment/credential notes, rollout steps.
 - Keep diffs focused; update `plan.md` and relevant docs.
+- **Never write a CI-skip directive into a commit message — including the body.**
+  GitHub reads the whole message of a push's head commit, so merely *mentioning*
+  one while explaining something silently suppresses every workflow for that
+  push. The failure is invisible: the push succeeds, no run is created, and
+  nothing reports an error. The agent build sets it deliberately when it commits
+  a binary back; nothing else should contain the string in any form. Write it as
+  "the CI-skip directive" instead.
 
 ## Security & Config Tips
 - Never commit secrets; start from `.env.example`. Keep `credentials.json` out of git. Rotate default creds (admin/changeme123!).

@@ -176,6 +176,16 @@ std::atomic<bool> g_swallowNextUp{false};
 // something to send, never when there is not.
 std::atomic<bool> g_composerHasText{false};
 std::atomic<long long> g_hoverMissLoggedMs{0};
+
+// Which conversation a message is going to. Cached by the sampler and read by
+// EmitEvent, which runs on a detached thread with no UI Automation instance of
+// its own and must not spend seconds building one while a send is held.
+std::mutex  g_convMx;
+std::string g_convName;
+HWND        g_convWnd  = nullptr;
+long long   g_convAtMs = 0;
+std::atomic<long long> g_convProbedMs{0};
+std::atomic<bool>      g_convLoggedOnce{false};
 // Said once per app, not four times a second, when the pointer probe works out
 // where Send is - it is the line that tells an operator the mouse is covered.
 std::atomic<bool> g_hoverSaidSo{false};
@@ -1389,6 +1399,73 @@ std::string DescribeDisplayScaling() {
     return std::to_string(pct) + "% (" + std::to_string(dpi) + " dpi)";
 }
 
+// Is this string plausibly the name of a chat, rather than a status line or a
+// piece of the app's own furniture?
+bool LooksLikeConversationName(const std::string& s, const std::string& appName) {
+    if (s.size() < 2 || s.size() > 64) return false;
+    const std::string l = ToLowerAscii(s);
+    if (l == ToLowerAscii(appName)) return false;
+    static const char* kNotAName[] = {
+        "online", "typing", "last seen", "click here", "search", "menu",
+        "new chat", "status", "settings", "profile", "archived", "unread",
+        "message", "attach", "emoji", "voice", "video call", "recording",
+    };
+    for (const char* bad : kNotAName)
+        if (l.find(bad) != std::string::npos) return false;
+    bool anyLetter = false;
+    for (unsigned char c : s) if (std::isalpha(c)) { anyLetter = true; break; }
+    return anyLetter;
+}
+
+// WhatsApp puts the product name in its window title and the conversation only
+// in the page, so the title says nothing about who a message was going to -
+// the first thing an analyst asks and the one thing the event could not answer.
+//
+// Read by POINT rather than by walking the tree. A chat window's accessibility
+// tree holds every message ever rendered in it, so a descendant search is
+// thousands of nodes and seconds of work; the conversation header sits in the
+// same place - the top of the right-hand pane - so a handful of hit tests
+// answers the same question for almost nothing. Sampled across a small band
+// because the exact offset moves with window size, zoom and title-bar height.
+std::string ProbeConversationName(IUIAutomation* uia, HWND wnd, const std::string& appName) {
+    if (!uia || !wnd) return {};
+    RECT wr{};
+    if (!GetWindowRect(wnd, &wr)) return {};
+    const LONG w = wr.right - wr.left, h = wr.bottom - wr.top;
+    if (w < 500 || h < 300) return {};      // too small for a two-pane layout
+
+    static const double kXs[] = {0.42, 0.52, 0.64};
+    static const double kYs[] = {0.055, 0.080, 0.105};
+
+    std::string firstSeen;
+    for (double fy : kYs) {
+        for (double fx : kXs) {
+            POINT p{ wr.left + (LONG)(w * fx), wr.top + (LONG)(h * fy) };
+            IUIAutomationElement* el = nullptr;
+            if (FAILED(uia->ElementFromPoint(p, &el)) || !el) continue;
+            const std::string name = ElementStringProp(el, kNamePropertyId);
+            el->Release();
+            if (name.empty()) continue;
+            if (firstSeen.empty()) firstSeen = name;
+            if (LooksLikeConversationName(name, appName)) return name;
+        }
+    }
+    // Nothing matched. Say once what WAS up there, so a layout this does not fit
+    // can be corrected from evidence rather than by another guess.
+    if (!firstSeen.empty() && !g_convLoggedOnce.exchange(true)) {
+        LogInfo("could not identify the conversation in this window - the header "
+                "area reads '" + firstSeen + "'");
+    }
+    return {};
+}
+
+std::string ConversationFor(HWND wnd) {
+    std::lock_guard<std::mutex> lk(g_convMx);
+    if (!wnd || g_convWnd != wnd || g_convName.empty()) return {};
+    if (g_convAtMs && NowSteadyMs() - g_convAtMs > 60000) return {};
+    return g_convName;
+}
+
 // ── The pointer as the cheap search ───────────────────────────────
 //
 // FindSendButton walks the whole descendant tree, which on a Chromium document
@@ -1697,6 +1774,11 @@ std::string FriendlyAppName(const std::string& exeLower) {
 // titles its window with the product name alone, so it is only reported when it
 // says something the app name does not.
 std::string ConversationHint(HWND wnd, const std::string& appName) {
+    // What the sampler read out of the page beats the window title: WhatsApp's
+    // title is the product name and nothing else, so the title alone left this
+    // field empty on the one app it was most wanted for.
+    const std::string probed = ConversationFor(wnd);
+    if (!probed.empty()) return probed;
     if (!wnd) return {};
     wchar_t buf[256] = {0};
     const int n = GetWindowTextW(wnd, buf, 255);
@@ -2750,6 +2832,24 @@ void SamplerThread() {
                 AppendClipboardText(t.wnd);
 
             if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
+
+            // Who the message is going to. Refreshed every few seconds rather
+            // than every pass - the user switching chat is a human-speed event,
+            // and this costs a few hit tests. Cached because EmitEvent has no
+            // UI Automation instance of its own.
+            {
+                const long long now  = NowSteadyMs();
+                const long long last = g_convProbedMs.load(std::memory_order_relaxed);
+                if (!last || now - last > 3000) {
+                    g_convProbedMs.store(now, std::memory_order_relaxed);
+                    const std::string conv =
+                        ProbeConversationName(uia, t.wnd, FriendlyAppName(ToLowerAscii(t.exe)));
+                    if (!conv.empty()) {
+                        std::lock_guard<std::mutex> lk(g_convMx);
+                        g_convName = conv; g_convWnd = t.wnd; g_convAtMs = now;
+                    }
+                }
+            }
 
             // One element, one or two property reads. This is what makes the
             // sample a quarter of a second old rather than seven seconds old.

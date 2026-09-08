@@ -1239,6 +1239,53 @@ std::string ProcessImageName(DWORD pid) {
     try { return ToLower(fs::path(full).filename().string()); } catch (...) { return {}; }
 }
 
+// Parent of a process, or 0. Toolhelp32 because it needs no extra library and
+// the snapshot is cheap enough for something that runs once per file dialog.
+DWORD ParentProcessId(DWORD pid) {
+    if (!pid) return 0;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    DWORD parent = 0;
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (pe.th32ProcessID == pid) { parent = pe.th32ParentProcessID; break; }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return parent;
+}
+
+// Which APPLICATION does this window really belong to?
+//
+// A WebView2 app raises its file dialog from msedgewebview2.exe, not from
+// itself. That name is in no managed list and is not a browser either, so the
+// dialog was discarded before anything looked at the file - which is why
+// attachment control worked on Teams and Telegram, both native, and never once
+// on WhatsApp for Windows. It is the same cross-process shape that hid the
+// message box and the Send button in that app.
+//
+// So when the owning process is not one we manage, walk up the process tree:
+// the renderer's parent chain ends at the host application. Bounded at four
+// levels - deep enough for browser -> renderer -> host, shallow enough that a
+// long chain cannot turn into a search.
+std::string OwningManagedApp(DWORD pid, std::string& exeOut, MessagingVerdict& mvOut) {
+    DWORD cur = pid;
+    for (int depth = 0; depth < 4 && cur; ++depth) {
+        const std::string exe = ProcessImageName(cur);
+        if (exe.empty()) break;
+        if (depth == 0) exeOut = exe;          // report the dialog's own process
+        MessagingVerdict mv;
+        if (g_cfg.messagingPolicy) {
+            try { mv = g_cfg.messagingPolicy(exe, g_cfg.username); } catch (...) {}
+        }
+        if (mv.managed) { mvOut = mv; return exe; }
+        cur = ParentProcessId(cur);
+    }
+    return {};
+}
+
 bool IsBrowserExe(const std::string& exeLower) {
     static const std::unordered_set<std::string> browsers = {
         "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"
@@ -1379,8 +1426,15 @@ public:
 
         bool isBrowser = IsBrowserExe(exe);
         MessagingVerdict mv;
-        if (!isBrowser && g_cfg.messagingPolicy) {
-            try { mv = g_cfg.messagingPolicy(exe, g_cfg.username); } catch (...) {}
+        std::string hostExe;
+        if (!isBrowser) {
+            // Checks this process first, then its ancestors - see OwningManagedApp.
+            hostExe = OwningManagedApp((DWORD)pid, exe, mv);
+            if (!hostExe.empty() && hostExe != exe) {
+                LogDbg("file dialog belongs to " + exe + " but is hosted by " +
+                       hostExe + " - treating it as that app");
+                exe = hostExe;      // report and police the app, not its renderer
+            }
         }
         if (!isBrowser && !mv.managed) return S_OK;
 

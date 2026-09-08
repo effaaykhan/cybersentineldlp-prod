@@ -1515,6 +1515,29 @@ std::string ConversationFor(HWND wnd) {
     return g_convName;
 }
 
+// The shell-automation GUIDs, defined here rather than linked.
+//
+// libuuid supplies them, but linking it also supplies CLSID_CUIAutomation,
+// IID_IUIAutomation, IID_IUIAutomationEventHandler and
+// IID_IUIAutomationValuePattern - all four of which network_exfil_monitor.cpp
+// already defines for itself, so the link fails on multiple definition. This
+// file follows the same convention a few hundred lines up: a literal GUID
+// depends on no library and cannot be duplicated by one.
+//
+// Values taken from mingw-w64's shldisp.h / exdisp.h, which match the SDK:
+//     DEFINE_GUID(CLSID_ShellWindows,       0x9ba05972,0xf6a8,0x11cf, ...)
+//     DEFINE_GUID(IID_IShellWindows,        0x85cb6900,0x4d95,0x11cf, ...)
+//     DEFINE_GUID(IID_IWebBrowser2,         0xd30c1661,0xcdaf,0x11d0, ...)
+//     DEFINE_GUID(IID_IShellFolderViewDual, 0xe7a1af80,0x4d96,0x11cf, ...)
+static const CLSID kCLSID_ShellWindows =
+    { 0x9ba05972, 0xf6a8, 0x11cf, { 0xa4,0x42, 0x00,0xa0,0xc9,0x0a,0x8f,0x39 } };
+static const IID   kIID_IShellWindows =
+    { 0x85cb6900, 0x4d95, 0x11cf, { 0x96,0x0c, 0x00,0x80,0xc7,0xf4,0xee,0x85 } };
+static const IID   kIID_IWebBrowser2 =
+    { 0xd30c1661, 0xcdaf, 0x11d0, { 0x8a,0x3e, 0x00,0xc0,0x4f,0xc9,0xe2,0x6e } };
+static const IID   kIID_IShellFolderViewDual =
+    { 0xe7a1af80, 0x4d96, 0x11cf, { 0x96,0x0c, 0x00,0x80,0xc7,0xf4,0xee,0x85 } };
+
 // What is selected in the Explorer window a drag started from.
 //
 // Asked of the shell itself rather than inferred: Explorer publishes its open
@@ -1526,8 +1549,8 @@ std::vector<std::string> SelectedPathsInShellWindow(HWND target) {
     std::vector<std::string> out;
     if (!target) return out;
     IShellWindows* windows = nullptr;
-    if (FAILED(CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL,
-                                IID_IShellWindows, (void**)&windows)) || !windows)
+    if (FAILED(CoCreateInstance(kCLSID_ShellWindows, nullptr, CLSCTX_ALL,
+                                kIID_IShellWindows, (void**)&windows)) || !windows)
         return out;
     long count = 0;
     windows->get_Count(&count);
@@ -1536,14 +1559,14 @@ std::vector<std::string> SelectedPathsInShellWindow(HWND target) {
         IDispatch* disp = nullptr;
         if (FAILED(windows->Item(v, &disp)) || !disp) { VariantClear(&v); continue; }
         IWebBrowser2* wb = nullptr;
-        if (SUCCEEDED(disp->QueryInterface(IID_IWebBrowser2, (void**)&wb)) && wb) {
+        if (SUCCEEDED(disp->QueryInterface(kIID_IWebBrowser2, (void**)&wb)) && wb) {
             SHANDLE_PTR hw = 0;
             wb->get_HWND(&hw);
             if ((HWND)hw == target) {
                 IDispatch* docDisp = nullptr;
                 if (SUCCEEDED(wb->get_Document(&docDisp)) && docDisp) {
                     IShellFolderViewDual* view = nullptr;
-                    if (SUCCEEDED(docDisp->QueryInterface(IID_IShellFolderViewDual,
+                    if (SUCCEEDED(docDisp->QueryInterface(kIID_IShellFolderViewDual,
                                                           (void**)&view)) && view) {
                         FolderItems* items = nullptr;
                         if (SUCCEEDED(view->SelectedItems(&items)) && items) {

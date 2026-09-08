@@ -5026,6 +5026,36 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  return out;
              };
 
+             // Second opinion on a file the LOCAL classifier could not read.
+             // EvaluatePolicyRealtime base64s the bytes and the server extracts
+             // text from PDF/DOCX/XLSX/PPTX and OCRs images - the whole reason an
+             // Aadhaar card sent as a photo, or a spreadsheet of card numbers,
+             // was invisible to a regex pass over raw bytes.
+             //
+             // Only consulted when the local pass found nothing, so a text file
+             // still costs no round trip. A server that cannot be reached leaves
+             // the local verdict standing rather than failing the send.
+             nemCfg.classifyFile = [this](const std::string& filePath,
+                                          const std::string& eventType)
+                     -> NetworkExfilMonitor::ClassifyResult {
+                 NetworkExfilMonitor::ClassifyResult out;
+                 try {
+                     const std::string name =
+                         std::filesystem::path(filePath).filename().string();
+                     PolicyEvaluationResult r =
+                         EvaluatePolicyRealtime(name, filePath, "", eventType);
+                     if (!r.evaluationSucceeded) return out;
+                     out.category = r.classificationLevel;
+                     out.score    = r.confidenceScore;
+                     out.labels   = r.matchedRules;
+                     if (!r.matchedRules.empty()) out.matchedRule = r.matchedRules[0];
+                     logger.Info("attachment inspected server-side: " + name +
+                                 " -> " + (out.category.empty() ? "none" : out.category) +
+                                 " [" + std::to_string(r.matchedRules.size()) + " rule(s)]");
+                 } catch (...) {}
+                 return out;
+             };
+
              nemCfg.sendEvent = [this](const std::string& json) {
                  SendEvent(json);
              };

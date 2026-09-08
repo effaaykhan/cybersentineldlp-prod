@@ -42,6 +42,18 @@ struct ClassifyResult {
 // Callbacks the host agent provides. All must be thread-safe.
 using ClassifyFn  = std::function<ClassifyResult(const std::string& content,
                                                  const std::string& eventType)>;
+// Ask the SERVER what a file on disk contains. The local classifier runs regexes
+// over raw bytes, which reads a .txt perfectly and a PDF, DOCX, XLSX or image not
+// at all - those are compressed or pixel data, so every regex misses and the file
+// classifies Public. An Aadhaar card photographed and attached to a chat went
+// straight through for exactly that reason.
+//
+// The server decodes the bytes, extracts text from office formats, and OCRs
+// images. Optional: when unset, behaviour is unchanged and only the local pass
+// runs, so an older host that never sets it is not broken by this.
+using ClassifyFileFn = std::function<ClassifyResult(const std::string& filePath,
+                                                   const std::string& eventType)>;
+
 using SendEventFn = std::function<void(const std::string& jsonPayload)>;
 using LogFn       = std::function<void(const std::string& level,
                                        const std::string& message)>;
@@ -97,6 +109,7 @@ struct Config {
 
     // Host-provided integrations
     ClassifyFn  classify;       // MUST be set
+    ClassifyFileFn classifyFile;   // optional second opinion, server-side
     SendEventFn sendEvent;      // MUST be set
     LogFn       log;            // MUST be set (level: "INFO"/"WARNING"/"ERROR"/"DEBUG")
     AppActionFn appAction;      // optional — managed-application file control (by acting exe)

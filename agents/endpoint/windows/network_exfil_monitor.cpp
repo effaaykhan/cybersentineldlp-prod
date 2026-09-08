@@ -1526,8 +1526,40 @@ public:
             ClassifyResult cls;
             try { cls = g_cfg.classify(content, "network_exfil"); } catch(...) {}
 
+            // The local pass ran regexes over RAW BYTES. That reads a .txt or
+            // .csv correctly and a PDF, DOCX, XLSX or image not at all - those
+            // are compressed streams or pixels, so every pattern misses and the
+            // file is judged Public. An Aadhaar card photographed and attached
+            // to a chat went through untouched for exactly that reason, and so
+            // would a spreadsheet of card numbers.
+            //
+            // So a local "nothing found" on a file we could not actually read is
+            // not a verdict, it is a failure to inspect - the same
+            // uninspectable-is-not-clean rule applied everywhere else here. Ask
+            // the server, which decodes the bytes, extracts text from office
+            // formats and OCRs images.
+            //
+            // Only on a local miss: a hit is already correct and costs nothing,
+            // and there is no reason to spend a round trip re-confirming it.
+            std::string clsVia = "local";
+            {
+                const std::string catNow = ToLower(cls.category);
+                const bool localFound = (catNow == "confidential" || catNow == "restricted");
+                if (!localFound && g_cfg.classifyFile && !resolved.empty()) {
+                    ClassifyResult srv;
+                    try { srv = g_cfg.classifyFile(resolved, "messaging_attachment"); }
+                    catch (...) {}
+                    const std::string srvCat = ToLower(srv.category);
+                    if (srvCat == "confidential" || srvCat == "restricted") {
+                        cls = srv;
+                        clsVia = "server";
+                    }
+                }
+            }
+
             LogInfo("CLASSIFICATION_RESULT " + chan + " pid=" + std::to_string(pid) +
-                    " category=" + (cls.category.empty() ? "none" : cls.category));
+                    " category=" + (cls.category.empty() ? "none" : cls.category) +
+                    " via=" + clsVia);
 
             std::string catLower = ToLower(cls.category);
             bool sensitive = (catLower == "confidential" || catLower == "restricted");

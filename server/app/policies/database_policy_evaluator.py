@@ -237,6 +237,22 @@ class DatabasePolicyEvaluator:
             "classification_engine": ["classification_metadata.engine", "classification_engine"],
         }
 
+        # A rule on clipboard_content must not read a MESSAGE body. The generic
+        # "content" fallback below exists so a clipboard event whose text sits
+        # in the common field still evaluates - but it made the field match any
+        # event that carries content at all, so a clipboard policy was
+        # attributed to a blocked WhatsApp message, complete with its own
+        # regex, on an event where nothing was ever copied. Reported from the
+        # field as "why am I still seeing clipboard policy triggered".
+        #
+        # The fallback is kept, and confined to the events it was meant for.
+        if field == "clipboard_content":
+            etype = str(self._get_value_by_path(event, "event.type")
+                        or event.get("event_type") or "").lower()
+            if etype and etype != "clipboard":
+                return self._get_value_by_path(event, "clipboard.content") \
+                    or event.get("clipboard_content")
+
         candidate_paths = field_mappings.get(field, [field])
 
         for path in candidate_paths:

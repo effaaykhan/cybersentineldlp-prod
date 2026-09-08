@@ -24,7 +24,7 @@ from __future__ import annotations
 import io
 import logging
 import os
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +65,14 @@ TEXT_EXTS = {
 # silently no-ops and the file stays "unreadable" (blocked by policy) — never
 # silently "clean". This keeps the SMTP relay (which ships a slim image without
 # the OCR stack) working unchanged; its images just remain uninspectable there.
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
+# .avif/.heic/.heif are what a modern phone and a modern browser now produce, so
+# they are the formats a photograph of an ID card actually arrives in. Listing
+# them matters even when nothing here can decode them: it routes the file to the
+# image branch, where a decode failure is reported as "we could not read this"
+# rather than falling through to the generic binary case, which policy reads as
+# "not text-bearing, nothing to leak".
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".jfif", ".tif", ".tiff", ".bmp",
+              ".gif", ".webp", ".avif", ".heic", ".heif"}
 
 # Bounds — OCR is the most expensive path here (seconds per page), and the input
 # is untrusted, so cap the work regardless of what the file claims.
@@ -74,6 +81,21 @@ OCR_MAX_PAGES = int(os.getenv("DLP_OCR_MAX_PAGES", "20"))   # pages of a scanned
 OCR_DPI = int(os.getenv("DLP_OCR_DPI", "200"))              # render resolution
 OCR_LANG = os.getenv("DLP_OCR_LANG", "eng")
 OCR_PAGE_TIMEOUT = int(os.getenv("DLP_OCR_PAGE_TIMEOUT", "30"))  # seconds per page/image
+
+# Tesseract 4/5 parallelise with OpenMP, and on a multi-core machine that is
+# dramatically SLOWER than running single-threaded - the threads spend their time
+# contending rather than working. Measured on this image, a 853x630 photo of an
+# ID card: 48.9 seconds with OpenMP left to its own devices, 0.9 seconds with it
+# capped. Same output both ways.
+#
+# At 49s every real photograph exceeded the 30s budget above, so OCR reported a
+# timeout and the file came back "could not be read" - which is why scanned
+# documents and photographed cards looked like something OCR simply could not
+# handle. It handles them in about a second.
+#
+# Set here rather than in the compose file so it travels with the code that
+# depends on it: pytesseract runs tesseract as a subprocess, which inherits this.
+os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
 
 class Extracted(NamedTuple):
@@ -146,22 +168,50 @@ def _ocr_available() -> bool:
         return False
 
 
-def _ocr_image_bytes(data: bytes) -> str:
-    """OCR a single raster image (png/jpg/…). Returns '' on any failure."""
+def _ocr_image_bytes(data: bytes) -> Optional[str]:
+    """OCR a single raster image (png/jpg/…).
+
+    Returns the text, "" when OCR ran and the image genuinely carries none, and
+    None when we could not read the image at all - an unsupported container
+    (Pillow ships no AVIF/HEIC decoder), a corrupt file, or an OCR error.
+
+    That distinction is the whole point. Both used to return "", so an image
+    nothing here could decode was indistinguishable from a holiday photo, and
+    policy was told "no text found" about a file whose pixels were never seen.
+    An Aadhaar card sent as .avif was reported Public on that basis.
+    """
     if not _ocr_available():
-        return ""
+        return None
     try:
         import pytesseract
         from PIL import Image
+        # Registers the AVIF decoder with Pillow. AVIF is what a modern phone
+        # camera and a modern browser now save, so it is a format an ID card
+        # photograph genuinely arrives in - and Pillow ships no decoder for it,
+        # so without this the image cannot be opened at all. Best-effort: absent
+        # plugin means AVIF stays undecodable and is reported as such, which is
+        # the honest answer rather than a silent pass.
+        try:
+            import pillow_avif  # noqa: F401
+        except Exception:
+            pass
         with Image.open(io.BytesIO(data)) as img:
-            # Normalise mode so Tesseract gets something sane; convert lazily.
-            if img.mode not in ("L", "RGB"):
-                img = img.convert("RGB")
+            # Normalise mode so Tesseract gets something sane - and ALWAYS hand
+            # on a new in-memory image, never the decoded original.
+            #
+            # pytesseract validates PIL's `format` attribute against its own
+            # list before doing anything, so an image whose container it does
+            # not know is refused with "Unsupported image format/type" even
+            # though Pillow decoded it perfectly. AVIF is exactly that case.
+            # convert()/copy() both return an image with format=None, which
+            # makes pytesseract re-encode it as PNG - the pixels are what
+            # matter, and the container has already done its job.
+            img = img.convert("RGB") if img.mode not in ("L", "RGB") else img.copy()
             return pytesseract.image_to_string(
                 img, lang=OCR_LANG, timeout=OCR_PAGE_TIMEOUT) or ""
     except Exception as e:  # noqa: BLE001 — OCR must never raise into the caller
         log.warning("image OCR failed: %s", e)
-        return ""
+        return None
 
 
 def _ocr_pdf_bytes(data: bytes) -> str:
@@ -489,6 +539,13 @@ def extract_text(filename: str, data: bytes, _depth: int = 0,
     # not clean.
     if ext in IMAGE_EXTS or data[:8] == b"\x89PNG\r\n\x1a\n" or data[:3] == b"\xff\xd8\xff":
         ocr = _ocr_image_bytes(data)
+        if ocr is None:
+            # We never saw the pixels. Not "no text" - unknown, and policy
+            # decides. This is the same rule the rest of this module follows:
+            # uninspectable is not clean.
+            log.info("%s: image could not be decoded or OCR failed", filename)
+            return Extracted("", "image_unreadable", False,
+                             "image could not be decoded (unsupported format or OCR failure)")
         if ocr.strip():
             clipped, wc = _clip(ocr)
             log.info("%s: image read via OCR (%d chars)", filename, len(clipped))

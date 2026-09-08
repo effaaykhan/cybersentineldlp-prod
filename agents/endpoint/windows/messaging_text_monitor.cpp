@@ -1409,6 +1409,15 @@ bool LooksLikeConversationName(const std::string& s, const std::string& appName)
         "online", "typing", "last seen", "click here", "search", "menu",
         "new chat", "status", "settings", "profile", "archived", "unread",
         "message", "attach", "emoji", "voice", "video call", "recording",
+        // Hosting-layer furniture. A hit test that lands anywhere but the page
+        // returns the name of the window that OWNS that pixel, and those names
+        // read like plausible prose - "non client input sink window" has
+        // letters, spaces and a sensible length, and sailed through every test
+        // below. It was reported as the conversation name on a real block.
+        "input sink", "sink window", "non client", "nonclient",
+        "chrome_widgetwin", "chrome_renderwidget", "desktopchildsitebridge",
+        "corewindow", "intermediate d3d", "title bar", "titlebar",
+        "minimize", "maximize", "restore", "close", "system menu",
     };
     for (const char* bad : kNotAName)
         if (l.find(bad) != std::string::npos) return false;
@@ -1429,18 +1438,27 @@ bool LooksLikeConversationName(const std::string& s, const std::string& appName)
 // because the exact offset moves with window size, zoom and title-bar height.
 std::string ProbeConversationName(IUIAutomation* uia, HWND wnd, const std::string& appName) {
     if (!uia || !wnd) return {};
-    RECT wr{};
-    if (!GetWindowRect(wnd, &wr)) return {};
-    const LONG w = wr.right - wr.left, h = wr.bottom - wr.top;
+    // The CLIENT area, not the window. Sampling the window rectangle put the
+    // first rows of points in the caption, where the hit test returns the
+    // non-client input sink rather than anything on the page - which is exactly
+    // what got reported as a conversation name.
+    RECT cr{};
+    if (!GetClientRect(wnd, &cr)) return {};
+    POINT tl{ cr.left, cr.top }, br{ cr.right, cr.bottom };
+    if (!ClientToScreen(wnd, &tl) || !ClientToScreen(wnd, &br)) return {};
+    const LONG w = br.x - tl.x, h = br.y - tl.y;
     if (w < 500 || h < 300) return {};      // too small for a two-pane layout
 
+    // Wider band than before: WinUI apps draw their own title bar INSIDE the
+    // client area, so the header can sit anywhere in the top fifth depending on
+    // how tall that custom caption is.
     static const double kXs[] = {0.42, 0.52, 0.64};
-    static const double kYs[] = {0.055, 0.080, 0.105};
+    static const double kYs[] = {0.06, 0.09, 0.12, 0.16, 0.20};
 
     std::string firstSeen;
     for (double fy : kYs) {
         for (double fx : kXs) {
-            POINT p{ wr.left + (LONG)(w * fx), wr.top + (LONG)(h * fy) };
+            POINT p{ tl.x + (LONG)(w * fx), tl.y + (LONG)(h * fy) };
             IUIAutomationElement* el = nullptr;
             if (FAILED(uia->ElementFromPoint(p, &el)) || !el) continue;
             const std::string name = ElementStringProp(el, kNamePropertyId);

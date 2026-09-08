@@ -2891,6 +2891,18 @@ async def evaluate_policy_realtime(
             reason += f"Detected: {', '.join(rule_names)}"
             if len(classification_result.matched_rules) > 5:
                 reason += f" and {len(classification_result.matched_rules) - 5} more"
+        elif extraction_status in ("unreadable", "too_large"):
+            # "No sensitive data detected" is a claim about content we READ. Said
+            # about a file we could not open - an unsupported image container, an
+            # encrypted archive, something past the size cap - it is simply
+            # false, and it is the sentence an operator quotes back when asking
+            # why a card sent as a photo was allowed. Say what actually happened.
+            reason = (
+                "Not inspected: " + (extraction_reason or "content could not be read")
+                + ". No policy requires uninspectable content to be blocked, so it was allowed."
+                if not should_block else
+                "Not inspected: " + (extraction_reason or "content could not be read")
+            )
         else:
             reason = f"Classification: {classification_result.classification} - no sensitive data detected"
 

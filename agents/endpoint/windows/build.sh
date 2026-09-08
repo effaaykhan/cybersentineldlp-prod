@@ -106,7 +106,9 @@ g++ -std=c++17 -O2 -mwindows \
     -o cybersentineldlp_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \
-    -luiautomationcore -lpsapi -lmpr -lwtsapi32 -static
+    -luiautomationcore -lpsapi -lmpr -lwtsapi32 \
+    -luuid \
+    -static
 
 # Check if compilation was successful
 BUILD_RC=$?

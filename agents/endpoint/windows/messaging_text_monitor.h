@@ -132,6 +132,11 @@ struct Config {
     NetworkExfilMonitor::SendEventFn        sendEvent;       // MUST be set
     NetworkExfilMonitor::LogFn              log;             // MUST be set
     NetworkExfilMonitor::MessagingPolicyFn  messagingPolicy; // MUST be set
+    // Server-side inspection of a file on disk. Used for a file DROPPED into a
+    // chat: the local regex pass cannot read a photo or an office document, and
+    // a dropped file is the one attachment path with no file dialog to hook.
+    // Optional - unset means dropped files are not inspected.
+    NetworkExfilMonitor::ClassifyFileFn     classifyFile;
 
     // Longest composer text inspected. A chat message is small; the cap only
     // bounds the cost of someone pasting a novel into the box.

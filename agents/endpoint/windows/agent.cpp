@@ -5110,6 +5110,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              mtCfg.username        = GetUsername();
              mtCfg.hostname        = GetHostname();
              mtCfg.classify        = nemCfg.classify;
+             mtCfg.classifyFile    = nemCfg.classifyFile;
              mtCfg.sendEvent       = nemCfg.sendEvent;
              mtCfg.log             = nemCfg.log;
              mtCfg.messagingPolicy = nemCfg.messagingPolicy;

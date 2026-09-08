@@ -25,6 +25,9 @@
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <UIAutomation.h>
+#include <shlobj.h>
+#include <exdisp.h>
+#include <shldisp.h>
 
 #include "messaging_text_monitor.h"
 
@@ -176,6 +179,34 @@ std::atomic<bool> g_swallowNextUp{false};
 // something to send, never when there is not.
 std::atomic<bool> g_composerHasText{false};
 std::atomic<long long> g_hoverMissLoggedMs{0};
+
+// ── A file dragged into a chat ───────────────────────────────────────────────
+// A drop opens no file dialog, so the attachment detector - which hangs off the
+// file picker - never sees it. It is also the way people actually attach things.
+//
+// The drag has an ORIGIN, though, and that is the part worth keeping: a drop is
+// a button-down over Explorer and a button-up over the chat. Ask the SOURCE
+// window what was selected when the drag began and the file is identified
+// exactly, with its full path - no matching on a bare file name, which cannot
+// tell one Photo.avif from another in a different folder.
+//
+// Only the two points are recorded on the hook thread. Everything that costs
+// anything - hit tests, COM, classification - happens on a worker, because a
+// low-level hook that overruns its timeout is removed by Windows without notice.
+std::mutex  g_dragMx;
+POINT       g_dragDownPt   = {0, 0};
+long long   g_dragDownMs   = 0;
+bool        g_dragDownSeen = false;
+
+// A file dropped into a chat that we judged sensitive. Held against the window
+// it was dropped into, and consumed when a send is attempted there.
+std::mutex               g_dropMx;
+HWND                     g_dropWnd = nullptr;
+long long                g_dropAtMs = 0;
+std::string              g_dropPath;
+NetworkExfilMonitor::ClassifyResult g_dropCls;
+std::atomic<bool>        g_dropBusy{false};
+std::atomic<bool>        g_dropNoSourceLogged{false};
 
 // Which conversation a message is going to. Cached by the sampler and read by
 // EmitEvent, which runs on a detached thread with no UI Automation instance of
@@ -1484,6 +1515,138 @@ std::string ConversationFor(HWND wnd) {
     return g_convName;
 }
 
+// What is selected in the Explorer window a drag started from.
+//
+// Asked of the shell itself rather than inferred: Explorer publishes its open
+// views through IShellWindows, and a view knows its own selection with full
+// paths. That is what makes this unambiguous - dragging selects, so the
+// selection at drag time IS what was dragged, and no two files with the same
+// name can be confused for one another.
+std::vector<std::string> SelectedPathsInShellWindow(HWND target) {
+    std::vector<std::string> out;
+    if (!target) return out;
+    IShellWindows* windows = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL,
+                                IID_IShellWindows, (void**)&windows)) || !windows)
+        return out;
+    long count = 0;
+    windows->get_Count(&count);
+    for (long i = 0; i < count && out.empty(); ++i) {
+        VARIANT v; VariantInit(&v); v.vt = VT_I4; v.lVal = i;
+        IDispatch* disp = nullptr;
+        if (FAILED(windows->Item(v, &disp)) || !disp) { VariantClear(&v); continue; }
+        IWebBrowser2* wb = nullptr;
+        if (SUCCEEDED(disp->QueryInterface(IID_IWebBrowser2, (void**)&wb)) && wb) {
+            SHANDLE_PTR hw = 0;
+            wb->get_HWND(&hw);
+            if ((HWND)hw == target) {
+                IDispatch* docDisp = nullptr;
+                if (SUCCEEDED(wb->get_Document(&docDisp)) && docDisp) {
+                    IShellFolderViewDual* view = nullptr;
+                    if (SUCCEEDED(docDisp->QueryInterface(IID_IShellFolderViewDual,
+                                                          (void**)&view)) && view) {
+                        FolderItems* items = nullptr;
+                        if (SUCCEEDED(view->SelectedItems(&items)) && items) {
+                            long n = 0; items->get_Count(&n);
+                            for (long k = 0; k < n && (int)out.size() < 16; ++k) {
+                                VARIANT kv; VariantInit(&kv); kv.vt = VT_I4; kv.lVal = k;
+                                FolderItem* it = nullptr;
+                                if (SUCCEEDED(items->Item(kv, &it)) && it) {
+                                    BSTR bp = nullptr;
+                                    if (SUCCEEDED(it->get_Path(&bp)) && bp) {
+                                        const std::string sp = WideToUtf8(bp);
+                                        if (!sp.empty()) out.push_back(sp);
+                                        SysFreeString(bp);
+                                    }
+                                    it->Release();
+                                }
+                                VariantClear(&kv);
+                            }
+                            items->Release();
+                        }
+                        view->Release();
+                    }
+                    docDisp->Release();
+                }
+            }
+            wb->Release();
+        }
+        disp->Release();
+        VariantClear(&v);
+    }
+    windows->Release();
+    return out;
+}
+
+// A drop landed on a managed chat window. Runs on its own thread: this does
+// COM, hit tests and a server round trip, none of which may happen on a hook.
+void ResolveDroppedFiles(POINT down, HWND target) {
+    if (g_dropBusy.exchange(true)) return;      // one at a time is plenty
+    struct Done { ~Done(){ g_dropBusy.store(false); } } done;
+
+    const bool comOk = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
+    HWND src = WindowFromPoint(down);
+    if (src) src = GetAncestor(src, GA_ROOT);
+
+    std::vector<std::string> paths;
+    if (src && src != target) paths = SelectedPathsInShellWindow(src);
+
+    if (paths.empty()) {
+        // Dragged from something that is not an Explorer view - another app's
+        // list, a browser download bar, the desktop of a shell we cannot query.
+        // Say so once rather than silently doing nothing.
+        if (!g_dropNoSourceLogged.exchange(true)) {
+            LogInfo("a file was dropped into a managed chat from a window that "
+                    "does not publish its selection - the file could not be "
+                    "identified, so it was not inspected");
+        }
+        if (comOk) CoUninitialize();
+        return;
+    }
+
+    for (const auto& path : paths) {
+        if (!g_cfg.classifyFile) break;
+        NetworkExfilMonitor::ClassifyResult cls;
+        try { cls = g_cfg.classifyFile(path, "messaging_attachment"); } catch (...) {}
+        const std::string cat = ToLowerAscii(cls.category);
+        if (cat == "confidential" || cat == "restricted") {
+            {
+                std::lock_guard<std::mutex> lk(g_dropMx);
+                g_dropWnd = target; g_dropAtMs = NowSteadyMs();
+                g_dropPath = path;  g_dropCls = cls;
+            }
+            LogWarn("a sensitive file was dropped into a managed chat: " + path +
+                    " (" + cls.category + ") - the next send in this window will be blocked");
+            break;
+        }
+    }
+    if (comOk) CoUninitialize();
+}
+
+// The pending sensitive drop for this window, if there is a fresh one.
+bool HasPendingDrop(HWND wnd) {
+    std::lock_guard<std::mutex> lk(g_dropMx);
+    if (!wnd || g_dropWnd != wnd || g_dropPath.empty()) return false;
+    return !(g_dropAtMs && NowSteadyMs() - g_dropAtMs > 300000);
+}
+
+bool PendingDropFor(HWND wnd, std::string& pathOut,
+                    NetworkExfilMonitor::ClassifyResult& clsOut) {
+    std::lock_guard<std::mutex> lk(g_dropMx);
+    if (!wnd || g_dropWnd != wnd || g_dropPath.empty()) return false;
+    // Five minutes: long enough to type a caption, short enough that a file
+    // dropped and then removed does not haunt the next message.
+    if (g_dropAtMs && NowSteadyMs() - g_dropAtMs > 300000) return false;
+    pathOut = g_dropPath; clsOut = g_dropCls;
+    return true;
+}
+
+void ClearPendingDrop() {
+    std::lock_guard<std::mutex> lk(g_dropMx);
+    g_dropWnd = nullptr; g_dropAtMs = 0; g_dropPath.clear();
+    g_dropCls = NetworkExfilMonitor::ClassifyResult{};
+}
+
 // ── The pointer as the cheap search ───────────────────────────────
 //
 // FindSendButton walks the whole descendant tree, which on a Chromium document
@@ -2074,6 +2237,30 @@ void ReportUninspectable(const std::string& exe, DWORD pid) {
 void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
                   const std::vector<std::string>& types, const std::string& exeHint) {
     const std::string exe = exeHint.empty() ? ProcessExeName(pid) : exeHint;
+
+    // A sensitive file was dropped into this window and is waiting to be sent.
+    // Decided before anything is read: the message box may be empty or hold an
+    // innocent caption, and neither says anything about the picture attached
+    // to it. Already classified, on a thread, at drop time - so this costs a
+    // mutex and the keystroke is not held while a file is inspected.
+    {
+        std::string dropPath;
+        NetworkExfilMonitor::ClassifyResult dropCls;
+        if (PendingDropFor(wnd, dropPath, dropCls)) {
+            const std::string what = DescribeLabels(dropCls);
+            const std::string severity =
+                (ToLowerAscii(dropCls.category) == "restricted") ? "critical" : "high";
+            EmitEvent(exe, pid, "BLOCK", severity, dropCls,
+                      "Blocked sensitive file dropped into " + exe + " (" +
+                      dropCls.category + ") - " + dropPath, dropPath,
+                      "enter_key", wnd);
+            LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + dropCls.category +
+                    " detected=[" + what + "] via=dropped-file path=" + dropPath);
+            ShowBlockedNotice(exe, what.empty() ? std::string("a sensitive file") : what);
+            ClearPendingDrop();
+            return;                 // the send stays swallowed
+        }
+    }
 
     // Two thirds of the hold budget: enough for Chromium to build its tree,
     // with the rest left for classification so the watchdog is not what ends
@@ -2949,8 +3136,14 @@ void SamplerThread() {
 
             // What the locator uses to decide whether to look for the Send
             // control at all: it only exists, and only matters, while there is
-            // something in the box.
-            g_composerHasText.store(!text.empty());
+            // something to send.
+            //
+            // A dropped picture counts. Sending one usually means typing
+            // nothing at all, and keying this on the message box alone meant the
+            // Send button was never located for exactly that case - so the mouse
+            // hook had no rectangle, and a click on Send went through before any
+            // of the drop handling was reached.
+            g_composerHasText.store(!text.empty() || HasPendingDrop(t.wnd));
 
             // ── Pre-decide, so the mouse hook never has to ───────────────
             // Only when the text actually changed: this runs four times a
@@ -3182,8 +3375,32 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
     if (nCode != HC_ACTION) return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
 
-    if (wParam == WM_LBUTTONUP && g_swallowNextUp.exchange(false)) {
-        return 1;   // the down half was ours; its up half must not escape either
+    if (wParam == WM_LBUTTONUP) {
+        if (g_swallowNextUp.exchange(false)) {
+            return 1;   // the down half was ours; its up half must not escape either
+        }
+        // A button-up over a managed chat, far from where the button went down,
+        // is a drop. Nothing is done here beyond an atomic read and a compare:
+        // the work happens on a thread, because a low-level hook that overruns
+        // its timeout is removed by Windows without telling anyone.
+        MSLLHOOKSTRUCT* mu = (MSLLHOOKSTRUCT*)lParam;
+        const HWND managed = g_managedWnd.load(std::memory_order_relaxed);
+        if (mu && !(mu->flags & LLMHF_INJECTED) && managed) {
+            POINT down{}; long long downMs = 0; bool seen = false;
+            {
+                std::lock_guard<std::mutex> lk(g_dragMx);
+                seen = g_dragDownSeen; down = g_dragDownPt; downMs = g_dragDownMs;
+                g_dragDownSeen = false;
+            }
+            const long long dx = (long long)mu->pt.x - down.x;
+            const long long dy = (long long)mu->pt.y - down.y;
+            const long long now = NowSteadyMs();
+            if (seen && (dx * dx + dy * dy) > (40 * 40) &&
+                downMs && now - downMs < 60000) {
+                std::thread(ResolveDroppedFiles, down, managed).detach();
+            }
+        }
+        return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
     }
     if (wParam != WM_LBUTTONDOWN) {
         return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
@@ -3192,6 +3409,12 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     MSLLHOOKSTRUCT* m = (MSLLHOOKSTRUCT*)lParam;
     if (!m || (m->flags & LLMHF_INJECTED)) {
         return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+    }
+
+    // Where a drag would have started. Two writes under a mutex - no syscalls.
+    {
+        std::lock_guard<std::mutex> lk(g_dragMx);
+        g_dragDownPt = m->pt; g_dragDownMs = NowSteadyMs(); g_dragDownSeen = true;
     }
 
     DWORD pid = 0;
@@ -3206,9 +3429,22 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         pid = g_sendPid;
     }
 
-    std::string what, text;
+    std::string what, text, via = "send-button-click";
     NetworkExfilMonitor::ClassifyResult cls;
+    bool fromDrop = false;
     {
+        // A file dropped into this chat is judged on its own, before the message
+        // box is consulted: the box is usually empty when a picture is sent, and
+        // whatever it holds says nothing about the picture attached to it.
+        std::string dropPath;
+        NetworkExfilMonitor::ClassifyResult dropCls;
+        if (PendingDropFor(g_managedWnd.load(std::memory_order_relaxed),
+                           dropPath, dropCls)) {
+            cls = dropCls; text = dropPath; what = DescribeLabels(dropCls);
+            via = "dropped-file"; fromDrop = true;
+        }
+    }
+    if (!fromDrop) {
         std::lock_guard<std::mutex> lk(g_snapMx);
         const long long age = g_snapAtMs ? (NowSteadyMs() - g_snapAtMs) : -1;
         if (!(g_snapPid == pid && g_snapSensitive && age >= 0 && age <= 15000)) {
@@ -3220,7 +3456,8 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     // Committed. Swallow both halves and report off the hook thread — every
     // line below this point must stay off anything that can block.
     g_swallowNextUp.store(true);
-    std::thread([pid, what, cls, text]() {
+    if (fromDrop) ClearPendingDrop();
+    std::thread([pid, what, cls, text, via, fromDrop]() {
         const std::string exe = ProcessExeName(pid);
         const std::string severity =
             (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
@@ -3228,13 +3465,16 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
             // Resolved here rather than in the hook: this runs on a detached
             // thread and the app is still foreground, the block notice not yet up.
             EmitEvent(exe, pid, "BLOCK", severity, cls,
-                      "Blocked sensitive message in " + exe + " (" + cls.category +
-                      ") - Send button click", text,
-                      "send_button", GetForegroundWindow());
+                      (fromDrop
+                         ? "Blocked sensitive file dropped into " + exe + " (" +
+                           cls.category + ") - " + text
+                         : "Blocked sensitive message in " + exe + " (" +
+                           cls.category + ") - Send button click"),
+                      text, "send_button", GetForegroundWindow());
         } catch (...) {}
         LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
-                " detected=[" + what + "] via=send-button-click");
-        ShowBlockedNotice(exe, what);
+                " detected=[" + what + "] via=" + via);
+        ShowBlockedNotice(exe, what.empty() ? std::string("a sensitive file") : what);
     }).detach();
 
     return 1;

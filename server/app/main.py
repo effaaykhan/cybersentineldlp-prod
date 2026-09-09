@@ -299,41 +299,55 @@ async def _auto_init_schema_and_admin():
         # migration first; migration 028 does the same thing for installs that
         # do run alembic. Both paths are ON CONFLICT DO NOTHING, so an operator's
         # edits to a built-in row survive every restart and re-seed.
-        async with _db.postgres_engine.begin() as conn:
-            await conn.execute(text(
-                """
-                CREATE TABLE IF NOT EXISTS app_catalog (
-                    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    host_pattern VARCHAR(255) NOT NULL UNIQUE,
-                    app_id       VARCHAR(100) NOT NULL,
-                    app_name     VARCHAR(255) NOT NULL,
-                    vendor       VARCHAR(255),
-                    category     VARCHAR(50)  NOT NULL,
-                    is_enabled   BOOLEAN      NOT NULL DEFAULT TRUE,
-                    is_builtin   BOOLEAN      NOT NULL DEFAULT FALSE,
-                    priority     INTEGER      NOT NULL DEFAULT 0,
-                    notes        VARCHAR(1000),
-                    created_by   UUID,
-                    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
-                    updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
-                )
-                """
-            ))
-            await conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_app_catalog_category ON app_catalog (category)"
-            ))
-            from app.core.web_activity import DEFAULT_CATALOG as _CATALOG_SEED
-            for _hp, _aid, _an, _vendor, _cat in _CATALOG_SEED:
-                await conn.execute(
-                    text(
-                        "INSERT INTO app_catalog "
-                        "(host_pattern, app_id, app_name, vendor, category, is_builtin, priority) "
-                        "VALUES (:hp, :aid, :an, :v, :c, TRUE, :p) "
-                        "ON CONFLICT (host_pattern) DO NOTHING"
-                    ),
-                    {"hp": _hp, "aid": _aid, "an": _an, "v": _vendor, "c": _cat,
-                     "p": 10 if "/" in _hp else 0},
-                )
+        # The web-activity catalog is reference data. Its seeding is isolated so
+        # that a failure here cannot take the ADMIN seed below down with it -
+        # which is exactly what happened on a fresh install: one NOT NULL
+        # violation on app_catalog.id aborted this whole block, no admin was
+        # created, and with no admin the rules and policies seeds skipped too.
+        # A missing catalog row is cosmetic; no admin means nobody can log in.
+        try:
+            async with _db.postgres_engine.begin() as conn:
+                await conn.execute(text(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_catalog (
+                        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        host_pattern VARCHAR(255) NOT NULL UNIQUE,
+                        app_id       VARCHAR(100) NOT NULL,
+                        app_name     VARCHAR(255) NOT NULL,
+                        vendor       VARCHAR(255),
+                        category     VARCHAR(50)  NOT NULL,
+                        is_enabled   BOOLEAN      NOT NULL DEFAULT TRUE,
+                        is_builtin   BOOLEAN      NOT NULL DEFAULT FALSE,
+                        priority     INTEGER      NOT NULL DEFAULT 0,
+                        notes        VARCHAR(1000),
+                        created_by   UUID,
+                        created_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+                        updated_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+                    )
+                    """
+                ))
+                await conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_app_catalog_category ON app_catalog (category)"
+                ))
+                from app.core.web_activity import DEFAULT_CATALOG as _CATALOG_SEED
+                for _hp, _aid, _an, _vendor, _cat in _CATALOG_SEED:
+                    await conn.execute(
+                        text(
+                            # id is supplied explicitly. The CREATE TABLE above
+                            # gives it a default, but it is IF NOT EXISTS - and on a
+                            # deployment where alembic or the ORM created this table
+                            # first, without that default, the create is a no-op and
+                            # every one of these inserts fails on a NOT NULL id.
+                            "INSERT INTO app_catalog "
+                            "(id, host_pattern, app_id, app_name, vendor, category, is_builtin, priority) "
+                            "VALUES (gen_random_uuid(), :hp, :aid, :an, :v, :c, TRUE, :p) "
+                            "ON CONFLICT (host_pattern) DO NOTHING"
+                        ),
+                        {"hp": _hp, "aid": _aid, "an": _an, "v": _vendor, "c": _cat,
+                         "p": 10 if "/" in _hp else 0},
+                    )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Web-activity catalog seed failed (continuing)", error=str(e))
 
         # Seed default admin if no users exist yet.
         # Uses ON CONFLICT to handle race conditions with multiple workers.

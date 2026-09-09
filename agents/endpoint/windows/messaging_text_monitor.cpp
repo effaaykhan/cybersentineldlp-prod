@@ -197,6 +197,11 @@ std::mutex  g_dragMx;
 POINT       g_dragDownPt   = {0, 0};
 long long   g_dragDownMs   = 0;
 bool        g_dragDownSeen = false;
+// The window the drag STARTED on, captured while the button is going down.
+// Resolving it afterwards from the same screen point does not work: by then the
+// chat has been raised over that spot, so the hit test answers with the chat
+// window and the real source is never asked what it had selected.
+HWND        g_dragDownWnd  = nullptr;
 
 // A file dropped into a chat that we judged sensitive. Held against the window
 // it was dropped into, and consumed when a send is attempted there.
@@ -1483,8 +1488,13 @@ std::string ProbeConversationName(IUIAutomation* uia, HWND wnd, const std::strin
     // Wider band than before: WinUI apps draw their own title bar INSIDE the
     // client area, so the header can sit anywhere in the top fifth depending on
     // how tall that custom caption is.
-    static const double kXs[] = {0.42, 0.52, 0.64};
-    static const double kYs[] = {0.06, 0.09, 0.12, 0.16, 0.20};
+    // Three points, not fifteen. Every one of these is a cross-process hit test
+    // into a WebView2 tree, and fifteen of them on the sampler thread stalled
+    // the loop that the send path waits on - which showed up as a delay on
+    // EVERY message, sensitive or not. A conversation name is worth almost
+    // nothing next to that.
+    static const double kXs[] = {0.52};
+    static const double kYs[] = {0.09, 0.14, 0.19};
 
     std::string firstSeen;
     for (double fy : kYs) {
@@ -1506,6 +1516,12 @@ std::string ProbeConversationName(IUIAutomation* uia, HWND wnd, const std::strin
                 "area reads '" + firstSeen + "'");
     }
     return {};
+}
+
+bool HaveConversationFor(HWND wnd) {
+    std::lock_guard<std::mutex> lk(g_convMx);
+    if (!wnd || g_convWnd != wnd || g_convName.empty()) return false;
+    return !(g_convAtMs && NowSteadyMs() - g_convAtMs > 60000);
 }
 
 std::string ConversationFor(HWND wnd) {
@@ -1603,25 +1619,31 @@ std::vector<std::string> SelectedPathsInShellWindow(HWND target) {
 
 // A drop landed on a managed chat window. Runs on its own thread: this does
 // COM, hit tests and a server round trip, none of which may happen on a hook.
-void ResolveDroppedFiles(POINT down, HWND target) {
+void ResolveDroppedFiles(HWND srcWnd, HWND target) {
     if (g_dropBusy.exchange(true)) return;      // one at a time is plenty
     struct Done { ~Done(){ g_dropBusy.store(false); } } done;
 
     const bool comOk = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
-    HWND src = WindowFromPoint(down);
-    if (src) src = GetAncestor(src, GA_ROOT);
+    HWND src = srcWnd ? GetAncestor(srcWnd, GA_ROOT) : nullptr;
 
     std::vector<std::string> paths;
     if (src && src != target) paths = SelectedPathsInShellWindow(src);
 
     if (paths.empty()) {
         // Dragged from something that is not an Explorer view - another app's
-        // list, a browser download bar, the desktop of a shell we cannot query.
-        // Say so once rather than silently doing nothing.
+        // list, a browser download bar, a shell view we cannot query. Name what
+        // the source actually was: "not identified" on its own cannot tell a
+        // wrong window from an unsupported one, and those need different fixes.
         if (!g_dropNoSourceLogged.exchange(true)) {
-            LogInfo("a file was dropped into a managed chat from a window that "
-                    "does not publish its selection - the file could not be "
-                    "identified, so it was not inspected");
+            char cls[128] = {0};
+            if (src) GetClassNameA(src, cls, (int)sizeof(cls) - 1);
+            DWORD spid = 0;
+            if (src) GetWindowThreadProcessId(src, &spid);
+            LogInfo(std::string("a file was dropped into a managed chat but the "
+                    "source could not be asked what it had selected - source "
+                    "window class='") + cls + "' exe=" +
+                    (spid ? ProcessExeName(spid) : std::string("(none)")) +
+                    (src == target ? " (same window as the chat)" : ""));
         }
         if (comOk) CoUninitialize();
         return;
@@ -3065,10 +3087,16 @@ void SamplerThread() {
             // than every pass - the user switching chat is a human-speed event,
             // and this costs a few hit tests. Cached because EmitEvent has no
             // UI Automation instance of its own.
-            {
+            //
+            // Skipped entirely while the answer is already known, so the usual
+            // cost of this is a mutex and a comparison. Only a window whose
+            // conversation we cannot name pays anything, and then rarely: this
+            // is a label on an event, and it must never be why a message is
+            // slow to send.
+            if (!HaveConversationFor(t.wnd)) {
                 const long long now  = NowSteadyMs();
                 const long long last = g_convProbedMs.load(std::memory_order_relaxed);
-                if (!last || now - last > 3000) {
+                if (!last || now - last > 15000) {
                     g_convProbedMs.store(now, std::memory_order_relaxed);
                     const std::string conv =
                         ProbeConversationName(uia, t.wnd, FriendlyAppName(ToLowerAscii(t.exe)));
@@ -3409,18 +3437,19 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         MSLLHOOKSTRUCT* mu = (MSLLHOOKSTRUCT*)lParam;
         const HWND managed = g_managedWnd.load(std::memory_order_relaxed);
         if (mu && !(mu->flags & LLMHF_INJECTED) && managed) {
-            POINT down{}; long long downMs = 0; bool seen = false;
+            POINT down{}; long long downMs = 0; bool seen = false; HWND srcWnd = nullptr;
             {
                 std::lock_guard<std::mutex> lk(g_dragMx);
                 seen = g_dragDownSeen; down = g_dragDownPt; downMs = g_dragDownMs;
-                g_dragDownSeen = false;
+                srcWnd = g_dragDownWnd;
+                g_dragDownSeen = false; g_dragDownWnd = nullptr;
             }
             const long long dx = (long long)mu->pt.x - down.x;
             const long long dy = (long long)mu->pt.y - down.y;
             const long long now = NowSteadyMs();
             if (seen && (dx * dx + dy * dy) > (40 * 40) &&
                 downMs && now - downMs < 60000) {
-                std::thread(ResolveDroppedFiles, down, managed).detach();
+                std::thread(ResolveDroppedFiles, srcWnd, managed).detach();
             }
         }
         return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
@@ -3434,10 +3463,14 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
     }
 
-    // Where a drag would have started. Two writes under a mutex - no syscalls.
+    // Where a drag would have started, and on what. WindowFromPoint is a single
+    // non-blocking user32 call and is the only way to learn this: after the drop
+    // the same point belongs to the chat window.
     {
+        const HWND under = WindowFromPoint(m->pt);
         std::lock_guard<std::mutex> lk(g_dragMx);
         g_dragDownPt = m->pt; g_dragDownMs = NowSteadyMs(); g_dragDownSeen = true;
+        g_dragDownWnd = under;
     }
 
     DWORD pid = 0;

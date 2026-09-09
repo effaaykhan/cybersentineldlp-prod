@@ -26,6 +26,7 @@
 #include <tlhelp32.h>
 #include <UIAutomation.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #include <exdisp.h>
 #include <shldisp.h>
 
@@ -205,8 +206,14 @@ HWND        g_dragDownWnd  = nullptr;
 
 // A file dropped into a chat that we judged sensitive. Held against the window
 // it was dropped into, and consumed when a send is attempted there.
+// Held against the APPLICATION, not the window it landed on. WhatsApp opens a
+// separate preview window for an attachment, and the send happens there - a
+// different HWND entirely - so a drop keyed to the chat window was never found
+// again when Send was finally pressed. The exe is kept alongside the pid
+// because that preview may well belong to a different process of the same app.
 std::mutex               g_dropMx;
-HWND                     g_dropWnd = nullptr;
+DWORD                    g_dropPid = 0;
+std::string              g_dropExe;
 long long                g_dropAtMs = 0;
 std::string              g_dropPath;
 NetworkExfilMonitor::ClassifyResult g_dropCls;
@@ -796,6 +803,35 @@ void AppendTyped(HWND wnd, char ch) { AppendTypedText(wnd, std::string(1, ch)); 
 // hook: OpenClipboard blocks on whichever process currently owns the clipboard,
 // and a hook that blocks is a hook Windows removes. If it is held right now we
 // lose this one paste rather than stall the desktop.
+// Shared by the two ways a file reaches a chat without a file dialog: dropped,
+// and pasted. Defined further down, where the classifier is in scope.
+void InspectStagedFiles(std::vector<std::string> paths, DWORD targetPid);
+
+// Files on the clipboard, if any. Copying a file in Explorer puts CF_HDROP
+// there, carrying FULL PATHS - so a file pasted into a chat identifies itself
+// exactly, with none of the ambiguity a bare file name would have.
+//
+// Pasting is the other half of dropping: WhatsApp opens the same preview window
+// for both, and a picture that cannot be sent by dragging can be sent by
+// copying. Covering one and not the other would just move the hole.
+std::vector<std::string> ClipboardFilePaths() {
+    std::vector<std::string> out;
+    HANDLE h = GetClipboardData(CF_HDROP);
+    if (!h) return out;
+    HDROP drop = (HDROP)GlobalLock(h);
+    if (!drop) return out;
+    const UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    for (UINT i = 0; i < n && out.size() < 16; ++i) {
+        wchar_t buf[MAX_PATH] = {0};
+        if (DragQueryFileW(drop, i, buf, MAX_PATH) > 0) {
+            const std::string p = WideToUtf8(buf);
+            if (!p.empty()) out.push_back(p);
+        }
+    }
+    GlobalUnlock(h);
+    return out;
+}
+
 void AppendClipboardText(HWND wnd) {
     if (!OpenClipboard(nullptr)) return;
     HANDLE h = GetClipboardData(CF_UNICODETEXT);
@@ -808,7 +844,16 @@ void AppendClipboardText(HWND wnd) {
             AppendTypedText(wnd, utf8);
         }
     }
+    const std::vector<std::string> files = ClipboardFilePaths();
     CloseClipboard();
+
+    // Inspected on a thread: this reads the file and asks the server, and the
+    // sampler must not stall while it happens.
+    if (!files.empty()) {
+        DWORD tpid = 0;
+        if (wnd) GetWindowThreadProcessId(wnd, &tpid);
+        std::thread(InspectStagedFiles, files, tpid).detach();
+    }
 }
 
 // Called from the hook, on every keydown, before anything expensive.
@@ -1454,6 +1499,11 @@ bool LooksLikeConversationName(const std::string& s, const std::string& appName)
         "chrome_widgetwin", "chrome_renderwidget", "desktopchildsitebridge",
         "corewindow", "intermediate d3d", "title bar", "titlebar",
         "minimize", "maximize", "restore", "close", "system menu",
+        // Shell windows that sit OVER an application and answer a hit test in
+        // its place. "virtual desktop switching preview" was reported as the
+        // conversation on a real block.
+        "virtual desktop", "switching preview", "desktop", "taskbar",
+        "start menu", "notification", "shell", "program manager",
     };
     for (const char* bad : kNotAName)
         if (l.find(bad) != std::string::npos) return false;
@@ -1503,8 +1553,19 @@ std::string ProbeConversationName(IUIAutomation* uia, HWND wnd, const std::strin
             IUIAutomationElement* el = nullptr;
             if (FAILED(uia->ElementFromPoint(p, &el)) || !el) continue;
             const std::string name = ElementStringProp(el, kNamePropertyId);
+            // The element has to be INSIDE the app's own client area. A hit test
+            // answers with whatever owns that pixel, and a shell window layered
+            // over the app owns it just as truthfully - which is how a desktop
+            // switching preview came back as the name of a chat. Anything
+            // spilling outside the app is not part of its page.
+            RECT er{};
+            const bool inside =
+                ElementRect(el, er) &&
+                er.left >= tl.x - 2 && er.top >= tl.y - 2 &&
+                er.right <= br.x + 2 && er.bottom <= br.y + 2 &&
+                (er.right - er.left) > 0 && (er.bottom - er.top) > 0;
             el->Release();
-            if (name.empty()) continue;
+            if (name.empty() || !inside) continue;
             if (firstSeen.empty()) firstSeen = name;
             if (LooksLikeConversationName(name, appName)) return name;
         }
@@ -1649,46 +1710,66 @@ void ResolveDroppedFiles(HWND srcWnd, HWND target) {
         return;
     }
 
+    DWORD tpid = 0;
+    if (target) GetWindowThreadProcessId(target, &tpid);
+    if (comOk) CoUninitialize();
+    InspectStagedFiles(paths, tpid);
+}
+
+// Classify files staged for sending and, if any is sensitive, hold that verdict
+// against the application until it sends. Already on its own thread in both
+// callers - this reads a file and asks the server, and neither the sampler nor
+// a hook may wait for that.
+void InspectStagedFiles(std::vector<std::string> paths, DWORD targetPid) {
+    if (paths.empty() || !g_cfg.classifyFile) return;
     for (const auto& path : paths) {
-        if (!g_cfg.classifyFile) break;
         NetworkExfilMonitor::ClassifyResult cls;
         try { cls = g_cfg.classifyFile(path, "messaging_attachment"); } catch (...) {}
         const std::string cat = ToLowerAscii(cls.category);
         if (cat == "confidential" || cat == "restricted") {
             {
                 std::lock_guard<std::mutex> lk(g_dropMx);
-                g_dropWnd = target; g_dropAtMs = NowSteadyMs();
+                g_dropPid = targetPid;
+                g_dropExe = ToLowerAscii(ProcessExeName(targetPid));
+                g_dropAtMs = NowSteadyMs();
                 g_dropPath = path;  g_dropCls = cls;
             }
-            LogWarn("a sensitive file was dropped into a managed chat: " + path +
-                    " (" + cls.category + ") - the next send in this window will be blocked");
+            LogWarn("a sensitive file was staged in a managed chat: " + path +
+                    " (" + cls.category + ") - the next send in this app will be blocked");
             break;
         }
     }
-    if (comOk) CoUninitialize();
 }
 
 // The pending sensitive drop for this window, if there is a fresh one.
-bool HasPendingDrop(HWND wnd) {
-    std::lock_guard<std::mutex> lk(g_dropMx);
-    if (!wnd || g_dropWnd != wnd || g_dropPath.empty()) return false;
-    return !(g_dropAtMs && NowSteadyMs() - g_dropAtMs > 300000);
+// Matches on either identity: the same process, or any process running the same
+// executable. One covers a second window of the same process, the other covers a
+// preview hosted by a sibling process of the same application.
+bool DropMatches(DWORD pid, const std::string& exe) {
+    if (g_dropPath.empty()) return false;
+    if (g_dropAtMs && NowSteadyMs() - g_dropAtMs > 300000) return false;
+    if (pid && g_dropPid == pid) return true;
+    return !exe.empty() && !g_dropExe.empty() && ToLowerAscii(exe) == g_dropExe;
 }
 
-bool PendingDropFor(HWND wnd, std::string& pathOut,
+bool HasPendingDrop(DWORD pid, const std::string& exe) {
+    std::lock_guard<std::mutex> lk(g_dropMx);
+    return DropMatches(pid, exe);
+}
+
+bool PendingDropFor(DWORD pid, const std::string& exe, std::string& pathOut,
                     NetworkExfilMonitor::ClassifyResult& clsOut) {
     std::lock_guard<std::mutex> lk(g_dropMx);
-    if (!wnd || g_dropWnd != wnd || g_dropPath.empty()) return false;
-    // Five minutes: long enough to type a caption, short enough that a file
+    // Five minutes: long enough to add a caption, short enough that a file
     // dropped and then removed does not haunt the next message.
-    if (g_dropAtMs && NowSteadyMs() - g_dropAtMs > 300000) return false;
+    if (!DropMatches(pid, exe)) return false;
     pathOut = g_dropPath; clsOut = g_dropCls;
     return true;
 }
 
 void ClearPendingDrop() {
     std::lock_guard<std::mutex> lk(g_dropMx);
-    g_dropWnd = nullptr; g_dropAtMs = 0; g_dropPath.clear();
+    g_dropPid = 0; g_dropExe.clear(); g_dropAtMs = 0; g_dropPath.clear();
     g_dropCls = NetworkExfilMonitor::ClassifyResult{};
 }
 
@@ -2291,7 +2372,7 @@ void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
     {
         std::string dropPath;
         NetworkExfilMonitor::ClassifyResult dropCls;
-        if (PendingDropFor(wnd, dropPath, dropCls)) {
+        if (PendingDropFor(pid, exe, dropPath, dropCls)) {
             const std::string what = DescribeLabels(dropCls);
             const std::string severity =
                 (ToLowerAscii(dropCls.category) == "restricted") ? "critical" : "high";
@@ -3194,7 +3275,7 @@ void SamplerThread() {
             // Send button was never located for exactly that case - so the mouse
             // hook had no rectangle, and a click on Send went through before any
             // of the drop handling was reached.
-            g_composerHasText.store(!text.empty() || HasPendingDrop(t.wnd));
+            g_composerHasText.store(!text.empty() || HasPendingDrop(t.pid, t.exe));
 
             // ── Pre-decide, so the mouse hook never has to ───────────────
             // Only when the text actually changed: this runs four times a
@@ -3494,8 +3575,7 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         // whatever it holds says nothing about the picture attached to it.
         std::string dropPath;
         NetworkExfilMonitor::ClassifyResult dropCls;
-        if (PendingDropFor(g_managedWnd.load(std::memory_order_relaxed),
-                           dropPath, dropCls)) {
+        if (PendingDropFor(pid, ProcessExeName(pid), dropPath, dropCls)) {
             cls = dropCls; text = dropPath; what = DescribeLabels(dropCls);
             via = "dropped-file"; fromDrop = true;
         }

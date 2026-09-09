@@ -413,13 +413,30 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Hr '=' 'Yellow'
     Write-Host '   AGENT SOURCE' -ForegroundColor Yellow
     Hr '=' 'Yellow'
-    if ($SUM_URL) {
+    # Nothing knows the server yet: no agent is installed, and the script cannot
+    # see the address it was fetched from - irm hands over the text, not the URL.
+    # So ASK, before anything else. This used to fall straight through to the
+    # break-glass path and demand a GitHub token, which is the wrong question:
+    # whoever runs this has the server address, and has no reason to hold a
+    # token for a private source repository.
+    if (-not $SUM_URL) {
+      Warn 'No DLP server is known for this device yet.'
+      Blank
+      do {
+        $srvIP = Read-Host '   DLP server IP or hostname'
+      } while (-not (Test-ServerHost $srvIP))
+      $DIST_BASE = ConvertTo-DistBase $srvIP
+      $_s = Get-DistUrls $DIST_BASE
+      if ($_s) { $SELF_URL = $_s.Self; $EXE_URL = $_s.Exe; $SUM_URL = $_s.Sum; $VER_URL = $_s.Ver }
+      if (Test-ArtifactUrl $SUM_URL) { Ok "Agent source: $DIST_BASE" }
+    } else {
       Warn 'The DLP server is not publishing the agent binary:'
       Hint "  $SUM_URL"
-    } else {
-      Warn 'No DLP server is known for this device yet.'
     }
     Blank
+    if (Test-ArtifactUrl $SUM_URL) {
+      Blank
+    } else {
     Hint 'Preferred fix, on the DLP server: set AGENT_DIST_TOKEN in its .env and'
     Hint 'restart the manager. Endpoints then need no credential at all.'
     Blank
@@ -450,6 +467,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Warn 'the DLP server publishes one.'
     }
     Remove-Variable ghTok -ErrorAction SilentlyContinue
+    }
     Blank
   }
 

@@ -435,6 +435,15 @@ fi
 # files don't exist, so we drop a self-signed pair if the operator hasn't
 # provided real certs.
 mkdir -p "${INSTALL_DIR}/certs"
+# config/ is mounted at /etc/cybersentineldlp READ-ONLY, and certs/ is mounted
+# INSIDE it at /etc/cybersentineldlp/certs. Docker has to find that mountpoint
+# already present, because it cannot create a directory inside a read-only
+# mount - the container then dies at startup with "read-only file system"
+# naming a path that looks like the image's, not the host's, which sends you
+# looking in entirely the wrong place. An empty directory here costs nothing
+# and is the whole fix. It only ever appeared to work on hosts where a previous
+# install had left the directory behind.
+mkdir -p "${INSTALL_DIR}/config/certs"
 chmod 700 "${INSTALL_DIR}/certs"
 if [ ! -f "${INSTALL_DIR}/certs/fullchain.pem" ] || [ ! -f "${INSTALL_DIR}/certs/privkey.pem" ]; then
     say "Generating self-signed TLS certificate (replace with real cert later)"

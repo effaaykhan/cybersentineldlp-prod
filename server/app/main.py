@@ -329,18 +329,34 @@ async def _auto_init_schema_and_admin():
                 await conn.execute(text(
                     "CREATE INDEX IF NOT EXISTS ix_app_catalog_category ON app_catalog (category)"
                 ))
+                # Bring a table the ORM built up to the shape declared above.
+                #
+                # CREATE TABLE IF NOT EXISTS is a no-op where Base.metadata.create_all got
+                # there first, and the ORM emits NO server defaults - so the defaults
+                # written above are simply absent. Every insert that leaned on one worked
+                # against a migrated database and failed against a fresh one: first on id,
+                # then on created_at, in two separate releases. Repairing the columns fixes
+                # the whole class; naming one more value in one more INSERT moves it along
+                # by one. ALTER ... SET DEFAULT is idempotent and free where they exist.
+                for _col, _default in (("id", "gen_random_uuid()"),
+                                       ("created_at", "now()"),
+                                       ("updated_at", "now()")):
+                    await conn.execute(text(
+                        f"ALTER TABLE app_catalog ALTER COLUMN {_col} SET DEFAULT {_default}"
+                    ))
                 from app.core.web_activity import DEFAULT_CATALOG as _CATALOG_SEED
                 for _hp, _aid, _an, _vendor, _cat in _CATALOG_SEED:
                     await conn.execute(
                         text(
-                            # id is supplied explicitly. The CREATE TABLE above
-                            # gives it a default, but it is IF NOT EXISTS - and on a
-                            # deployment where alembic or the ORM created this table
-                            # first, without that default, the create is a no-op and
-                            # every one of these inserts fails on a NOT NULL id.
+                            # Every NOT NULL column is named explicitly. The
+                            # repair above restores the defaults, but an insert
+                            # that does not lean on them cannot be broken by a
+                            # table shape we failed to anticipate.
                             "INSERT INTO app_catalog "
-                            "(id, host_pattern, app_id, app_name, vendor, category, is_builtin, priority) "
-                            "VALUES (gen_random_uuid(), :hp, :aid, :an, :v, :c, TRUE, :p) "
+                            "(id, host_pattern, app_id, app_name, vendor, category, "
+                            " is_builtin, priority, created_at, updated_at) "
+                            "VALUES (gen_random_uuid(), :hp, :aid, :an, :v, :c, "
+                            " TRUE, :p, NOW(), NOW()) "
                             "ON CONFLICT (host_pattern) DO NOTHING"
                         ),
                         {"hp": _hp, "aid": _aid, "an": _an, "v": _vendor, "c": _cat,

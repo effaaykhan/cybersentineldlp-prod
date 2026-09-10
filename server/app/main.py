@@ -448,7 +448,7 @@ async def _seed_default_permissions():
         async with _db.postgres_session_factory() as session:
             perms_file = Path(__file__).parent.parent / "data" / "default_permissions.json"
             if not perms_file.exists():
-                logger.warning("Default permissions file not found", path=str(perms_file))
+                logger.error("Default permissions file not found — seed data missing from the image", path=str(perms_file))
                 return
             perms = json.loads(perms_file.read_text())
             for perm in perms:
@@ -498,7 +498,7 @@ async def _seed_default_roles():
         async with _db.postgres_session_factory() as session:
             roles_file = Path(__file__).parent.parent / "data" / "default_roles.json"
             if not roles_file.exists():
-                logger.warning("Default roles file not found", path=str(roles_file))
+                logger.error("Default roles file not found — seed data missing from the image", path=str(roles_file))
                 return
             roles_data = json.loads(roles_file.read_text())
 
@@ -557,7 +557,7 @@ async def _seed_default_labels():
 
             labels_file = Path(__file__).parent.parent / "data" / "default_labels.json"
             if not labels_file.exists():
-                logger.warning("Default labels file not found", path=str(labels_file))
+                logger.error("Default labels file not found — seed data missing from the image", path=str(labels_file))
                 return
 
             labels_data = json.loads(labels_file.read_text())
@@ -602,7 +602,7 @@ async def _seed_default_rules():
             # Load default rules from JSON
             rules_file = Path(__file__).parent.parent / "data" / "default_rules.json"
             if not rules_file.exists():
-                logger.warning("Default rules file not found", path=str(rules_file))
+                logger.error("Default rules file not found — seed data missing from the image", path=str(rules_file))
                 return
 
             rules_data = json.loads(rules_file.read_text())
@@ -691,7 +691,7 @@ async def _seed_default_policies():
 
             policies_file = Path(__file__).parent.parent / "data" / "default_policies.json"
             if not policies_file.exists():
-                logger.warning("Default policies file not found", path=str(policies_file))
+                logger.error("Default policies file not found — seed data missing from the image", path=str(policies_file))
                 return
 
             policies_data = json.loads(policies_file.read_text())

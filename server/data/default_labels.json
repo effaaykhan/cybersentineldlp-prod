@@ -1,0 +1,74 @@
+[
+  {
+    "name": "Public",
+    "severity": "low",
+    "description": "Non-sensitive information safe for public distribution",
+    "color": "#22c55e"
+  },
+  {
+    "name": "Internal",
+    "severity": "medium",
+    "description": "Internal use only — not for external distribution",
+    "color": "#eab308"
+  },
+  {
+    "name": "Confidential",
+    "severity": "high",
+    "description": "Sensitive business data requiring access controls",
+    "color": "#f97316"
+  },
+  {
+    "name": "Restricted",
+    "severity": "critical",
+    "description": "Highly sensitive data — regulated or legally protected (PII, PHI, PCI)",
+    "color": "#ef4444"
+  },
+  {
+    "name": "PII",
+    "severity": "high",
+    "description": "Personally Identifiable Information (names, SSN, Aadhaar, addresses)",
+    "color": "#a855f7"
+  },
+  {
+    "name": "PCI",
+    "severity": "critical",
+    "description": "Payment Card Industry data (credit cards, CVV, cardholder data)",
+    "color": "#dc2626"
+  },
+  {
+    "name": "PHI",
+    "severity": "critical",
+    "description": "Protected Health Information (medical records, diagnoses, prescriptions)",
+    "color": "#e11d48"
+  },
+  {
+    "name": "FINANCIAL",
+    "severity": "high",
+    "description": "Financial records (bank accounts, transactions, tax documents)",
+    "color": "#d97706"
+  },
+  {
+    "name": "CREDENTIALS",
+    "severity": "critical",
+    "description": "Authentication secrets (API keys, passwords, tokens, private keys)",
+    "color": "#b91c1c"
+  },
+  {
+    "name": "SOURCE_CODE",
+    "severity": "medium",
+    "description": "Proprietary source code and intellectual property",
+    "color": "#6366f1"
+  },
+  {
+    "name": "LEGAL",
+    "severity": "high",
+    "description": "Legal documents, contracts, attorney-client privileged material",
+    "color": "#0891b2"
+  },
+  {
+    "name": "HR",
+    "severity": "high",
+    "description": "Human resources data (employee records, compensation, performance)",
+    "color": "#c026d3"
+  }
+]

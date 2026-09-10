@@ -1,0 +1,70 @@
+[
+  {
+    "name": "view_events",
+    "description": "Read DLP events"
+  },
+  {
+    "name": "view_alerts",
+    "description": "Read DLP alerts"
+  },
+  {
+    "name": "export_events",
+    "description": "Export events to CSV/JSON"
+  },
+  {
+    "name": "create_policy",
+    "description": "Create new DLP policies"
+  },
+  {
+    "name": "update_policy",
+    "description": "Modify existing DLP policies"
+  },
+  {
+    "name": "delete_policy",
+    "description": "Remove DLP policies"
+  },
+  {
+    "name": "assign_policy",
+    "description": "Attach policies to agents/groups"
+  },
+  {
+    "name": "manage_users",
+    "description": "Create, update, disable users"
+  },
+  {
+    "name": "view_users",
+    "description": "List users (no mutation)"
+  },
+  {
+    "name": "manage_roles",
+    "description": "Create, update, delete roles and bindings"
+  },
+  {
+    "name": "view_dashboard",
+    "description": "Load the dashboard UI and its tiles"
+  },
+  {
+    "name": "create_dashboard",
+    "description": "Create custom dashboards"
+  },
+  {
+    "name": "edit_dashboard",
+    "description": "Edit dashboards owned by the user"
+  },
+  {
+    "name": "delete_dashboard",
+    "description": "Delete dashboards owned by the user"
+  },
+  {
+    "name": "view_all_departments",
+    "description": "ABAC override: bypass per-department visibility"
+  },
+  {
+    "name": "view_sensitive_content",
+    "description": "See unredacted captured content in events and incidents"
+  },
+  {
+    "name": "view_policies",
+    "description": "View DLP policies (no mutation)"
+  }
+]

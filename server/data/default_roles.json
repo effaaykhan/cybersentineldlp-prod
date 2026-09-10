@@ -1,0 +1,106 @@
+[
+  {
+    "name": "ACCESS_CONTROL_ADMIN",
+    "permissions": [
+      "assign_policy",
+      "create_policy",
+      "delete_policy",
+      "export_events",
+      "manage_roles",
+      "manage_users",
+      "update_policy",
+      "view_alerts",
+      "view_all_departments",
+      "view_dashboard",
+      "view_events",
+      "view_policies",
+      "view_sensitive_content",
+      "view_users"
+    ]
+  },
+  {
+    "name": "ADMIN",
+    "permissions": [
+      "assign_policy",
+      "create_dashboard",
+      "create_policy",
+      "delete_dashboard",
+      "delete_policy",
+      "edit_dashboard",
+      "export_events",
+      "manage_roles",
+      "manage_users",
+      "update_policy",
+      "view_alerts",
+      "view_all_departments",
+      "view_dashboard",
+      "view_events",
+      "view_policies",
+      "view_sensitive_content",
+      "view_users"
+    ]
+  },
+  {
+    "name": "ANALYST",
+    "permissions": [
+      "view_alerts",
+      "view_dashboard",
+      "view_events",
+      "view_policies",
+      "view_sensitive_content",
+      "view_users"
+    ]
+  },
+  {
+    "name": "DATA_PROTECTION_ADMIN",
+    "permissions": [
+      "assign_policy",
+      "create_policy",
+      "delete_policy",
+      "export_events",
+      "update_policy",
+      "view_alerts",
+      "view_all_departments",
+      "view_dashboard",
+      "view_events",
+      "view_policies",
+      "view_sensitive_content"
+    ]
+  },
+  {
+    "name": "MANAGER",
+    "permissions": [
+      "export_events",
+      "view_alerts",
+      "view_dashboard",
+      "view_events",
+      "view_policies",
+      "view_users"
+    ]
+  },
+  {
+    "name": "THREAT_ADMIN",
+    "permissions": [
+      "assign_policy",
+      "create_policy",
+      "delete_policy",
+      "export_events",
+      "update_policy",
+      "view_alerts",
+      "view_all_departments",
+      "view_dashboard",
+      "view_events",
+      "view_policies",
+      "view_sensitive_content"
+    ]
+  },
+  {
+    "name": "VIEWER",
+    "permissions": [
+      "view_alerts",
+      "view_dashboard",
+      "view_events",
+      "view_policies"
+    ]
+  }
+]

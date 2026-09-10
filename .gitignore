@@ -171,8 +171,14 @@ models/checkpoints/
 !package.json
 !package-lock.json
 !tsconfig.json
-# Policy seed files (default = curated; exported = .204 mirror) must be tracked
-!server/data/default_policies.json
+# EVERY file in server/data is a seed file that app/main.py reads by name at
+# first boot, so the blanket *.json above must not reach this directory. It did:
+# only default_policies.json was negated, so default_permissions.json,
+# default_roles.json and default_labels.json were written, tested against a
+# source-mounted dev box, committed to no avail and shipped in no image - the
+# seeders looked for them in the container, did not find them, and logged a
+# warning nobody grepped for. Negate the directory, not one file at a time.
+!server/data/*.json
 # The browser extension's managed-storage schema. manifest.json DECLARES this
 # file, and Chrome refuses to load an extension whose managed_schema is missing —
 # so without this negation a fresh clone builds an extension that cannot start.

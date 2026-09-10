@@ -876,9 +876,52 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Set-AgentDefenderExclusions -Brief | Out-Null
 
     # -- Step 4: OCR deps (optional) -----------------------------------------
-    Step 4 $TOTAL 'OCR dependencies (Chocolatey + Tesseract, optional)'
+    Step 4 $TOTAL 'OCR dependencies (Tesseract, optional)'
     Hint 'Used only by the screen-capture OCR fallback; the agent runs without them.'
-    if (Test-CommandExists 'choco') {
+
+    # The DLP server first, the internet second.
+    #
+    # This used to go straight to Chocolatey, which downloads its own installer
+    # and, on Windows Server, pulls .NET 4.8 before it will run at all. On a
+    # machine with no internet both fail - so OCR, the thing that reads a
+    # photographed ID card, was lost on exactly the fleet most likely to be
+    # isolated, and the operator saw a .NET download error with no obvious
+    # bearing on DLP.
+    #
+    # An operator stages tesseract-installer.exe once in server/agent_dist/ on
+    # the manager and every endpoint can fetch it from the server it already
+    # talks to. Absent, this falls through to Chocolatey exactly as before.
+    if (Test-CommandExists 'tesseract') {
+      Ok 'Tesseract already present'
+    } elseif ($DIST_BASE) {
+      $tessUrl = "$DIST_BASE/tesseract-installer.exe"
+      if (Test-ArtifactUrl $tessUrl $GH_HEADERS) {
+        Info 'Fetching Tesseract from the DLP server (no internet needed)...'
+        $tessExe = Join-Path $env:TEMP 'tesseract-installer.exe'
+        try {
+          Invoke-Spinner -Text 'Downloading Tesseract' -ArgumentList @($tessUrl, $tessExe, $GH_HEADERS) -Work {
+            param($u,$out,$hdr)
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $u -OutFile $out -UseBasicParsing -Headers $hdr
+          } | Out-Null
+          # /S is the NSIS silent switch the official Tesseract installer uses.
+          $tp = Start-Process -FilePath $tessExe -ArgumentList '/S' -Wait -PassThru
+          if (Test-Path 'C:\Program Files\Tesseract-OCR\tesseract.exe') {
+            $env:Path = "C:\Program Files\Tesseract-OCR;$env:Path"
+          }
+          if (Test-CommandExists 'tesseract') { Ok 'Tesseract installed from the DLP server' }
+          else { Warn "Tesseract installer exited $($tp.ExitCode) - OCR fallback unavailable" }
+        } catch { Warn "Could not install Tesseract from the server: $($_.Exception.Message)" }
+        Remove-Item $tessExe -Force -ErrorAction SilentlyContinue
+      } else {
+        Hint 'The DLP server is not publishing tesseract-installer.exe.'
+        Hint 'Stage it in server/agent_dist/ there to install OCR without internet.'
+      }
+    }
+
+    if (Test-CommandExists 'tesseract') {
+      # Already sorted above; nothing to reach the internet for.
+    } elseif (Test-CommandExists 'choco') {
       Ok 'Chocolatey already present'
     } else {
       Info 'Installing Chocolatey...'
@@ -904,7 +947,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
         } catch { Warn "Tesseract install failed: $($_.Exception.Message)" }
       }
     } else {
-      Warn 'Chocolatey unavailable - skipping Tesseract (screen OCR fallback disabled)'
+      Warn 'Tesseract not installed - the screen-capture OCR fallback is disabled.'
+      Hint 'The agent works without it. To enable OCR on machines with no internet,'
+      Hint 'stage tesseract-installer.exe in server/agent_dist/ on the DLP server'
+      Hint 'and re-run this installer.'
     }
 
     # -- Step 5: download + verify binary ------------------------------------

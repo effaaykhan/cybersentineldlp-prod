@@ -63,6 +63,20 @@ VER_NAME = EXE_NAME + ".version"
 # by content type, and anything JSON-ish or XML-ish comes back to `iex` as an
 # object rather than the script text, which fails in a way that looks like the
 # script itself is broken.
+# Optional dependencies an endpoint may need but cannot fetch itself. These are
+# served from this directory ONLY - never pulled from the repository, which has
+# no business carrying a third-party installer, and never required. An operator
+# drops the file in server/agent_dist/ once and every endpoint, including an
+# air-gapped one, can get it from the manager it already talks to.
+#
+# Without this the agent installer reached out to Chocolatey for Tesseract,
+# which on Windows Server pulls .NET 4.8 first. Both downloads fail on a machine
+# with no internet, and OCR - the thing that reads a photographed ID card - is
+# silently lost on exactly the fleet most likely to be isolated.
+_LOCAL_ONLY = {
+    "tesseract-installer.exe": "application/octet-stream",
+}
+
 _ARTIFACTS = {
     SCRIPT_NAME: (SCRIPT_NAME, "text/plain"),
     EXE_NAME: (f"agents/endpoint/windows/{EXE_NAME}", "application/octet-stream"),
@@ -212,6 +226,12 @@ async def _ensure_fresh(name: str) -> None:
         _last_refresh[group] = time.monotonic()
 
 
+def _artifact_media_type(name: str) -> Optional[str]:
+    if name in _ARTIFACTS:
+        return _ARTIFACTS[name][1]
+    return _LOCAL_ONLY.get(name)
+
+
 def _dist_file(name: str) -> pathlib.Path:
     """Resolve inside the dist directory, refusing anything outside it."""
     candidate = (DIST_DIR / name).resolve()
@@ -247,7 +267,7 @@ async def agent_dist_info():
         # Never the token itself — only whether one is configured.
         "upstream_refresh": bool(_token()) and _refresh_seconds() > 0,
     }
-    for name in _ARTIFACTS:
+    for name in list(_ARTIFACTS) + list(_LOCAL_ONLY):
         path = DIST_DIR / name
         out["published"][name] = path.stat().st_size if path.is_file() else None
     ver = DIST_DIR / VER_NAME
@@ -268,10 +288,13 @@ async def download_artifact(filename: str):
     binary published here?" without pulling 4.5MB — without it such a probe gets
     405 and reports the artifact missing on a server publishing it correctly.
     """
-    if filename not in _ARTIFACTS:
+    media_type = _artifact_media_type(filename)
+    if media_type is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
-    await _ensure_fresh(filename)
-    media_type = _ARTIFACTS[filename][1]
+    # Local-only artifacts are never refreshed from upstream: they are staged by
+    # an operator, and there is nothing in the repository to refresh them from.
+    if filename in _ARTIFACTS:
+        await _ensure_fresh(filename)
     path = _dist_file(filename)
     return FileResponse(
         path,

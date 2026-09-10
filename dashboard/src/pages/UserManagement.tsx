@@ -52,6 +52,8 @@ const EMPTY_CREATE: AdminUserCreateInput = {
   permissions: [],
 }
 
+type CatalogState = 'loading' | 'error' | 'empty' | 'ready'
+
 export default function UserManagement() {
   const { confirm, dialog } = useConfirm()
   const { has, permissions, role } = usePermission()
@@ -132,6 +134,15 @@ export default function UserManagement() {
 
   const users = usersQ.data ?? []
   const permsCatalog = permsCatalogQ.data ?? []
+  // Loading, empty and failed are three different situations, and the picker
+  // rendered all three as "Loading...". A deployment whose permission catalog
+  // was never seeded therefore showed that message for ever, with nothing to
+  // click and nothing saying why.
+  const permsCatalogState: CatalogState =
+    permsCatalogQ.isLoading ? 'loading'
+    : permsCatalogQ.isError ? 'error'
+    : permsCatalog.length === 0 ? 'empty'
+    : 'ready'
 
   const sortedUsers = useMemo(
     () => [...users].sort((a, b) => a.email.localeCompare(b.email)),
@@ -299,6 +310,7 @@ export default function UserManagement() {
       {createOpen && (
         <CreateUserDialog
           permsCatalog={permsCatalog}
+          catalogState={permsCatalogState}
           onClose={() => setCreateOpen(false)}
           onSubmit={(input) => createMutation.mutate(input)}
           isSubmitting={createMutation.isPending}
@@ -309,6 +321,7 @@ export default function UserManagement() {
         <EditUserDialog
           user={editTarget}
           permsCatalog={permsCatalog}
+          catalogState={permsCatalogState}
           onClose={() => setEditTarget(null)}
           onSubmit={(input) =>
             updateMutation.mutate({ id: editTarget.id, input })
@@ -442,11 +455,13 @@ function IconButton({
 // ── Create dialog ─────────────────────────────────────────────────────────
 function CreateUserDialog({
   permsCatalog,
+  catalogState,
   onClose,
   onSubmit,
   isSubmitting,
 }: {
   permsCatalog: PermissionDef[]
+  catalogState: CatalogState
   onClose: () => void
   onSubmit: (input: AdminUserCreateInput) => void
   isSubmitting: boolean
@@ -567,6 +582,7 @@ function CreateUserDialog({
 
         <PermissionPicker
           permsCatalog={permsCatalog}
+          catalogState={catalogState}
           selected={form.permissions ?? []}
           onToggle={togglePerm}
           helpText={`Direct grants — added on top of what the ${form.role} role already provides. Admins get everything regardless.`}
@@ -582,12 +598,14 @@ function CreateUserDialog({
 function EditUserDialog({
   user,
   permsCatalog,
+  catalogState,
   onClose,
   onSubmit,
   isSubmitting,
 }: {
   user: AdminUser
   permsCatalog: PermissionDef[]
+  catalogState: CatalogState
   onClose: () => void
   onSubmit: (input: AdminUserUpdateInput) => void
   isSubmitting: boolean
@@ -686,6 +704,7 @@ function EditUserDialog({
 
         <PermissionPicker
           permsCatalog={permsCatalog}
+          catalogState={catalogState}
           selected={form.permissions ?? []}
           onToggle={togglePerm}
           helpText={`Currently granted directly. Unchecking revokes the permission from this user. Role defaults (${form.role}) still apply on top.`}
@@ -762,11 +781,13 @@ function HardDeleteDialog({
 // ── Permission picker ─────────────────────────────────────────────────────
 function PermissionPicker({
   permsCatalog,
+  catalogState,
   selected,
   onToggle,
   helpText,
 }: {
   permsCatalog: PermissionDef[]
+  catalogState: CatalogState
   selected: string[]
   onToggle: (name: string) => void
   helpText?: string
@@ -792,10 +813,16 @@ function PermissionPicker({
     return g
   }, [permsCatalog])
 
-  if (permsCatalog.length === 0) {
+  if (catalogState !== 'ready') {
+    const msg =
+      catalogState === 'loading'
+        ? 'Loading permission catalog...'
+        : catalogState === 'error'
+          ? 'Could not load the permission catalog. Check you are still signed in and the manager is reachable.'
+          : 'The permission catalog is empty on this deployment, so there is nothing to grant directly - roles still work. Restart the manager to seed it, or run: docker exec cybersentineldlp-manager alembic upgrade head'
     return (
       <div className="p-3 rounded-cs-sm bg-cs-hair-2 border border-cs-hair text-sm text-cs-muted">
-        Loading permission catalog…
+        {msg}
       </div>
     )
   }

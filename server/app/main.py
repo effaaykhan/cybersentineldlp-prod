@@ -411,6 +411,46 @@ async def _auto_init_schema_and_admin():
         logger.warning("Auto-init encountered an error (likely harmless race condition)", error=str(e))
 
 
+async def _seed_default_permissions():
+    """Insert the RBAC permission catalog if it is missing.
+
+    These rows are created by alembic 006 — but a FRESH install stamps the
+    revision rather than running it, on the reasoning that boot-time DDL already
+    built the schema. That reasoning holds for tables and not for data: nothing
+    ever inserted the permissions, so the catalog came up empty, every role had
+    nothing to grant, and the admin UI sat on "Loading permission catalog" with
+    no way forward. Seeded here so it does not depend on how the schema arrived.
+
+    ON CONFLICT DO NOTHING, so an upgraded install where 006 really did run is
+    untouched, and an operator's own additions survive every restart.
+    """
+    import json
+    from pathlib import Path
+    from sqlalchemy import text
+
+    try:
+        async with _db.postgres_session_factory() as session:
+            perms_file = Path(__file__).parent.parent / "data" / "default_permissions.json"
+            if not perms_file.exists():
+                logger.warning("Default permissions file not found", path=str(perms_file))
+                return
+            perms = json.loads(perms_file.read_text())
+            for perm in perms:
+                await session.execute(
+                    text(
+                        "INSERT INTO permissions (id, name, description) "
+                        "VALUES (gen_random_uuid(), :n, :d) "
+                        "ON CONFLICT (name) DO NOTHING"
+                    ),
+                    {"n": perm["name"], "d": perm.get("description", "")},
+                )
+            await session.commit()
+            result = await session.execute(text("SELECT COUNT(*) FROM permissions"))
+            logger.info("Permission catalog ensured", count=result.scalar())
+    except Exception as e:  # noqa: BLE001 — never block startup on seeding
+        logger.warning("Permission catalog seed failed", error=str(e))
+
+
 async def _seed_default_roles():
     """Import default RBAC roles on first boot if the roles table is empty."""
     import json
@@ -738,6 +778,7 @@ async def _first_boot_init():
         await conn.commit()
 
         await _auto_init_schema_and_admin()
+        await _seed_default_permissions()
         await _seed_default_roles()
         await _seed_default_labels()
         await _seed_default_rules()

@@ -438,8 +438,14 @@ async def _seed_default_permissions():
             for perm in perms:
                 await session.execute(
                     text(
-                        "INSERT INTO permissions (id, name, description) "
-                        "VALUES (gen_random_uuid(), :n, :d) "
+                        # Every column supplied explicitly. A table built by
+                        # the ORM carries NO server defaults - not on id, not on
+                        # created_at - so an insert that leans on them works
+                        # against a migrated database and fails against a fresh
+                        # one. That asymmetry has now produced this same bug
+                        # three times in this file.
+                        "INSERT INTO permissions (id, name, description, created_at) "
+                        "VALUES (gen_random_uuid(), :n, :d, NOW()) "
                         "ON CONFLICT (name) DO NOTHING"
                     ),
                     {"n": perm["name"], "d": perm.get("description", "")},
@@ -452,45 +458,70 @@ async def _seed_default_permissions():
 
 
 async def _seed_default_roles():
-    """Import default RBAC roles on first boot if the roles table is empty."""
+    """Ensure the system roles exist AND carry their permission grants.
+
+    Two things were wrong here before.
+
+    It read data/default_roles.json, which does not exist in this repository -
+    so it logged "file not found" and returned, on every deployment ever made.
+    The roles a working install has came from alembic 006 and 019 instead.
+
+    And it wrote role.permissions, a column nothing reads: authorisation
+    resolves through the normalized role_permissions table. A role seeded that
+    way exists and grants nothing, which is harder to diagnose than a role that
+    is missing outright.
+
+    Both are seeded here now, ON CONFLICT DO NOTHING, so an install where the
+    migrations genuinely ran is left exactly as it is.
+    """
     import json
     from pathlib import Path
     from sqlalchemy import text
 
     try:
         async with _db.postgres_session_factory() as session:
-            result = await session.execute(text("SELECT COUNT(*) FROM roles"))
-            role_count = result.scalar()
-
-            if role_count > 0:
-                logger.info("Roles table already populated, skipping seed", count=role_count)
-                return
-
             roles_file = Path(__file__).parent.parent / "data" / "default_roles.json"
             if not roles_file.exists():
                 logger.warning("Default roles file not found", path=str(roles_file))
                 return
-
             roles_data = json.loads(roles_file.read_text())
 
             for role in roles_data:
                 await session.execute(
                     text(
-                        "INSERT INTO roles (id, name, permissions, created_at) "
-                        "VALUES (gen_random_uuid(), :name, :permissions, NOW()) "
+                        "INSERT INTO roles (id, name, created_at) "
+                        "VALUES (gen_random_uuid(), :n, NOW()) "
                         "ON CONFLICT (name) DO NOTHING"
                     ),
-                    {
-                        "name": role["name"],
-                        "permissions": json.dumps(role["permissions"]),
-                    },
+                    {"n": role["name"]},
                 )
-
             await session.commit()
-            logger.info("Default roles seeded", count=len(roles_data))
 
-    except Exception as e:
-        logger.warning("Default roles seed encountered an error", error=str(e))
+            # Grants, by NAME on both sides: ids differ per deployment, and this
+            # has to be correct on a database whose rows this process did not
+            # create.
+            for role in roles_data:
+                for perm in role.get("permissions", []):
+                    await session.execute(
+                        text(
+                            "INSERT INTO role_permissions (role_id, permission_id) "
+                            "SELECT r.id, p.id FROM roles r, permissions p "
+                            "WHERE r.name = :r AND p.name = :p "
+                            "ON CONFLICT DO NOTHING"
+                        ),
+                        {"r": role["name"], "p": perm},
+                    )
+            await session.commit()
+
+            result = await session.execute(
+                text("SELECT COUNT(*) FROM roles")
+            )
+            grants = await session.execute(
+                text("SELECT COUNT(*) FROM role_permissions")
+            )
+            logger.info("Roles ensured", roles=result.scalar(), grants=grants.scalar())
+    except Exception as e:  # noqa: BLE001 — never block startup on seeding
+        logger.warning("Role seed failed", error=str(e))
 
 
 async def _seed_default_labels():

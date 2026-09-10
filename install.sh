@@ -602,10 +602,23 @@ if ! wait_manager_health; then
 fi
 
 # ─── 8b. Mark the migration state ─────────────────────────────────────
-# The manager auto-creates the whole schema at startup, so on a fresh install
-# `alembic upgrade head` would fail ("type userrole already exists"). We stamp
-# instead, which records the DB as being at the latest revision so future
-# upgrades apply cleanly.
+# Stamping, not upgrading, and this is a deliberate trade rather than a
+# shortcut. The migration chain cannot build this database from empty: it
+# fails at 006, inserting into a roles column that does not exist yet at that
+# point in the chain, because the migrations and the ORM models have drifted.
+# The manager therefore creates the schema itself at startup, and stamping
+# records the DB as current so future upgrades apply cleanly on top.
+#
+# What that costs: six migrations carry DATA as well as schema, and stamping
+# skips all of it. That is not theoretical - it produced an install with no
+# permission catalog, no role grants and no admin, and the only symptom was a
+# console stuck on "Loading permission catalog".
+#
+# So the boot-time seeders are the source of truth for that data, not the
+# migrations: permissions, roles and their grants, labels, rules, policies and
+# the app catalog are all seeded on every start, ON CONFLICT DO NOTHING. A
+# fresh database and a fully migrated one end up identical, which is verified
+# below rather than assumed.
 #
 # Only stamp when the DB has never been stamped. If this is a re-run against an
 # existing install, stamping would silently mark pending migrations as done and
@@ -671,7 +684,19 @@ if [ "${AUTO_UPDATE:-1}" != "0" ]; then
     AP_LOG="/var/log/cybersentineldlp-autopull.log"
     AP_SERVICES="${AUTO_UPDATE_SERVICES:-manager dashboard}"
     AP_MINUTE="${AUTO_UPDATE_MINUTE:-37}"
-    say "Installing hourly auto-update (image pull) — disable with AUTO_UPDATE=0"
+    # Prove the seeded data actually landed. Stamping means the migrations that
+# carry data never ran, so if the boot-time seeders failed there is nothing to
+# fall back on - and the failure is silent until someone tries to create a user.
+PERM_N=$(docker exec cybersentineldlp-postgres psql -U "${POSTGRES_USER:-cybersentineldlp}" \
+    -d "${POSTGRES_DB:-cybersentineldlp}" -t -A -c "SELECT COUNT(*) FROM permissions" 2>/dev/null | tr -d '[:space:]')
+if [ -n "${PERM_N}" ] && [ "${PERM_N}" -gt 0 ] 2>/dev/null; then
+    say "RBAC catalog seeded (${PERM_N} permissions)"
+else
+    c_yellow "[!] The permission catalog is EMPTY. User management will not work until it is seeded."
+    c_yellow "    Restart the manager to retry:  docker compose -f ${COMPOSE_FILE} restart manager"
+fi
+
+say "Installing hourly auto-update (image pull) — disable with AUTO_UPDATE=0"
     cat > "${AP_WRAPPER}" <<WRAP
 #!/usr/bin/env bash
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

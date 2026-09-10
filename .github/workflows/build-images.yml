@@ -95,6 +95,46 @@ jobs:
           sha256sum -c cybersentineldlp_agent.exe.sha256
           ls -l
 
+      # Tesseract, for the OCR that reads a photographed ID card.
+      #
+      # The agent installer used to fetch this from Chocolatey, which downloads
+      # its own installer and, on Windows Server, pulls .NET 4.8 before it will
+      # run at all. Both fail on a machine with no internet - so OCR was lost on
+      # exactly the fleet most likely to be isolated, and the operator saw a .NET
+      # error with no obvious bearing on DLP. Staging it by hand on every manager
+      # fixed that and was a step everyone forgot; baking it here means an
+      # endpoint gets OCR from the server it already talks to, with nothing
+      # configured and no internet at either end.
+      #
+      # Pulled from the tesseract-ocr project's own GitHub release, not the
+      # UB-Mannheim mirror the docs point at: the mirror answers 403 to
+      # non-browser clients, which is not something to put in a build.
+      #
+      # The checksum is PINNED. Endpoints run this installer elevated and
+      # silently, so a mirror serving something unexpected must not be baked
+      # into an image that hundreds of machines then fetch it from. A mismatch
+      # drops the file and builds without it - the installer falls back to
+      # Chocolatey exactly as it did before - rather than failing the build of
+      # a manager image over an optional dependency.
+      - name: Seed the OCR dependency into the manager image
+        if: matrix.service == 'manager'
+        env:
+          TESS_URL: https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe
+          TESS_SHA: bee9e3434bd94fd65387d9be28cd467a41f61b1275383b55b0f59a1331270ae4
+        run: |
+          out=server/agent_dist/tesseract-installer.exe
+          if ! curl -fL --retry 3 --retry-delay 5 --max-time 600 -o "$out" "$TESS_URL"; then
+            echo "::warning::Could not download Tesseract; endpoints will fall back to Chocolatey"
+            rm -f "$out"
+            exit 0
+          fi
+          if ! echo "$TESS_SHA  $out" | sha256sum -c -; then
+            echo "::warning::Tesseract checksum mismatch - refusing to ship it"
+            rm -f "$out"
+            exit 0
+          fi
+          ls -l "$out"
+
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:

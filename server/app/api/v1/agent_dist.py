@@ -63,11 +63,12 @@ VER_NAME = EXE_NAME + ".version"
 # by content type, and anything JSON-ish or XML-ish comes back to `iex` as an
 # object rather than the script text, which fails in a way that looks like the
 # script itself is broken.
-# Optional dependencies an endpoint may need but cannot fetch itself. These are
-# served from this directory ONLY - never pulled from the repository, which has
-# no business carrying a third-party installer, and never required. An operator
-# drops the file in server/agent_dist/ once and every endpoint, including an
-# air-gapped one, can get it from the manager it already talks to.
+# Dependencies an endpoint may need but cannot fetch itself. These are served
+# from this directory ONLY - never pulled from the repository, which has no
+# business carrying a third-party installer, and never required. The image build
+# stages them (from upstream's own release, checksum pinned), so every endpoint,
+# including an air-gapped one, gets them from the manager it already talks to
+# with nothing configured. An operator can drop in a different build to override.
 #
 # Without this the agent installer reached out to Chocolatey for Tesseract,
 # which on Windows Server pulls .NET 4.8 first. Both downloads fail on a machine

@@ -819,7 +819,7 @@ function PermissionPicker({
         ? 'Loading permission catalog...'
         : catalogState === 'error'
           ? 'Could not load the permission catalog. Check you are still signed in and the manager is reachable.'
-          : 'The permission catalog is empty on this deployment, so there is nothing to grant directly - roles still work. Restart the manager to seed it, or run: docker exec cybersentineldlp-manager alembic upgrade head'
+          : 'The permission catalog is empty on this deployment, so there is nothing to grant directly — roles still work. Restart the manager to seed it: docker compose restart manager'
     return (
       <div className="p-3 rounded-cs-sm bg-cs-hair-2 border border-cs-hair text-sm text-cs-muted">
         {msg}

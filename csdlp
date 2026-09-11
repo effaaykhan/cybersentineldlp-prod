@@ -516,7 +516,9 @@ cmd_update() {
 # the value from .env there yields the wrong database name, and a dump of the
 # wrong database looks like a successful backup right up until the restore.
 _svc_env() {
-    dc exec -T "$1" printenv "$2" 2>/dev/null | tr -d '\r' | head -1
+    # </dev/null: see _pg_resolve. Any `docker compose exec -T` run while the
+    # caller has redirected stdin will attach to it and consume it.
+    dc exec -T "$1" printenv "$2" </dev/null 2>/dev/null | tr -d '\r' | head -1
 }
 # Credentials are PROVED, not read.
 #
@@ -549,6 +551,14 @@ _svc_env() {
 # transports, and the first combination that answers wins. Each attempt is
 # recorded, because "could not connect" with no list of what was tried is how
 # this stayed unexplained through several rounds.
+#
+# EVERY probe below redirects stdin from /dev/null. `docker compose exec -T`
+# attaches the caller's stdin and streams it to the container, whether the
+# command wants it or not. _pg_run calls this resolver before running the real
+# command - so on `_pg_run psql -d postgres < dump.sql`, the probes drained the
+# dump file, psql got EOF, and a restore that reported no errors restored
+# nothing. The verification then found 0 tables, which was accurate, and was
+# blamed on the restore rather than on the probes that ate its input.
 PG_USER=""; PG_DB=""; PG_HOSTARG=""; PG_PASS=""; PG_TRIED=""
 _pg_resolve() {
     [ -n "$PG_USER" ] && return 0
@@ -561,11 +571,11 @@ _pg_resolve() {
             [ -n "$d" ] || continue
             seen=" $u/$d"; case "$PG_TRIED" in *"$seen "*) continue;; esac
             PG_TRIED="$PG_TRIED$seen "
-            if dc exec -T postgres psql -U "$u" -d "$d" -Atc 'SELECT 1' >/dev/null 2>&1; then
+            if dc exec -T postgres psql -U "$u" -d "$d" -Atc 'SELECT 1' </dev/null >/dev/null 2>&1; then
                 PG_USER="$u"; PG_DB="$d"; PG_HOSTARG=""; PG_PASS=""; return 0
             fi
             if [ -n "$pw" ] && dc exec -T -e PGPASSWORD="$pw" postgres \
-                   psql -U "$u" -h 127.0.0.1 -d "$d" -Atc 'SELECT 1' >/dev/null 2>&1; then
+                   psql -U "$u" -h 127.0.0.1 -d "$d" -Atc 'SELECT 1' </dev/null >/dev/null 2>&1; then
                 PG_USER="$u"; PG_DB="$d"; PG_HOSTARG="-h 127.0.0.1"; PG_PASS="$pw"; return 0
             fi
         done

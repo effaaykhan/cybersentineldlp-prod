@@ -133,12 +133,13 @@ cmd_backup() {
     local pgu pgd; pgu="$(envget POSTGRES_USER)"; pgd="$(envget POSTGRES_DB)"
     pgu="${pgu:-dlp_user}"; pgd="${pgd:-cybersentineldlp}"
     local pgerr; pgerr="$(mktemp)"
-    dc exec -T postgres pg_dump -U "$pgu" "$pgd" > "$dst/postgres.sql" 2>"$pgerr"
+    _pg_run pg_dump "$pgd" > "$dst/postgres.sql" 2>"$pgerr"
     if [ -s "$dst/postgres.sql" ]; then
         ok "postgres -> postgres.sql ($(wc -c < "$dst/postgres.sql") bytes)"
     else
         err "postgres dump FAILED (user=$pgu db=$pgd) — postgres.sql is empty"
         sed 's/^/        /' "$pgerr" | head -5 >&2
+        err "tried user/db combinations:$(_pg_tried)"
         rm -f "$dst/postgres.sql"
     fi
     rm -f "$pgerr"
@@ -184,7 +185,7 @@ cmd_restore() {
     hd "Restore from $src"
     warn "This overwrites current data. Ctrl-C within 5s to abort."; sleep 5
     local pgu pgd; pgu="$(_pg_user)"; pgd="$(_pg_db)"
-    [ -f "$src/postgres.sql" ] && { dc exec -T postgres psql -U "$pgu" -d "$pgd" < "$src/postgres.sql" >/dev/null 2>&1 && ok "postgres restored" || warn "postgres restore had errors"; }
+    [ -f "$src/postgres.sql" ] && { _pg_run psql -d "$pgd" < "$src/postgres.sql" >/dev/null 2>&1 && ok "postgres restored" || warn "postgres restore had errors"; }
     local mu mp; mu="$(_mg_user)"; mp="$(_mg_pass)"
     [ -f "$src/mongo.archive" ] && { dc exec -T mongodb sh -c "mongorestore --quiet --drop --username '$mu' --password '$mp' --authenticationDatabase admin --archive" < "$src/mongo.archive" >/dev/null 2>&1 && ok "mongo restored" || warn "mongo restore had errors"; }
 
@@ -529,26 +530,56 @@ _svc_env() {
 # So each candidate is tried against the server and the first one that actually
 # authenticates wins. If none do, the declared value is returned so the error
 # message names what was configured rather than something invented here.
-_pg_user() {
-    local c
-    for c in "$(envget POSTGRES_USER)" "$(_svc_env postgres POSTGRES_USER)" postgres dlp_user; do
-        [ -n "$c" ] || continue
-        if dc exec -T postgres psql -U "$c" -Atc 'SELECT 1' >/dev/null 2>&1; then
-            printf '%s' "$c"; return 0
-        fi
+# How to reach Postgres: which role, which database, over which transport.
+#
+# Three separate things went wrong here, each of which produced a zero-byte
+# "backup" that reported success:
+#
+#  * .env can disagree with the cluster. POSTGRES_USER is honoured by the image
+#    only at initdb on an empty volume, so an .env edited later describes a role
+#    that was never created.
+#  * psql defaults the DATABASE NAME TO THE USERNAME. Probing `psql -U dlp_user`
+#    fails with `database "dlp_user" does not exist` even when the role is
+#    perfectly fine - so a probe that does not name a database rejects the very
+#    credentials it was meant to discover.
+#  * the socket and TCP can carry different pg_hba rules, so a role the manager
+#    authenticates with over the network can be refused on the socket.
+#
+# So: every user is tried against every candidate database, over both
+# transports, and the first combination that answers wins. Each attempt is
+# recorded, because "could not connect" with no list of what was tried is how
+# this stayed unexplained through several rounds.
+PG_USER=""; PG_DB=""; PG_HOSTARG=""; PG_PASS=""; PG_TRIED=""
+_pg_resolve() {
+    [ -n "$PG_USER" ] && return 0
+    local u d pw users dbs seen
+    pw="$(envget POSTGRES_PASSWORD)"; [ -n "$pw" ] || pw="$(_svc_env postgres POSTGRES_PASSWORD)"
+    users="$(printf '%s\n%s\npostgres\ndlp_user\n' "$(envget POSTGRES_USER)" "$(_svc_env postgres POSTGRES_USER)" | awk 'NF && !a[$0]++')"
+    dbs="$(printf '%s\n%s\npostgres\n' "$(envget POSTGRES_DB)" "$(_svc_env postgres POSTGRES_DB)" | awk 'NF && !a[$0]++')"
+    for u in $users; do
+        for d in $dbs $u; do
+            [ -n "$d" ] || continue
+            seen=" $u/$d"; case "$PG_TRIED" in *"$seen "*) continue;; esac
+            PG_TRIED="$PG_TRIED$seen "
+            if dc exec -T postgres psql -U "$u" -d "$d" -Atc 'SELECT 1' >/dev/null 2>&1; then
+                PG_USER="$u"; PG_DB="$d"; PG_HOSTARG=""; PG_PASS=""; return 0
+            fi
+            if [ -n "$pw" ] && dc exec -T -e PGPASSWORD="$pw" postgres \
+                   psql -U "$u" -h 127.0.0.1 -d "$d" -Atc 'SELECT 1' >/dev/null 2>&1; then
+                PG_USER="$u"; PG_DB="$d"; PG_HOSTARG="-h 127.0.0.1"; PG_PASS="$pw"; return 0
+            fi
+        done
     done
-    printf '%s' "$(envget POSTGRES_USER)"
+    PG_USER="$(envget POSTGRES_USER)"; PG_DB="$(envget POSTGRES_DB)"; PG_HOSTARG=""; PG_PASS=""
+    return 1
 }
-_pg_db() {
-    local u c; u="$(_pg_user)"
-    for c in "$(envget POSTGRES_DB)" "$(_svc_env postgres POSTGRES_DB)" "$u" postgres; do
-        [ -n "$c" ] || continue
-        if dc exec -T postgres psql -U "$u" -d "$c" -Atc 'SELECT 1' >/dev/null 2>&1; then
-            printf '%s' "$c"; return 0
-        fi
-    done
-    printf '%s' "$(envget POSTGRES_DB)"
-}
+# Run a postgres client tool the way that actually works here.
+_pg_run() { _pg_resolve || true; dc exec -T -e PGPASSWORD="$PG_PASS" postgres "$@" -U "$PG_USER" $PG_HOSTARG; }
+_pg_user() { _pg_resolve || true; printf '%s' "$PG_USER"; }
+_pg_db()   { _pg_resolve || true; printf '%s' "$PG_DB"; }
+# What was tried, for an error message that can be acted on.
+_pg_tried() { printf '%s' "${PG_TRIED:-nothing}"; }
+
 _mg_ok() { dc exec -T mongodb mongosh --quiet -u "$1" -p "$2" --authenticationDatabase admin --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | tr -d '\r' | grep -q 1; }
 _mg_user() {
     local u p
@@ -628,20 +659,21 @@ cmd_upgrade_postgres() {
     # is not up yet - into the same four words, "dump is empty", with nothing to
     # act on. Whatever postgres says, the operator gets to see.
     local dumperr; dumperr="$(mktemp)"
-    dc exec -T postgres pg_dumpall -U "$pgu" > "$dump" 2>"$dumperr"
+    _pg_run pg_dumpall > "$dump" 2>"$dumperr"
     if [ ! -s "$dump" ]; then
         err "dump is empty — refusing to go further"
         err "pg_dumpall -U $pgu said:"
         sed 's/^/        /' "$dumperr" | head -10 >&2
         [ -s "$dumperr" ] || err "        (no output at all — is the postgres container running?)"
         printf '      resolved user=%s db=%s\n' "$pgu" "$pgd" >&2
+        printf '      tried:%s\n' "$(_pg_tried)" >&2
         printf '      try:  docker compose -f %s exec -T postgres psql -U %s -l\n' "$COMPOSE" "$pgu" >&2
         rm -f "$dumperr"
         return 1
     fi
     rm -f "$dumperr"
     ok "    $dump ($(wc -c < "$dump") bytes)"
-    rows_before="$(dc exec -T postgres psql -U "$pgu" -d "$pgd" -Atc \
+    rows_before="$(_pg_run psql -d "$pgd" -Atc \
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d '\r')"
     ok "    tables before: ${rows_before:-?}"
 
@@ -679,12 +711,12 @@ cmd_upgrade_postgres() {
     ok "6/7 starting postgres and restoring"
     dc up -d postgres >/dev/null 2>&1
     local i=0
-    until dc exec -T postgres pg_isready -U "$pgu" >/dev/null 2>&1; do
+    until dc exec -T postgres pg_isready -U "$PG_USER" >/dev/null 2>&1; do
         i=$((i + 1)); [ "$i" -gt 60 ] && { err "postgres did not become ready"; return 1; }
         sleep 2
     done
-    dc exec -T postgres psql -U "$pgu" -d postgres < "$dump" >/dev/null 2>&1
-    rows_after="$(dc exec -T postgres psql -U "$pgu" -d "$pgd" -Atc \
+    _pg_run psql -d postgres < "$dump" >/dev/null 2>&1
+    rows_after="$(_pg_run psql -d "$pgd" -Atc \
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d '\r')"
     ok "    tables after: ${rows_after:-?}"
     if [ "${rows_before:-x}" != "${rows_after:-y}" ]; then

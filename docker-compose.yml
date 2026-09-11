@@ -68,7 +68,7 @@ services:
     # the dev stack (DISABLE_SECURITY_PLUGIN=true below), so unlike prod there is
     # no initial-admin-password interaction — the bump is a plain image swap over
     # the existing volume.
-    image: opensearchproject/opensearch:2.19.0
+    image: opensearchproject/opensearch:3.8.0
     container_name: cybersentineldlp-opensearch
     networks:
       - cybersentinel-net

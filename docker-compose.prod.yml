@@ -1,12 +1,28 @@
 services:
   # OpenSearch for event storage
   opensearch:
-    # 2.19.x, NOT 2.11: OPENSEARCH_INITIAL_ADMIN_PASSWORD is only honoured from
-    # 2.12 onward. On 2.11 it was silently ignored, so OpenSearch kept its
-    # built-in admin/admin while the manager authenticated with the password from
-    # .env — every prod deploy got 401 and logged "continuing without it",
-    # running with no event indexing/search while still looking healthy.
-    image: opensearchproject/opensearch:2.19.0
+    # OpenSearch 3.8.0. Verified against this deployment before pinning, not
+    # assumed: opensearch-py 2.4.2 (the client in requirements.txt) drives the
+    # full API surface this code uses against a live 3.8.0 node - ping, index
+    # templates, create/index/bulk/get/search/aggs/delete - 12 of 12. And a
+    # 2.19.0 data directory opens on 3.8.0 with every document readable.
+    #
+    # ONE-WAY. Tested: a volume opened by 3.8.0 will NOT start on 2.19.0 again.
+    # `csdlp rollback` restores the manager and dashboard images and does not
+    # touch OpenSearch, and `csdlp backup` covers postgres and mongo ONLY - so
+    # snapshot the opensearch_data volume by hand before taking this update.
+    #
+    # 2.19.0 was also the exact floor for this jump: 3.8.0 reports
+    # minimum_wire_compatibility_version 2.19.0. Anything older needed a hop
+    # through 2.19 first.
+    #
+    # Do NOT drop below 2.12 if this is ever pinned back: OPENSEARCH_INITIAL_
+    # ADMIN_PASSWORD is only honoured from 2.12: on 2.11 it was silently
+    # ignored, OpenSearch kept its built-in admin/admin while the manager
+    # authenticated with the password from .env, and every prod deploy got 401,
+    # logged "continuing without it", and ran with no event indexing or search
+    # while still looking healthy.
+    image: opensearchproject/opensearch:3.8.0
     container_name: cybersentineldlp-opensearch
     environment:
       - cluster.name=cybersentineldlp-cluster

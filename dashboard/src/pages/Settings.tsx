@@ -100,6 +100,81 @@ export default function Settings() {
 
       {/* Settings Sections */}
       <div className="space-y-6">
+        {/* About */}
+        <div className="card">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
+              <SettingsIcon className="h-5 w-5 text-cs-indigo" />
+            </div>
+            <div>
+              <h3 className="section-title">About</h3>
+              <p className="text-sm text-cs-muted">Platform version and deployment details.</p>
+            </div>
+          </div>
+
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-cs-ink-2">Version</span>
+              <span className="num font-medium text-cs-ink">{about?.version ?? '—'}</span>
+            </div>
+            {about?.build_sha && about.build_sha !== 'unknown' && (
+              <div className="flex justify-between">
+                <span className="text-cs-ink-2">Build</span>
+                <span
+                  className="num font-medium text-cs-ink"
+                  title={about.build_time ? `Built ${formatDayIST(about.build_time)}` : undefined}
+                >
+                  {about.build_sha.slice(0, 7)}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-cs-ink-2">Backend API</span>
+              <span className="num font-medium text-cs-ink">{about?.backend ?? 'FastAPI'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-cs-ink-2">OpenSearch</span>
+              <span className="num font-medium text-cs-ink">{about?.opensearch ?? '—'}</span>
+            </div>
+
+            {/* Deployment dates. Absent on a stack that has not yet taken the
+                update that started recording them — show nothing rather than a
+                date invented at render time. */}
+            {(about?.installed_at || about?.last_updated_at) && (
+              <>
+                <div className="border-t border-cs-hair my-2" />
+                <div className="flex justify-between">
+                  <span className="text-cs-ink-2">Installed</span>
+                  <span
+                    className="num font-medium text-cs-ink"
+                    title={about?.installed_at ?? undefined}
+                  >
+                    {formatDayIST(about?.installed_at)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-cs-ink-2">Last updated</span>
+                  <span className="text-right" title={about?.last_updated_at ?? undefined}>
+                    <span className="num font-medium text-cs-ink">
+                      {formatDayIST(about?.last_updated_at)}
+                    </span>
+                    {about?.last_updated_at && (
+                      <span className="block text-xs text-cs-muted">
+                        {formatRelativeTime(about.last_updated_at)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </>
+            )}
+
+            <div className="flex justify-between">
+              <span className="text-cs-ink-2">License</span>
+              <span className="font-medium text-cs-ink">Proprietary</span>
+            </div>
+          </div>
+        </div>
+
         {/* Account Security */}
         <div className="card">
           <div className="flex items-start gap-3 mb-4">
@@ -349,81 +424,6 @@ export default function Settings() {
                 <input type="checkbox" className="sr-only peer" />
                 <div className="w-11 h-6 bg-cs-hair-2 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cs-indigo-faint rounded-cs-pill peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-cs-hair after:border after:rounded-cs-pill after:h-5 after:w-5 after:transition-all peer-checked:bg-cs-indigo"></div>
               </label>
-            </div>
-          </div>
-        </div>
-
-        {/* About */}
-        <div className="card">
-          <div className="flex items-start gap-3 mb-4">
-            <div className="p-2 bg-cs-indigo-faint rounded-cs-sm">
-              <SettingsIcon className="h-5 w-5 text-cs-indigo" />
-            </div>
-            <div>
-              <h3 className="section-title">About</h3>
-              <p className="text-sm text-cs-muted">Platform version and deployment details.</p>
-            </div>
-          </div>
-
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-cs-ink-2">Version</span>
-              <span className="num font-medium text-cs-ink">{about?.version ?? '—'}</span>
-            </div>
-            {about?.build_sha && about.build_sha !== 'unknown' && (
-              <div className="flex justify-between">
-                <span className="text-cs-ink-2">Build</span>
-                <span
-                  className="num font-medium text-cs-ink"
-                  title={about.build_time ? `Built ${formatDayIST(about.build_time)}` : undefined}
-                >
-                  {about.build_sha.slice(0, 7)}
-                </span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-cs-ink-2">Backend API</span>
-              <span className="num font-medium text-cs-ink">{about?.backend ?? 'FastAPI'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-cs-ink-2">OpenSearch</span>
-              <span className="num font-medium text-cs-ink">{about?.opensearch ?? '—'}</span>
-            </div>
-
-            {/* Deployment dates. Absent on a stack that has not yet taken the
-                update that started recording them — show nothing rather than a
-                date invented at render time. */}
-            {(about?.installed_at || about?.last_updated_at) && (
-              <>
-                <div className="border-t border-cs-hair my-2" />
-                <div className="flex justify-between">
-                  <span className="text-cs-ink-2">Installed</span>
-                  <span
-                    className="num font-medium text-cs-ink"
-                    title={about?.installed_at ?? undefined}
-                  >
-                    {formatDayIST(about?.installed_at)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-cs-ink-2">Last updated</span>
-                  <span className="text-right" title={about?.last_updated_at ?? undefined}>
-                    <span className="num font-medium text-cs-ink">
-                      {formatDayIST(about?.last_updated_at)}
-                    </span>
-                    {about?.last_updated_at && (
-                      <span className="block text-xs text-cs-muted">
-                        {formatRelativeTime(about.last_updated_at)}
-                      </span>
-                    )}
-                  </span>
-                </div>
-              </>
-            )}
-
-            <div className="flex justify-between">
-              <span className="text-cs-ink-2">License</span>
-              <span className="font-medium text-cs-ink">Proprietary</span>
             </div>
           </div>
         </div>

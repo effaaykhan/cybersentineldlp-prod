@@ -56,7 +56,15 @@ kv()  { printf '  %-14s %s\n' "$1" "$2"; }
 
 dc()  { docker compose -f "$COMPOSE" "$@"; }
 # load a single key from .env without exposing the whole file
-envget() { [ -f "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -1 | tr -d '"'"'"' '; }
+# LAST match, not first — the same rule docker compose applies.
+#
+# A duplicated key in .env is not an error to either tool, they just disagree
+# about which line wins: compose takes the last, this took the first. On a
+# deployment whose .env carried POSTGRES_USER twice, compose built the cluster
+# as one role while csdlp dumped as another, so every backup failed with `role
+# does not exist` and wrote a zero-byte file. Reading it the way compose reads
+# it is the only way these two can agree about what is deployed.
+envget() { [ -f "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | tail -1 | tr -d '"'"'"' '; }
 # Set KEY=VALUE in .env, replacing an existing line (commented or not) in place
 # so its position and surrounding comments survive. Appends when absent.
 envset() {
@@ -448,6 +456,7 @@ cmd_update() {
     # `update latest` is the explicit way back onto the moving tag.
     [ "$tag" = "latest" ] && { rm -f "$pinf"; tag=""; }
     hd "Update${tag:+ -> $tag}"
+    _warn_dup_env || true
     # What is behind, before anything is touched. Same-major moves ride along
     # with the pull below; a major is reported and left alone, because it
     # rewrites an on-disk format and cannot be undone by re-tagging.
@@ -844,6 +853,22 @@ cmd_restart() {
     hd "Restart ${svc:-all}"
     # shellcheck disable=SC2086
     dc restart $svc && ok "restarted"
+}
+
+# A duplicated key in .env is silently legal and quietly divisive: compose reads
+# the last, a careless reader reads the first, and the two can describe
+# different deployments. Cheap to detect, so detect it.
+_warn_dup_env() {
+    [ -f "$ENVF" ] || return 0
+    local dups
+    dups="$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$ENVF" | sort | uniq -d | tr -d '=')"
+    [ -n "$dups" ] || return 0
+    warn "$ENVF defines these keys more than once — the LAST one wins:"
+    local k
+    for k in $dups; do
+        printf '        %-24s -> %s\n' "$k" "$(sed -n "s/^$k=//p" "$ENVF" | tail -1 | tr -d '"'"'"' ')"
+    done
+    return 1
 }
 
 cmd_doctor() {

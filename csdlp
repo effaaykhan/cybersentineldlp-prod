@@ -1038,7 +1038,11 @@ cmd_self_update() {
             else
                 cp "$DIR/csdlp" "$DIR/csdlp.prev" 2>/dev/null
                 cat "$tmp" > "$DIR/csdlp" && chmod +x "$DIR/csdlp" && ok "csdlp updated (previous kept as csdlp.prev)"
-                [ -w /usr/local/bin ] && { cat "$tmp" > /usr/local/bin/csdlp 2>/dev/null && chmod +x /usr/local/bin/csdlp 2>/dev/null && ok "/usr/local/bin/csdlp updated"; }
+                if [ "$(readlink -f /usr/local/bin/csdlp 2>/dev/null)" = "$(readlink -f "$DIR/csdlp" 2>/dev/null)" ]; then
+                    ok "/usr/local/bin/csdlp is a symlink to it — nothing more to do"
+                elif [ -w /usr/local/bin ]; then
+                    cat "$tmp" > /usr/local/bin/csdlp 2>/dev/null && chmod +x /usr/local/bin/csdlp 2>/dev/null && ok "/usr/local/bin/csdlp updated"
+                fi
             fi
         else
             err "downloaded csdlp is not a valid script — keeping the current one"
@@ -1077,6 +1081,15 @@ cmd_self_update() {
 
 cmd_self_install() {
     local dest="/usr/local/bin/csdlp"
+    # install.sh puts a SYMLINK at $dest pointing back here, so on a normal
+    # deployment $dest already resolves to $0 and cp refuses to copy a file onto
+    # itself: "are the same file", reported as "install failed (need root?)" to
+    # an operator who is root and whose install is in fact perfectly correct.
+    # Curling a new csdlp over the symlink target has already updated PATH.
+    if [ -e "$dest" ] && [ "$(readlink -f "$dest" 2>/dev/null)" = "$(readlink -f "$0" 2>/dev/null)" ]; then
+        ok "already on PATH as $dest -> $(readlink -f "$0")"
+        return 0
+    fi
     cp "$0" "$dest" && chmod +x "$dest" && ok "installed to $dest" || err "install failed (need root?)"
 }
 

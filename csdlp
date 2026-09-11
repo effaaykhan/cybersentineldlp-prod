@@ -10,6 +10,9 @@
 #   csdlp doctor [--bundle]      full diagnostics (secrets redacted); --bundle -> tarball
 #   csdlp logs [service] [-f]    tail/follow logs (all services, or one)
 #   csdlp update [IMAGE_TAG]     backup -> pull -> migrate -> up -> health-gate -> auto-rollback
+#   csdlp check-updates          what upstream versions are newer than the pins
+#   csdlp upgrade-postgres       Postgres MAJOR upgrade (dump -> new volume -> restore)
+#   csdlp upgrade-mongo          MongoDB MAJOR upgrade (FCV step -> swap -> FCV step)
 #   csdlp rollback               revert to the image versions from before the last update
 #   csdlp backup                 snapshot postgres + mongo to ./backups/<ts>/
 #   csdlp restore <dir>          restore postgres + mongo from a backup dir
@@ -204,6 +207,177 @@ _save_versions() {
     } > "$DIR/.csdlp/prev-versions"
 }
 
+# ─── upstream version checking ────────────────────────────────────────────
+# Every backing service is pinned, which is what stops an unattended `pull`
+# from moving a database major underneath a running stack. The cost is that
+# nothing tells you a pin has gone stale. These functions do.
+#
+# The distinction that matters is same-major vs major:
+#   * same-major (16.15 -> 16.17, 3.8.0 -> 3.8.4) is drop-in. Applied.
+#   * a major (16 -> 18, 7.0 -> 8.0) rewrites the on-disk format and cannot be
+#     undone by re-tagging. Reported, never applied by `update`.
+# A floating tag (16-alpine, 7.0) is a prefix of its line's newest release, so
+# `docker pull` already moves it - calling that "behind" would send an operator
+# chasing an update they get for free.
+_TAGCHECK_PY=$(cat <<'PYCHECK'
+"""Newest upstream tag for an image, split into same-major and newer-major.
+
+Prints: <current> <same_major_latest|-> <newer_major_latest|-> <state>
+state: current | minor | major | unknown
+"""
+import json, re, sys, urllib.request
+
+TAG_RE = re.compile(r'^(\d+(?:\.\d+)*)(-[a-z0-9.]+)?$')
+
+def parse(tag):
+    m = TAG_RE.match(tag)
+    if not m:
+        return None, None
+    nums = tuple(int(x) for x in m.group(1).split('.'))
+    return nums, (m.group(2) or '')
+
+def fetch(repo):
+    ns, _, name = repo.rpartition('/')
+    ns = ns or 'library'
+    tags, url = [], (f"https://hub.docker.com/v2/repositories/{ns}/{name}"
+                     f"/tags/?page_size=100&ordering=last_updated")
+    for _ in range(3):                       # 300 tags is plenty of history
+        try:
+            with urllib.request.urlopen(url, timeout=20) as r:
+                d = json.load(r)
+        except Exception:
+            break
+        tags += [t['name'] for t in d.get('results', [])]
+        url = d.get('next')
+        if not url:
+            break
+    return tags
+
+def main():
+    ref = sys.argv[1]
+    repo, _, tag = ref.rpartition(':')
+    if not repo:
+        repo, tag = ref, 'latest'
+    cur, suffix = parse(tag)
+    if cur is None:
+        print(f"{tag} - - - unknown")        # :latest and friends
+        return
+
+    # Three different questions, which a single "is it newer" conflates:
+    #
+    #  line   - a newer release of the exact line this tag names. The tag is a
+    #           PREFIX of it (mongo:8.0 -> 8.0.30, postgres:16-alpine ->
+    #           16.17-alpine), so `docker pull` already moves it and there is
+    #           nothing for an operator to do.
+    #  same   - same major, DIFFERENT line (mongo:8.0 -> 8.3.9). A pull will
+    #           never fetch this; it takes a deliberate edit. For MongoDB it is
+    #           also a rapid release rather than the LTS line, so calling it
+    #           "safe to pull" was wrong twice over.
+    #  major  - a new major. Rewrites on-disk format; never automatic.
+    best_line = best_same = best_new = None
+    for t in fetch(repo):
+        n, s = parse(t)
+        if n is None or s != suffix:
+            continue
+        if n[0] > cur[0]:
+            if best_new is None or n > best_new[0]:
+                best_new = (n, t)
+        elif n[0] == cur[0]:
+            on_line = n[:len(cur)] == cur and len(n) > len(cur)
+            if on_line:
+                if best_line is None or n > best_line[0]:
+                    best_line = (n, t)
+            elif n > cur:
+                if best_same is None or n > best_same[0]:
+                    best_same = (n, t)
+
+    line = best_line[1] if best_line else '-'
+    same = best_same[1] if best_same else '-'
+    new  = best_new[1] if best_new else '-'
+    if new != '-':
+        state = 'major'
+    elif line != '-':
+        state = 'floating'
+    elif same != '-':
+        state = 'minor'
+    else:
+        state = 'current'
+    print(f"{tag} {line} {same} {new} {state}")
+
+main()
+PYCHECK
+)
+
+# The image: line for one service. Scans the whole service block rather than a
+# fixed window - a grep -A3 missed opensearch the moment a comment grew above
+# its image line, and silently reported nothing for it.
+_svc_image() {
+    awk -v svc="$1" '
+        $0 ~ "^  " svc ":[[:space:]]*$" { inblock = 1; next }
+        inblock && /^  [a-zA-Z_-]+:[[:space:]]*$/ { exit }
+        inblock && $1 == "image:" { print $2; exit }
+    ' "$COMPOSE"
+}
+
+# Images this stack pins, as "service image".
+_pinned_images() {
+    local svc img
+    for svc in opensearch postgres mongodb redis; do
+        img="$(_svc_image "$svc")"
+        [ -n "$img" ] && printf '%s %s\n' "$svc" "$img"
+    done
+}
+
+# "<tag> <same_major> <newer_major> <state>" for one image ref, or "" if the
+# lookup is impossible. A registry that is down must never fail an update.
+_upstream_state() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    printf '%s' "$_TAGCHECK_PY" | python3 - "$1" 2>/dev/null
+}
+
+# Report what is behind. Returns 0 if any MAJOR is pending, 1 otherwise, so
+# callers can decide whether to nag.
+_report_updates() {
+    local svc img out cur same new state majors=0
+    if ! command -v python3 >/dev/null 2>&1; then
+        warn "python3 not found - skipping the upstream version check"
+        return 1
+    fi
+    while read -r svc img; do
+        [ -n "$img" ] || continue
+        out="$(_upstream_state "$img")" || out=""
+        if [ -z "$out" ]; then
+            printf '    %-12s %-22s %s\n' "$svc" "${img##*:}" "lookup unavailable"
+            continue
+        fi
+        read -r cur line same new state <<<"$out"
+        case "$state" in
+            current)  printf '    %-12s %-22s up to date\n' "$svc" "$cur";;
+            floating) printf '    %-12s %-22s tracks %s - a pull moves it\n' "$svc" "$cur" "$line"
+                      [ "$same" != "-" ] && printf '                 (%s also exists - different line, needs a deliberate edit)\n' "$same";;
+            minor)    printf '    %-12s %-22s -> %s  same major, needs a deliberate edit\n' "$svc" "$cur" "$same";;
+            major)    majors=$((majors + 1))
+                      printf '    %-12s %-22s -> %s  %sMAJOR - not applied%s\n' "$svc" "$cur" "$new" "$CY" "$C0"
+                      case "$svc" in
+                          postgres) printf '                 run: csdlp upgrade-postgres\n';;
+                          mongodb)  printf '                 run: csdlp upgrade-mongo\n';;
+                          *)        printf '                 edit %s to move it deliberately\n' "$COMPOSE";;
+                      esac;;
+            *)        printf '    %-12s %-22s %s\n' "$svc" "$cur" "$state";;
+        esac
+    done <<<"$(_pinned_images)"
+    [ "$majors" -gt 0 ]
+}
+
+cmd_check_updates() {
+    hd "Upstream versions"
+    local pending=0
+    _report_updates && pending=1
+    printf '    %-12s %-22s %s\n' "manager" "${MANAGER_IMG##*:}" "tracks the tag - a pull moves it"
+    [ "$pending" = "1" ] && { echo; warn "major upgrades are available and were NOT applied"; }
+    return 0
+}
+
 cmd_update() {
     local tag="${1:-}" pinf="$DIR/.csdlp/pinned"
     # A rollback pins the known-good tag. Without this guard the next bare
@@ -218,6 +392,11 @@ cmd_update() {
     # `update latest` is the explicit way back onto the moving tag.
     [ "$tag" = "latest" ] && { rm -f "$pinf"; tag=""; }
     hd "Update${tag:+ -> $tag}"
+    # What is behind, before anything is touched. Same-major moves ride along
+    # with the pull below; a major is reported and left alone, because it
+    # rewrites an on-disk format and cannot be undone by re-tagging.
+    echo "  checking upstream versions..."
+    _report_updates && _majors_pending=1 || _majors_pending=0
     ok "1/5 snapshotting current versions + DB backup"
     _save_versions
     cmd_backup >/dev/null
@@ -229,15 +408,248 @@ cmd_update() {
         ok "2/5 pulling latest images"; dc pull
     fi
     ok "3/5 starting services"; dc up -d
+    # Recreating a backing service gives it a new IP, and the manager's existing
+    # connection pool keeps dialling the old one - /health then reports
+    # "redis: fail" against a redis that is perfectly healthy. `up -d` only
+    # recreates containers whose own image changed, so a redis-only or
+    # opensearch-only pull leaves a running manager holding dead sockets.
+    # Restarting it here costs a few seconds and removes the whole failure mode.
+    dc restart manager celery-worker celery-beat >/dev/null 2>&1
     ok "4/5 running migrations"; cmd_migrate || warn "migrate step reported issues"
     ok "5/5 health gate"
     if _health_ok; then
         rm -f "$pinf"          # deliberate move succeeded — release any pin
-        ok "update healthy — done"
+        if [ "${_majors_pending:-0}" = "1" ]; then
+            ok "update healthy — major upgrades still pending (see above)"
+        else
+            ok "update healthy — done"
+        fi
     else
         err "health check FAILED after update — rolling back"
         cmd_rollback
     fi
+}
+
+# Credentials for a running container, read from the container itself.
+#
+# envget() only sees .env, and a compose file is free to hardcode these instead
+# - the dev compose does exactly that (POSTGRES_DB: cybersentinel_dlp). Taking
+# the value from .env there yields the wrong database name, and a dump of the
+# wrong database looks like a successful backup right up until the restore.
+_svc_env() {
+    dc exec -T "$1" printenv "$2" 2>/dev/null | tr -d '\r' | head -1
+}
+# .env first (it is the documented knob), the container as the source of truth,
+# then the historical default.
+_pg_user() { local v; v="$(envget POSTGRES_USER)"; [ -n "$v" ] || v="$(_svc_env postgres POSTGRES_USER)"; printf '%s' "${v:-dlp_user}"; }
+_pg_db()   { local v; v="$(envget POSTGRES_DB)";   [ -n "$v" ] || v="$(_svc_env postgres POSTGRES_DB)";   printf '%s' "${v:-cybersentineldlp}"; }
+_mg_user() { local v; v="$(envget MONGODB_USER)";  [ -n "$v" ] || v="$(_svc_env mongodb MONGO_INITDB_ROOT_USERNAME)"; printf '%s' "$v"; }
+_mg_pass() { local v; v="$(envget MONGODB_PASSWORD)"; [ -n "$v" ] || v="$(_svc_env mongodb MONGO_INITDB_ROOT_PASSWORD)"; printf '%s' "$v"; }
+
+# ─── major database upgrades ──────────────────────────────────────────────
+# Kept OUT of `csdlp update` deliberately. Both rewrite an on-disk format, and
+# neither can be undone by re-tagging the image the way a manager rollback can:
+# once the data directory is converted, the old engine will not open it. So they
+# are separate, explicit, confirmed commands that keep the old data until you
+# delete it yourself.
+
+_confirm() {
+    printf '  %s%s%s\n' "$CY" "$1" "$C0"
+    printf '  type YES to continue: '
+    local a; read -r a
+    [ "$a" = "YES" ] || { warn "aborted"; return 1; }
+}
+
+# Rewrite one service's image tag in the compose file, in place.
+_set_image() {
+    local svc="$1" newimg="$2" line
+    line="$(grep -n "^  ${svc}:" "$COMPOSE" | head -1 | cut -d: -f1)"
+    [ -n "$line" ] || { err "service $svc not found in $COMPOSE"; return 1; }
+    # the image: line is within the next few lines of the service key
+    local img_line
+    img_line="$(awk -v s="$line" 'NR>s && NR<=s+6 && /^[[:space:]]+image:/ {print NR; exit}' "$COMPOSE")"
+    [ -n "$img_line" ] || { err "no image: line for $svc"; return 1; }
+    sed -i "${img_line}s|image: .*|image: ${newimg}|" "$COMPOSE"
+    ok "$COMPOSE: $svc -> $newimg"
+}
+
+cmd_upgrade_postgres() {
+    local target="${1:-}" cur vol volpre pgu pgd dump ts rows_before rows_after
+    cur="$(_svc_image postgres)"
+    [ -n "$cur" ] || { err "no postgres image in $COMPOSE"; return 1; }
+    if [ -z "$target" ]; then
+        local out; out="$(_upstream_state "$cur")" || out=""
+        target="$(printf '%s' "$out" | awk '{print $4}')"
+        [ "$target" = "-" ] && { ok "postgres is already on the newest major ($cur)"; return 0; }
+        [ -n "$target" ] || { err "could not determine the newest postgres; pass one: csdlp upgrade-postgres 18-alpine"; return 1; }
+    fi
+    hd "Postgres major upgrade: ${cur##*:} -> $target"
+
+    pgu="$(_pg_user)"; pgd="$(_pg_db)"
+    # From the RUNNING container, not from `compose config`. Compose reports the
+    # short name declared in the file ("postgres_data"); the real volume carries
+    # the project prefix ("<project>_postgres_data"). Acting on the short name
+    # creates a new empty volume, so the "backup" copies nothing and the data it
+    # was supposed to protect is still sitting in the volume being cleared.
+    vol="$(docker inspect "$(dc ps -q postgres | head -1)" \
+           --format '{{range .Mounts}}{{if or (eq .Destination "/var/lib/postgresql/data") (eq .Destination "/var/lib/postgresql")}}{{.Name}}{{end}}{{end}}' 2>/dev/null)"
+    [ -n "$vol" ] || { err "could not resolve the postgres data volume (is postgres running?)"; return 1; }
+    docker volume inspect "$vol" >/dev/null 2>&1 || { err "volume $vol does not exist"; return 1; }
+    ok "data volume: $vol"
+    ts="$(date +%Y%m%d-%H%M%S)"; volpre="${vol}_pre_${ts}"
+
+    _confirm "This rewrites the Postgres data directory. The old volume is KEPT as ${volpre}." || return 1
+
+    ok "1/7 dumping the database"
+    mkdir -p "$DIR/backups/$ts"; dump="$DIR/backups/$ts/postgres-pre-upgrade.sql"
+    dc exec -T postgres pg_dumpall -U "$pgu" > "$dump" 2>/dev/null
+    [ -s "$dump" ] || { err "dump is empty — refusing to go further"; return 1; }
+    ok "    $dump ($(wc -c < "$dump") bytes)"
+    rows_before="$(dc exec -T postgres psql -U "$pgu" -d "$pgd" -Atc \
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d '\r')"
+    ok "    tables before: ${rows_before:-?}"
+
+    ok "2/7 stopping the stack"
+    dc down >/dev/null 2>&1
+
+    ok "3/7 preserving the old volume as $volpre"
+    docker volume create "$volpre" >/dev/null
+    docker run --rm -v "$vol":/from -v "$volpre":/to alpine \
+        sh -c 'cd /from && cp -a . /to' >/dev/null 2>&1 \
+        || { err "could not copy the old volume — nothing has been changed"; dc up -d >/dev/null 2>&1; return 1; }
+    ok "    copied"
+
+    ok "4/7 clearing the data volume for $target"
+    docker run --rm -v "$vol":/d alpine sh -c 'rm -rf /d/* /d/..?* 2>/dev/null; true' >/dev/null 2>&1
+
+    ok "5/7 switching the image"
+    _set_image postgres "postgres:$target" || return 1
+
+    # Postgres 18 changed where the official image keeps its data. Up to 17 the
+    # mount goes at /var/lib/postgresql/data; from 18 the image wants the mount
+    # one level up at /var/lib/postgresql and puts the cluster in a
+    # version-named subdirectory, so that pg_upgrade --link can work without
+    # crossing a mount boundary. Left alone, 18 finds "PostgreSQL data in
+    # /var/lib/postgresql/data (unused mount/volume)" and refuses to start -
+    # which is exactly how this failed the first time it was run.
+    local tmaj="${target%%.*}"; tmaj="${tmaj%%-*}"
+    if [ "${tmaj:-0}" -ge 18 ] 2>/dev/null; then
+        if grep -q ':/var/lib/postgresql/data' "$COMPOSE"; then
+            sed -i 's|:/var/lib/postgresql/data|:/var/lib/postgresql|' "$COMPOSE"
+            ok "    mount moved to /var/lib/postgresql (required from 18)"
+        fi
+    fi
+
+    ok "6/7 starting postgres and restoring"
+    dc up -d postgres >/dev/null 2>&1
+    local i=0
+    until dc exec -T postgres pg_isready -U "$pgu" >/dev/null 2>&1; do
+        i=$((i + 1)); [ "$i" -gt 60 ] && { err "postgres did not become ready"; return 1; }
+        sleep 2
+    done
+    dc exec -T postgres psql -U "$pgu" -d postgres < "$dump" >/dev/null 2>&1
+    rows_after="$(dc exec -T postgres psql -U "$pgu" -d "$pgd" -Atc \
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d '\r')"
+    ok "    tables after: ${rows_after:-?}"
+    if [ "${rows_before:-x}" != "${rows_after:-y}" ]; then
+        err "table count changed (${rows_before} -> ${rows_after}) — restore is INCOMPLETE"
+        err "the old data is intact in volume $volpre; the dump is at $dump"
+        return 1
+    fi
+
+    ok "7/7 starting the rest of the stack"
+    dc up -d >/dev/null 2>&1
+    if _health_ok; then
+        ok "postgres now on $target — healthy"
+        warn "old data kept in volume $volpre; remove it when you are satisfied:"
+        printf '        docker volume rm %s\n' "$volpre"
+    else
+        err "unhealthy after the upgrade — old data is in $volpre, dump at $dump"
+        return 1
+    fi
+}
+
+cmd_upgrade_mongo() {
+    local target="${1:-}" cur mu mp ts arch before after fcv
+    cur="$(_svc_image mongodb)"
+    [ -n "$cur" ] || { err "no mongodb image in $COMPOSE"; return 1; }
+    if [ -z "$target" ]; then
+        local out; out="$(_upstream_state "$cur")" || out=""
+        target="$(printf '%s' "$out" | awk '{print $4}')"
+        [ "$target" = "-" ] && { ok "mongo is already on the newest major ($cur)"; return 0; }
+        # MongoDB majors must be taken one at a time, and only the .0 line is
+        # an LTS — 8.3 is a rapid release. Land on <major>.0 regardless of what
+        # the registry's newest tag happens to be.
+        target="${target%%.*}.0"
+    fi
+    hd "MongoDB major upgrade: ${cur##*:} -> $target"
+
+    mu="$(_mg_user)"; mp="$(_mg_pass)"
+    ts="$(date +%Y%m%d-%H%M%S)"; mkdir -p "$DIR/backups/$ts"
+    arch="$DIR/backups/$ts/mongo-pre-upgrade.archive"
+
+    _confirm "MongoDB majors must be taken one at a time and cannot be downgraded after the FCV is raised." || return 1
+
+    ok "1/6 dumping"
+    dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" > "$arch" 2>/dev/null
+    [ -s "$arch" ] || { err "dump is empty — refusing to go further"; return 1; }
+    ok "    $arch ($(wc -c < "$arch") bytes)"
+    before="$(_mongo_collcount "$mu" "$mp")"
+    ok "    collections before: ${before:-?}"
+
+    ok "2/6 pinning featureCompatibilityVersion to the CURRENT major first"
+    fcv="${cur##*:}"; fcv="${fcv%%-*}"; fcv="$(printf '%s' "$fcv" | cut -d. -f1).0"
+    _mongo_eval "$mu" "$mp" "db.adminCommand({setFeatureCompatibilityVersion:'$fcv',confirm:true})" >/dev/null 2>&1 \
+      || _mongo_eval "$mu" "$mp" "db.adminCommand({setFeatureCompatibilityVersion:'$fcv'})" >/dev/null 2>&1
+    ok "    fcv = $(_mongo_eval "$mu" "$mp" 'db.adminCommand({getParameter:1,featureCompatibilityVersion:1}).featureCompatibilityVersion.version')"
+
+    ok "3/6 switching the image"
+    _set_image mongodb "mongo:$target" || return 1
+
+    ok "4/6 restarting mongodb"
+    dc up -d mongodb >/dev/null 2>&1
+    local i=0
+    until _mongo_eval "$mu" "$mp" 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; do
+        i=$((i + 1)); [ "$i" -gt 60 ] && { err "mongodb did not come back — dump is at $arch"; return 1; }
+        sleep 2
+    done
+
+    ok "5/6 raising featureCompatibilityVersion to $target"
+    _mongo_eval "$mu" "$mp" "db.adminCommand({setFeatureCompatibilityVersion:'$target',confirm:true})" >/dev/null 2>&1 \
+      || _mongo_eval "$mu" "$mp" "db.adminCommand({setFeatureCompatibilityVersion:'$target'})" >/dev/null 2>&1
+    ok "    fcv = $(_mongo_eval "$mu" "$mp" 'db.adminCommand({getParameter:1,featureCompatibilityVersion:1}).featureCompatibilityVersion.version')"
+
+    after="$(_mongo_collcount "$mu" "$mp")"
+    ok "    collections after: ${after:-?}"
+    [ "${before:-x}" = "${after:-y}" ] || { err "collection count changed (${before} -> ${after}) — dump is at $arch"; return 1; }
+
+    ok "6/6 restarting the stack"
+    dc up -d >/dev/null 2>&1
+    _health_ok && ok "mongodb now on $target — healthy" \
+               || { err "unhealthy after the upgrade — dump at $arch"; return 1; }
+}
+
+# Total collections across every non-system database.
+#
+# This used to name one database literally, which is the same mistake _pg_db()
+# exists to prevent: the dev stack's database is cybersentinel_dlp, not
+# cybersentineldlp, so the check counted zero before and zero after and would
+# have called a total data loss a clean upgrade.
+_mongo_collcount() {
+    _mongo_eval "$1" "$2" '
+        var n = 0;
+        db.adminCommand({listDatabases:1}).databases.forEach(function(x){
+            if (["admin","config","local"].indexOf(x.name) < 0) {
+                n += db.getSiblingDB(x.name).getCollectionNames().length;
+            }
+        });
+        print(n);'
+}
+
+_mongo_eval() {
+    local mu="$1" mp="$2" js="$3"
+    dc exec -T mongodb mongosh --quiet -u "$mu" -p "$mp" --authenticationDatabase admin \
+        --eval "$js" 2>/dev/null | tr -d '\r' | tail -1
 }
 
 cmd_rollback() {
@@ -632,6 +1044,9 @@ case "${1:-}" in
     secret)   shift; cmd_secret "$@";;
     version)  shift; cmd_version "$@";;
     doctor)   shift; cmd_doctor "$@";;
+    check-updates|check) shift; cmd_check_updates "$@";;
+    upgrade-postgres)    shift; cmd_upgrade_postgres "$@";;
+    upgrade-mongo)       shift; cmd_upgrade_mongo "$@";;
     sso-cert) shift; cmd_sso_cert "$@";;
     self-install) shift; cmd_self_install "$@";;
     ""|-h|--help|help) usage;;

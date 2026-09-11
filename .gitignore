@@ -309,3 +309,6 @@ update-summary.md
 # anchor for somebody else's host to every deployment that pulls this repo.
 certs/*
 !certs/README.md
+
+# csdlp backup output — database dumps, never committed
+backups/

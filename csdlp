@@ -124,9 +124,15 @@ cmd_backup() {
     hd "Backup -> $dst"
     local pgu pgd; pgu="$(envget POSTGRES_USER)"; pgd="$(envget POSTGRES_DB)"
     pgu="${pgu:-dlp_user}"; pgd="${pgd:-cybersentineldlp}"
-    if dc exec -T postgres pg_dump -U "$pgu" "$pgd" > "$dst/postgres.sql" 2>/dev/null && [ -s "$dst/postgres.sql" ]; then
+    local pgerr; pgerr="$(mktemp)"
+    dc exec -T postgres pg_dump -U "$pgu" "$pgd" > "$dst/postgres.sql" 2>"$pgerr"
+    if [ -s "$dst/postgres.sql" ]; then
         ok "postgres -> postgres.sql ($(wc -c < "$dst/postgres.sql") bytes)"
-    else warn "postgres dump failed/empty"; fi
+    else
+        warn "postgres dump failed/empty (user=$pgu db=$pgd)"
+        sed 's/^/        /' "$pgerr" | head -5
+    fi
+    rm -f "$pgerr"
     local mu mp; mu="$(_mg_user)"; mp="$(_mg_pass)"
     if dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" > "$dst/mongo.archive" 2>/dev/null && [ -s "$dst/mongo.archive" ]; then
         ok "mongodb -> mongo.archive ($(wc -c < "$dst/mongo.archive") bytes)"
@@ -558,8 +564,23 @@ cmd_upgrade_postgres() {
 
     ok "1/7 dumping the database"
     mkdir -p "$DIR/backups/$ts"; dump="$DIR/backups/$ts/postgres-pre-upgrade.sql"
-    dc exec -T postgres pg_dumpall -U "$pgu" > "$dump" 2>/dev/null
-    [ -s "$dump" ] || { err "dump is empty — refusing to go further"; return 1; }
+    # stderr is KEPT. Sending it to /dev/null turned every possible cause -
+    # wrong role, missing maintenance database, permission denied, a server that
+    # is not up yet - into the same four words, "dump is empty", with nothing to
+    # act on. Whatever postgres says, the operator gets to see.
+    local dumperr; dumperr="$(mktemp)"
+    dc exec -T postgres pg_dumpall -U "$pgu" > "$dump" 2>"$dumperr"
+    if [ ! -s "$dump" ]; then
+        err "dump is empty — refusing to go further"
+        err "pg_dumpall -U $pgu said:"
+        sed 's/^/        /' "$dumperr" | head -10 >&2
+        [ -s "$dumperr" ] || err "        (no output at all — is the postgres container running?)"
+        printf '      resolved user=%s db=%s\n' "$pgu" "$pgd" >&2
+        printf '      try:  docker compose -f %s exec -T postgres psql -U %s -l\n' "$COMPOSE" "$pgu" >&2
+        rm -f "$dumperr"
+        return 1
+    fi
+    rm -f "$dumperr"
     ok "    $dump ($(wc -c < "$dump") bytes)"
     rows_before="$(dc exec -T postgres psql -U "$pgu" -d "$pgd" -Atc \
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d '\r')"

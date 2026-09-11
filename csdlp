@@ -1125,30 +1125,7 @@ cmd_self_update() {
     [ -n "$tok" ] && auth=(-H "Authorization: Bearer $tok")
     hd "Self-update from ${repo}@${branch}"
 
-    # 1. the script itself. Safe to replace outright - it holds no local state.
-    local tmp; tmp="$(mktemp)"
-    if curl -fsSL "${auth[@]}" --max-time 60 "$raw/csdlp" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-        if head -1 "$tmp" | grep -q '^#!/usr/bin/env bash' && bash -n "$tmp" 2>/dev/null; then
-            if cmp -s "$tmp" "$DIR/csdlp"; then
-                ok "csdlp already current"
-            else
-                cp "$DIR/csdlp" "$DIR/csdlp.prev" 2>/dev/null
-                cat "$tmp" > "$DIR/csdlp" && chmod +x "$DIR/csdlp" && ok "csdlp updated (previous kept as csdlp.prev)"
-                if [ "$(readlink -f /usr/local/bin/csdlp 2>/dev/null)" = "$(readlink -f "$DIR/csdlp" 2>/dev/null)" ]; then
-                    ok "/usr/local/bin/csdlp is a symlink to it — nothing more to do"
-                elif [ -w /usr/local/bin ]; then
-                    cat "$tmp" > /usr/local/bin/csdlp 2>/dev/null && chmod +x /usr/local/bin/csdlp 2>/dev/null && ok "/usr/local/bin/csdlp updated"
-                fi
-            fi
-        else
-            err "downloaded csdlp is not a valid script — keeping the current one"
-        fi
-    else
-        err "could not download csdlp (private repo? set AGENT_DIST_TOKEN in .env)"
-    fi
-    rm -f "$tmp"
-
-    # 2. the compose file is NEVER overwritten.
+    # 1. the compose file is NEVER overwritten.
     #
     # `csdlp upgrade-postgres` and `upgrade-mongo` rewrite it as part of a
     # migration - the image pin and, from Postgres 18, the mount path. Pulling
@@ -1172,6 +1149,60 @@ cmd_self_update() {
         fi
     else
         warn "could not download $COMPOSE"
+    fi
+
+    # 2. the script itself, LAST.
+    #
+    # It returns as soon as it has swapped, so anything that must happen
+    # during this run has to happen above it.
+    #
+    # Replaced by RENAME, never by writing over it. bash does not read a script
+    # into memory - it parses and executes incrementally, holding a byte offset
+    # into the open file. Truncating and rewriting that same inode while it is
+    # the script currently running leaves bash to resume at its old offset in
+    # different content, landing mid-statement:
+    #
+    #     /usr/local/bin/csdlp: line 1179: syntax error near unexpected token `)'
+    #
+    # rename(2) swaps the directory entry instead. The running process keeps the
+    # original inode, now unlinked, and finishes reading it undisturbed; every
+    # later invocation gets the new file. The temp file is created in the SAME
+    # directory so the rename cannot fall back to a cross-filesystem copy, which
+    # would truncate the destination and reintroduce exactly this bug.
+    local tmp; tmp="$(mktemp "$DIR/.csdlp.XXXXXX")" || { err "cannot write to $DIR"; return 1; }
+    if curl -fsSL "${auth[@]}" --max-time 60 "$raw/csdlp" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+        if head -1 "$tmp" | grep -q '^#!/usr/bin/env bash' && bash -n "$tmp" 2>/dev/null; then
+            if cmp -s "$tmp" "$DIR/csdlp"; then
+                rm -f "$tmp"; ok "csdlp already current"
+            else
+                cp "$DIR/csdlp" "$DIR/csdlp.prev" 2>/dev/null
+                chmod +x "$tmp"
+                if mv -f "$tmp" "$DIR/csdlp"; then
+                    ok "csdlp updated (previous kept as csdlp.prev)"
+                    if [ "$(readlink -f /usr/local/bin/csdlp 2>/dev/null)" = "$(readlink -f "$DIR/csdlp" 2>/dev/null)" ]; then
+                        ok "/usr/local/bin/csdlp is a symlink to it — nothing more to do"
+                    elif [ -w /usr/local/bin ]; then
+                        local t2; t2="$(mktemp /usr/local/bin/.csdlp.XXXXXX 2>/dev/null)"
+                        if [ -n "$t2" ] && cp "$DIR/csdlp" "$t2" && chmod +x "$t2" && mv -f "$t2" /usr/local/bin/csdlp; then
+                            ok "/usr/local/bin/csdlp updated"
+                        else
+                            rm -f "$t2" 2>/dev/null
+                            warn "could not update /usr/local/bin/csdlp"
+                        fi
+                    fi
+                    # This process is still executing the OLD file. Stop here
+                    # rather than run a mix of two versions.
+                    ok "done — the new version is in place for the next command"
+                    return 0
+                else
+                    rm -f "$tmp"; err "could not replace $DIR/csdlp"
+                fi
+            fi
+        else
+            rm -f "$tmp"; err "downloaded csdlp is not a valid script — keeping the current one"
+        fi
+    else
+        rm -f "$tmp"; err "could not download csdlp (private repo? set AGENT_DIST_TOKEN in .env)"
     fi
 }
 

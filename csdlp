@@ -590,7 +590,10 @@ _pg_db()   { _pg_resolve || true; printf '%s' "$PG_DB"; }
 # What was tried, for an error message that can be acted on.
 _pg_tried() { printf '%s' "${PG_TRIED:-nothing}"; }
 
-_mg_ok() { dc exec -T mongodb mongosh --quiet -u "$1" -p "$2" --authenticationDatabase admin --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | tr -d '\r' | grep -q 1; }
+# </dev/null for the same reason as _pg_resolve: `docker compose exec -T`
+# attaches the caller's stdin, and this runs before commands that are fed an
+# archive on theirs.
+_mg_ok() { dc exec -T mongodb mongosh --quiet -u "$1" -p "$2" --authenticationDatabase admin --eval 'db.adminCommand({ping:1}).ok' </dev/null 2>/dev/null | tr -d '\r' | grep -q 1; }
 _mg_user() {
     local u p
     u="$(envget MONGODB_USER)"; p="$(envget MONGODB_PASSWORD)"
@@ -835,8 +838,15 @@ cmd_upgrade_mongo() {
     _confirm "MongoDB majors must be taken one at a time and cannot be downgraded after the FCV is raised." || return 1
 
     ok "1/6 dumping"
-    dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" > "$arch" 2>/dev/null
-    [ -s "$arch" ] || { err "dump is empty — refusing to go further"; return 1; }
+    local mderr; mderr="$(mktemp)"
+    dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" </dev/null > "$arch" 2>"$mderr"
+    if [ ! -s "$arch" ]; then
+        err "dump is empty — refusing to go further"
+        err "mongodump (user=$mu) said:"
+        sed 's/^/        /' "$mderr" | head -8 >&2
+        rm -f "$mderr"; return 1
+    fi
+    rm -f "$mderr"
     ok "    $arch ($(wc -c < "$arch") bytes)"
     before="$(_mongo_collcount "$mu" "$mp")"
     ok "    collections before: ${before:-?}"
@@ -852,11 +862,23 @@ cmd_upgrade_mongo() {
 
     ok "4/6 restarting mongodb"
     dc up -d mongodb >/dev/null 2>&1
+    # 10 minutes, not 2. A major's first start can do internal upgrade work, and
+    # the Postgres side of this tool has already demonstrated what a too-short
+    # budget costs: it gives up while the server is still coming up, and returns
+    # BEFORE the step that matters.
     local i=0
     until _mongo_eval "$mu" "$mp" 'db.adminCommand({ping:1}).ok' 2>/dev/null | grep -q 1; do
-        i=$((i + 1)); [ "$i" -gt 60 ] && { err "mongodb did not come back — dump is at $arch"; return 1; }
+        i=$((i + 1))
+        if [ "$i" -gt 300 ]; then
+            err "mongodb did not come back after 10 minutes"
+            err "  dump: $arch"
+            err "  the image is now mongo:$target in $COMPOSE — put it back to ${cur##*:} to return"
+            return 1
+        fi
+        if [ $((i % 15)) -eq 0 ]; then printf '      still starting (%ss)...\n' "$((i * 2))"; fi
         sleep 2
     done
+    ok "    mongodb $target responding"
 
     ok "5/6 raising featureCompatibilityVersion to $target"
     _mongo_eval "$mu" "$mp" "db.adminCommand({setFeatureCompatibilityVersion:'$target',confirm:true})" >/dev/null 2>&1 \
@@ -893,7 +915,7 @@ _mongo_collcount() {
 _mongo_eval() {
     local mu="$1" mp="$2" js="$3"
     dc exec -T mongodb mongosh --quiet -u "$mu" -p "$mp" --authenticationDatabase admin \
-        --eval "$js" 2>/dev/null | tr -d '\r' | tail -1
+        --eval "$js" </dev/null 2>/dev/null | tr -d '\r' | tail -1
 }
 
 cmd_rollback() {

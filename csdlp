@@ -693,18 +693,37 @@ cmd_upgrade_postgres() {
     ok "5/7 switching the image"
     _set_image postgres "postgres:$target" || return 1
 
-    # Postgres 18 changed where the official image keeps its data. Up to 17 the
-    # mount goes at /var/lib/postgresql/data; from 18 the image wants the mount
-    # one level up at /var/lib/postgresql and puts the cluster in a
-    # version-named subdirectory, so that pg_upgrade --link can work without
-    # crossing a mount boundary. Left alone, 18 finds "PostgreSQL data in
-    # /var/lib/postgresql/data (unused mount/volume)" and refuses to start -
-    # which is exactly how this failed the first time it was run.
+    # Postgres 18 refuses to start when the cluster sits directly ON the mount
+    # point: it reports "PostgreSQL data in /var/lib/postgresql/data (unused
+    # mount/volume)". What it wants is the cluster in a SUBDIRECTORY of the
+    # mount, so pg_upgrade --link never crosses a mount boundary.
+    #
+    # There are two ways to satisfy that, and only one of them is safe to apply
+    # blind. Moving the mount up a level works where PGDATA is unset - and
+    # breaks a deployment that sets PGDATA explicitly, because the mount moves
+    # out from under a path that stays where it was. That is exactly how this
+    # failed on a deployment carrying PGDATA=/var/lib/postgresql/data/pgdata
+    # while it had worked on one that carried none.
+    #
+    # Setting PGDATA to a subdirectory satisfies 18 either way and leaves the
+    # mount alone, so that is what is done - and where PGDATA is already a
+    # subdirectory, nothing needs doing at all.
     local tmaj="${target%%.*}"; tmaj="${tmaj%%-*}"
     if [ "${tmaj:-0}" -ge 18 ] 2>/dev/null; then
-        if grep -q ':/var/lib/postgresql/data' "$COMPOSE"; then
-            sed -i 's|:/var/lib/postgresql/data|:/var/lib/postgresql|' "$COMPOSE"
-            ok "    mount moved to /var/lib/postgresql (required from 18)"
+        local pgdata_line
+        pgdata_line="$(awk '/^  postgres:/{f=1} f && /^  [a-zA-Z_-]+:[[:space:]]*$/ && !/^  postgres:/{exit} f && /PGDATA/{print; exit}' "$COMPOSE")"
+        if [ -n "$pgdata_line" ]; then
+            ok "    PGDATA already set — mount left alone (${pgdata_line##*[[:space:]]})"
+        else
+            local envline
+            envline="$(awk '/^  postgres:/{f=1} f && /^[[:space:]]+environment:[[:space:]]*$/{print NR; exit}' "$COMPOSE")"
+            if [ -n "$envline" ]; then
+                sed -i "${envline}a\      PGDATA: /var/lib/postgresql/data/pgdata" "$COMPOSE"
+                ok "    PGDATA set to a subdirectory of the mount (required from 18)"
+            else
+                warn "    could not find the postgres environment block to set PGDATA"
+                warn "    add  PGDATA: /var/lib/postgresql/data/pgdata  by hand if 18 refuses to start"
+            fi
         fi
     fi
 

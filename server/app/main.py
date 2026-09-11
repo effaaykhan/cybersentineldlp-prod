@@ -427,6 +427,95 @@ async def _auto_init_schema_and_admin():
         logger.warning("Auto-init encountered an error (likely harmless race condition)", error=str(e))
 
 
+async def _record_deployment_info():
+    """Stamp when this stack was installed, and when it was last updated.
+
+    Deliberately NOT an ORM model. Every table in this file that the ORM also
+    declares has produced the same bug - create_all emits no server defaults,
+    so an insert that leans on one works against a migrated database and fails
+    against a fresh one. One owner for the shape, and every column named on the
+    way in, removes that whole class.
+
+    ``installed_at`` is backfilled from the admin user on a deployment that
+    predates this table: that row is written on first boot, so it is the oldest
+    honest evidence of when the stack came up. Without it every existing
+    deployment would claim to have been installed the day it took this update.
+
+    ``last_updated_at`` moves when the running BUILD changes, not the version.
+    Keying it on VERSION would have missed nearly every update here - a dozen
+    images have shipped as 2.1.6 - and an update date that does not move is
+    worse than none, because it is believed.
+    """
+    from datetime import datetime
+    from sqlalchemy import text
+
+    build_sha = (os.getenv("CSDLP_BUILD_SHA") or "").strip() or "unknown"
+    build_time_raw = (os.getenv("CSDLP_BUILD_TIME") or "").strip()
+    build_time = None
+    if build_time_raw:
+        try:
+            build_time = datetime.fromisoformat(build_time_raw.replace("Z", "+00:00"))
+        except ValueError:
+            # A malformed stamp is not worth failing a boot over.
+            build_time = None
+    version = settings.VERSION
+
+    try:
+        async with _db.postgres_engine.begin() as conn:
+            await conn.execute(text(
+                """
+                CREATE TABLE IF NOT EXISTS deployment_info (
+                    id               SMALLINT     PRIMARY KEY DEFAULT 1,
+                    installed_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+                    last_updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+                    version          VARCHAR(50)  NOT NULL DEFAULT '',
+                    previous_version VARCHAR(50),
+                    build_sha        VARCHAR(64)  NOT NULL DEFAULT 'unknown',
+                    build_time       TIMESTAMPTZ,
+                    CONSTRAINT deployment_info_single_row CHECK (id = 1)
+                )
+                """
+            ))
+
+            row = (await conn.execute(text(
+                "SELECT version, build_sha FROM deployment_info WHERE id = 1"
+            ))).first()
+
+            if row is None:
+                # First time this table has ever existed here. The install date
+                # is historical; the update date is now, because arriving at
+                # this code path IS the update that introduced it.
+                await conn.execute(
+                    text(
+                        "INSERT INTO deployment_info "
+                        "(id, installed_at, last_updated_at, version, previous_version, "
+                        " build_sha, build_time) "
+                        "VALUES (1, COALESCE((SELECT MIN(created_at) FROM users), NOW()), "
+                        "        NOW(), :v, NULL, :sha, :bt) "
+                        "ON CONFLICT (id) DO NOTHING"
+                    ),
+                    {"v": version, "sha": build_sha, "bt": build_time},
+                )
+                logger.info("Deployment info recorded", version=version, build=build_sha)
+            elif row[1] != build_sha or row[0] != version:
+                await conn.execute(
+                    text(
+                        "UPDATE deployment_info SET "
+                        "  last_updated_at = NOW(), previous_version = version, "
+                        "  version = :v, build_sha = :sha, build_time = :bt "
+                        "WHERE id = 1"
+                    ),
+                    {"v": version, "sha": build_sha, "bt": build_time},
+                )
+                logger.info(
+                    "Deployment updated",
+                    previous_version=row[0], version=version,
+                    previous_build=row[1], build=build_sha,
+                )
+    except Exception as e:  # noqa: BLE001 — never block startup on bookkeeping
+        logger.warning("Could not record deployment info (continuing)", error=str(e))
+
+
 async def _seed_default_permissions():
     """Insert the RBAC permission catalog if it is missing.
 
@@ -825,6 +914,7 @@ async def _first_boot_init():
         await conn.commit()
 
         await _auto_init_schema_and_admin()
+        await _record_deployment_info()
         await _seed_default_permissions()
         await _seed_default_roles()
         await _seed_default_labels()

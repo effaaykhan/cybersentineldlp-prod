@@ -9,11 +9,12 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_role
 from app.core.config import settings
+from app.core.timezone import format_iso
 from app.core.database import get_db
 from app.models.retention_config import RetentionConfig, MIN_RETENTION_DAYS
 from app.services.audit_service import audit_log
@@ -22,7 +23,7 @@ router = APIRouter()
 
 
 @router.get("/about")
-async def get_about() -> Dict[str, Any]:
+async def get_about(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
     """Real component versions for the dashboard's About card.
 
     The card used to hard-code "2.0.0" and "OpenSearch 2.11.0", which drifted from
@@ -43,11 +44,38 @@ async def get_about() -> Dict[str, Any]:
         # OpenSearch being down must never break the About card.
         opensearch_version = "unavailable"
 
+    # When this stack was installed and when it last changed build, recorded by
+    # _record_deployment_info() at boot. A deployment that has not taken the
+    # update introducing that table has no row yet, so every field here is
+    # optional and the card renders a dash rather than a wrong date.
+    installed_at = last_updated_at = previous_version = build_time = None
+    build_sha = None
+    try:
+        row = (await db.execute(text(
+            "SELECT installed_at, last_updated_at, version, previous_version, "
+            "       build_sha, build_time "
+            "FROM deployment_info WHERE id = 1"
+        ))).first()
+        if row is not None:
+            installed_at = format_iso(row[0])
+            last_updated_at = format_iso(row[1])
+            previous_version = row[3]
+            build_sha = row[4]
+            build_time = format_iso(row[5])
+    except Exception:
+        # Same reasoning as OpenSearch above: bookkeeping must not break the card.
+        pass
+
     return {
         "version": settings.VERSION,
         "service": settings.PROJECT_NAME,
         "backend": "FastAPI",
         "opensearch": opensearch_version,
+        "installed_at": installed_at,
+        "last_updated_at": last_updated_at,
+        "previous_version": previous_version,
+        "build_sha": build_sha,
+        "build_time": build_time,
     }
 
 

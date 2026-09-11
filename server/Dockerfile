@@ -167,6 +167,19 @@ COPY . /app
 RUN mkdir -p /app/logs /app/quarantine /app/ml/models \
     && useradd -m -u 1000 dlpuser \
     && chown -R dlpuser:dlpuser /app
+
+# Which build this image IS. Declared LAST in the stage on purpose: these change
+# on every commit, so anything below them would be rebuilt every time.
+#
+# The manager records these at first boot and compares them on every boot after,
+# which is how it knows it has been updated. Doing that on VERSION alone would
+# have missed nearly every update this deployment has had - a dozen images have
+# shipped as 2.1.6 - so the commit is what the comparison is actually keyed on.
+ARG BUILD_SHA=unknown
+ARG BUILD_TIME=
+ENV CSDLP_BUILD_SHA=${BUILD_SHA} \
+    CSDLP_BUILD_TIME=${BUILD_TIME}
+
 USER dlpuser
 
 # ─── Stage 4: minimal production image (compiled binaries only) ───────
@@ -190,6 +203,19 @@ RUN mkdir -p /app/logs /app/quarantine /app/ml/models
 # Drop privileges — run as a non-root user
 RUN useradd -m -u 1000 dlpuser && \
     chown -R dlpuser:dlpuser /app
+
+# Which build this image IS. Declared LAST in the stage on purpose: these change
+# on every commit, so anything below them would be rebuilt every time.
+#
+# The manager records these at first boot and compares them on every boot after,
+# which is how it knows it has been updated. Doing that on VERSION alone would
+# have missed nearly every update this deployment has had - a dozen images have
+# shipped as 2.1.6 - so the commit is what the comparison is actually keyed on.
+ARG BUILD_SHA=unknown
+ARG BUILD_TIME=
+ENV CSDLP_BUILD_SHA=${BUILD_SHA} \
+    CSDLP_BUILD_TIME=${BUILD_TIME}
+
 USER dlpuser
 
 # EXPOSE / ENV / HEALTHCHECK / CMD are inherited from runtime-base.

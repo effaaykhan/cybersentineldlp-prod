@@ -105,6 +105,9 @@ services:
       # every rebuild. Production images are built from the default (last)
       # target and are unaffected; see server/Dockerfile.
       target: dev
+      args:
+        BUILD_SHA: ${CSDLP_BUILD_SHA:-dev}
+        BUILD_TIME: ${CSDLP_BUILD_TIME:-}
     container_name: cybersentineldlp-manager
     networks:
       - cybersentinel-net

@@ -146,3 +146,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
+          # Stamped into the image so the manager can tell, at boot, that it is
+          # running a different build than the one it recorded last time - which
+          # is what "last updated" on the About card is keyed on. VERSION alone
+          # would not do: a dozen images have shipped as 2.1.6.
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.event.repository.pushed_at }}

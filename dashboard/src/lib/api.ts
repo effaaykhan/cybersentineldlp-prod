@@ -860,6 +860,12 @@ export interface AboutInfo {
   service: string
   backend: string
   opensearch: string
+  // Null on a deployment that has not yet taken the update that records these.
+  installed_at: string | null
+  last_updated_at: string | null
+  previous_version: string | null
+  build_sha: string | null
+  build_time: string | null
 }
 export const getAbout = async (): Promise<AboutInfo> => {
   const { data } = await apiClient.get('/system/about')

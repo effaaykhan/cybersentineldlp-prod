@@ -133,6 +133,26 @@ export function formatTimeIST(date: string | Date): string {
 }
 
 /**
+ * Day only, in IST — "11 Apr 2026". For dates where the time of day is noise
+ * (an install date, a release date) and the long format would just be wider.
+ */
+export function formatDayIST(date: string | Date | null | undefined): string {
+  if (!date) return '\u2014'
+  try {
+    const d = parseAsUTC(date)
+    if (isNaN(d.getTime())) return 'Invalid date'
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: IST_TIMEZONE,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(d)
+  } catch {
+    return 'Invalid date'
+  }
+}
+
+/**
  * Format date and time in IST (for toLocaleString replacement)
  */
 export function formatDateTimeIST(date: string | Date): string {

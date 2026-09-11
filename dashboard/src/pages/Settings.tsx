@@ -7,6 +7,7 @@ import {
   getAbout, type AboutInfo,
 } from '@/lib/api'
 import { useAuthStore } from '@/lib/store/auth'
+import { formatDayIST, formatRelativeTime } from '@/lib/utils'
 import { API_URL } from '@/lib/config'
 import MfaSection from '@/components/settings/MfaSection'
 import IpAllowlistSection from '@/components/settings/IpAllowlistSection'
@@ -360,7 +361,7 @@ export default function Settings() {
             </div>
             <div>
               <h3 className="section-title">About</h3>
-              <p className="text-sm text-cs-muted">Platform version and component details.</p>
+              <p className="text-sm text-cs-muted">Platform version and deployment details.</p>
             </div>
           </div>
 
@@ -369,6 +370,17 @@ export default function Settings() {
               <span className="text-cs-ink-2">Version</span>
               <span className="num font-medium text-cs-ink">{about?.version ?? '—'}</span>
             </div>
+            {about?.build_sha && about.build_sha !== 'unknown' && (
+              <div className="flex justify-between">
+                <span className="text-cs-ink-2">Build</span>
+                <span
+                  className="num font-medium text-cs-ink"
+                  title={about.build_time ? `Built ${formatDayIST(about.build_time)}` : undefined}
+                >
+                  {about.build_sha.slice(0, 7)}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-cs-ink-2">Backend API</span>
               <span className="num font-medium text-cs-ink">{about?.backend ?? 'FastAPI'}</span>
@@ -377,6 +389,38 @@ export default function Settings() {
               <span className="text-cs-ink-2">OpenSearch</span>
               <span className="num font-medium text-cs-ink">{about?.opensearch ?? '—'}</span>
             </div>
+
+            {/* Deployment dates. Absent on a stack that has not yet taken the
+                update that started recording them — show nothing rather than a
+                date invented at render time. */}
+            {(about?.installed_at || about?.last_updated_at) && (
+              <>
+                <div className="border-t border-cs-hair my-2" />
+                <div className="flex justify-between">
+                  <span className="text-cs-ink-2">Installed</span>
+                  <span
+                    className="num font-medium text-cs-ink"
+                    title={about?.installed_at ?? undefined}
+                  >
+                    {formatDayIST(about?.installed_at)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-cs-ink-2">Last updated</span>
+                  <span className="text-right" title={about?.last_updated_at ?? undefined}>
+                    <span className="num font-medium text-cs-ink">
+                      {formatDayIST(about?.last_updated_at)}
+                    </span>
+                    {about?.last_updated_at && (
+                      <span className="block text-xs text-cs-muted">
+                        {formatRelativeTime(about.last_updated_at)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </>
+            )}
+
             <div className="flex justify-between">
               <span className="text-cs-ink-2">License</span>
               <span className="font-medium text-cs-ink">Proprietary</span>

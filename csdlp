@@ -126,10 +126,34 @@ cmd_backup() {
     if dc exec -T postgres pg_dump -U "$pgu" "$pgd" > "$dst/postgres.sql" 2>/dev/null && [ -s "$dst/postgres.sql" ]; then
         ok "postgres -> postgres.sql ($(wc -c < "$dst/postgres.sql") bytes)"
     else warn "postgres dump failed/empty"; fi
-    local mu mp; mu="$(envget MONGODB_USER)"; mp="$(envget MONGODB_PASSWORD)"
+    local mu mp; mu="$(_mg_user)"; mp="$(_mg_pass)"
     if dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" > "$dst/mongo.archive" 2>/dev/null && [ -s "$dst/mongo.archive" ]; then
         ok "mongodb -> mongo.archive ($(wc -c < "$dst/mongo.archive") bytes)"
     else warn "mongo dump failed/empty"; fi
+
+    # OpenSearch was missing from this entirely, and it is the one store here
+    # that a version change cannot be rolled back out of: an index directory
+    # opened by a newer major will not start on the old one. A "backup" that
+    # covers two of the three datastores is the kind that is discovered to be
+    # incomplete at the worst possible moment.
+    #
+    # Taken COLD - stopped, tarred, started. A hot tar of a live Lucene index
+    # copies segments mid-merge and restores to something that may not open.
+    # The stop costs search for as long as the tar takes; on this deployment
+    # that is seconds, and `update` restarts the stack immediately after anyway.
+    local osvol
+    osvol="$(docker inspect "$(dc ps -q opensearch 2>/dev/null | head -1)" \
+             --format '{{range .Mounts}}{{if eq .Destination "/usr/share/opensearch/data"}}{{.Name}}{{end}}{{end}}' 2>/dev/null)"
+    if [ -n "$osvol" ] && docker volume inspect "$osvol" >/dev/null 2>&1; then
+        dc stop opensearch >/dev/null 2>&1
+        if docker run --rm -v "$osvol":/data -v "$dst":/b alpine \
+               tar czf /b/opensearch.tgz -C /data . >/dev/null 2>&1 && [ -s "$dst/opensearch.tgz" ]; then
+            ok "opensearch -> opensearch.tgz ($(wc -c < "$dst/opensearch.tgz") bytes)"
+        else warn "opensearch snapshot failed/empty"; fi
+        dc start opensearch >/dev/null 2>&1
+    else
+        warn "opensearch volume not found — snapshot skipped"
+    fi
     echo "$dst"
 }
 
@@ -137,11 +161,29 @@ cmd_restore() {
     local src="${1:-}"; [ -d "$src" ] || { err "usage: csdlp restore <backup-dir>"; return 1; }
     hd "Restore from $src"
     warn "This overwrites current data. Ctrl-C within 5s to abort."; sleep 5
-    local pgu pgd; pgu="$(envget POSTGRES_USER)"; pgd="$(envget POSTGRES_DB)"
-    pgu="${pgu:-dlp_user}"; pgd="${pgd:-cybersentineldlp}"
+    local pgu pgd; pgu="$(_pg_user)"; pgd="$(_pg_db)"
     [ -f "$src/postgres.sql" ] && { dc exec -T postgres psql -U "$pgu" -d "$pgd" < "$src/postgres.sql" >/dev/null 2>&1 && ok "postgres restored" || warn "postgres restore had errors"; }
-    local mu mp; mu="$(envget MONGODB_USER)"; mp="$(envget MONGODB_PASSWORD)"
+    local mu mp; mu="$(_mg_user)"; mp="$(_mg_pass)"
     [ -f "$src/mongo.archive" ] && { dc exec -T mongodb sh -c "mongorestore --quiet --drop --username '$mu' --password '$mp' --authenticationDatabase admin --archive" < "$src/mongo.archive" >/dev/null 2>&1 && ok "mongo restored" || warn "mongo restore had errors"; }
+
+    # Restoring OpenSearch means replacing the data directory wholesale, which
+    # only works with the node down. Reverting a MAJOR also needs the image pin
+    # put back by hand first — a 3.x directory is what is in this tarball only
+    # if the tarball predates the upgrade.
+    if [ -f "$src/opensearch.tgz" ]; then
+        local osvol
+        osvol="$(docker inspect "$(dc ps -q opensearch 2>/dev/null | head -1)" \
+                 --format '{{range .Mounts}}{{if eq .Destination "/usr/share/opensearch/data"}}{{.Name}}{{end}}{{end}}' 2>/dev/null)"
+        if [ -n "$osvol" ]; then
+            dc stop opensearch >/dev/null 2>&1
+            docker run --rm -v "$osvol":/data alpine sh -c 'rm -rf /data/* /data/..?* 2>/dev/null; true' >/dev/null 2>&1
+            if docker run --rm -v "$osvol":/data -v "$src":/b alpine \
+                   tar xzf /b/opensearch.tgz -C /data >/dev/null 2>&1; then
+                ok "opensearch restored"
+            else warn "opensearch restore had errors"; fi
+            dc start opensearch >/dev/null 2>&1
+        else warn "opensearch volume not found — skipped"; fi
+    fi
 }
 
 _health_ok() {
@@ -399,7 +441,20 @@ cmd_update() {
     _report_updates && _majors_pending=1 || _majors_pending=0
     ok "1/5 snapshotting current versions + DB backup"
     _save_versions
-    cmd_backup >/dev/null
+    local _bdir; _bdir="$(cmd_backup | tail -1)"
+    # An update proceeding on a backup that silently produced nothing is how a
+    # recoverable bad night becomes an unrecoverable one. It is still not a hard
+    # stop - a broken mongo must not block a manager fix - but it is said out
+    # loud, once, where an operator will see it before the pull.
+    if [ -n "$_bdir" ] && [ -d "$_bdir" ]; then
+        local _missing=""
+        [ -s "$_bdir/postgres.sql" ]   || _missing="$_missing postgres"
+        [ -s "$_bdir/mongo.archive" ]  || _missing="$_missing mongo"
+        [ -s "$_bdir/opensearch.tgz" ] || _missing="$_missing opensearch"
+        [ -n "$_missing" ] && warn "BACKUP INCOMPLETE -${_missing} — continuing, but rollback will not cover${_missing}"
+    else
+        warn "BACKUP DID NOT RUN — continuing, but there is nothing to roll back to"
+    fi
     if [ -n "$tag" ]; then
         # retag the pinned images to the requested tag by pulling that tag
         docker pull "${MANAGER_IMG%:*}:$tag" && docker tag "${MANAGER_IMG%:*}:$tag" "$MANAGER_IMG"

@@ -754,11 +754,38 @@ cmd_upgrade_postgres() {
         sleep 2
     done
     ok "    postgres $target accepting connections"
-    _pg_run psql -d postgres < "$dump" >/dev/null 2>&1
+    local resterr; resterr="$(mktemp)"
+    _pg_run psql -d postgres < "$dump" >/dev/null 2>"$resterr"
+    # A cluster dump restored into a fresh cluster always emits some noise -
+    # the role and database it creates already exist. Those are expected; a
+    # missing relation or a syntax error is not.
+    local realerr
+    realerr="$(grep -iE 'ERROR' "$resterr" | grep -viE 'already exists' | head -5)"
+    [ -n "$realerr" ] && { warn "    restore reported errors:"; printf '        %s\n' "$realerr"; }
+    rm -f "$resterr"
+
+    # Re-resolve: the cluster this is talking to is NEW, so whatever was cached
+    # from the old one may not apply.
+    PG_USER=""; PG_DB=""; PG_HOSTARG=""; PG_PASS=""; PG_TRIED=""
+    pgd="$(_pg_db)"
+    local afterr; afterr="$(mktemp)"
     rows_after="$(_pg_run psql -d "$pgd" -Atc \
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d '\r')"
-    ok "    tables after: ${rows_after:-?}"
-    if [ "${rows_before:-x}" != "${rows_after:-y}" ]; then
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>"$afterr" | tr -d '\r')"
+    if [ -z "$rows_after" ]; then
+        # Could not ASK is not the same as the answer being wrong, and saying
+        # "restore is INCOMPLETE" when the query itself failed sends an operator
+        # to recover from a restore that may have been perfectly fine.
+        err "could not verify the restore — the table count query returned nothing"
+        sed 's/^/        /' "$afterr" | head -5 >&2
+        printf '      tried user/db:%s\n' "$(_pg_tried)" >&2
+        printf '      check by hand:  docker compose -f %s exec -T postgres psql -U %s -d %s -c '"'"'\\dt'"'"'\n' \
+               "$COMPOSE" "$(_pg_user)" "$pgd" >&2
+        printf '      if the tables are there the upgrade worked; the old volume is %s\n' "$volpre" >&2
+        rm -f "$afterr"; return 1
+    fi
+    rm -f "$afterr"
+    ok "    tables after: $rows_after"
+    if [ "${rows_before:-x}" != "$rows_after" ]; then
         err "table count changed (${rows_before} -> ${rows_after}) — restore is INCOMPLETE"
         err "the old data is intact in volume $volpre; the dump is at $dump"
         return 1

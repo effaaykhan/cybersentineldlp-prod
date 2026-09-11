@@ -144,7 +144,7 @@ export default function Settings() {
               <>
                 <div className="border-t border-cs-hair my-2" />
                 <div className="flex justify-between">
-                  <span className="text-cs-ink-2">Installed</span>
+                  <span className="text-cs-ink-2">Deployed on</span>
                   <span
                     className="num font-medium text-cs-ink"
                     title={about?.installed_at ?? undefined}

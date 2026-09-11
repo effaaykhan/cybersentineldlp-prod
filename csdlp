@@ -806,6 +806,14 @@ cmd_upgrade_postgres() {
 
     ok "7/7 starting the rest of the stack"
     dc up -d >/dev/null 2>&1
+    # The manager and workers hold connection pools. Recreating a datastore
+    # underneath them gives it a new IP and leaves those pools dialling the old
+    # one, so /health reports the datastore as failed when it is perfectly
+    # healthy - and the gate below then times out on a migration that worked.
+    # `csdlp update` already does this; the upgrades did not, which is how a
+    # completed MongoDB upgrade - fcv raised, collection count matching - ended
+    # on "unhealthy after the upgrade".
+    dc restart manager celery-worker celery-beat >/dev/null 2>&1
     if _health_ok; then
         ok "postgres now on $target — healthy"
         warn "old data kept in volume $volpre; remove it when you are satisfied:"
@@ -891,8 +899,23 @@ cmd_upgrade_mongo() {
 
     ok "6/6 restarting the stack"
     dc up -d >/dev/null 2>&1
-    _health_ok && ok "mongodb now on $target — healthy" \
-               || { err "unhealthy after the upgrade — dump at $arch"; return 1; }
+    # The manager and workers hold connection pools. Recreating a datastore
+    # underneath them gives it a new IP and leaves those pools dialling the old
+    # one, so /health reports the datastore as failed when it is perfectly
+    # healthy - and the gate below then times out on a migration that worked.
+    # `csdlp update` already does this; the upgrades did not, which is how a
+    # completed MongoDB upgrade - fcv raised, collection count matching - ended
+    # on "unhealthy after the upgrade".
+    dc restart manager celery-worker celery-beat >/dev/null 2>&1
+    if _health_ok; then
+        ok "mongodb now on $target — healthy"
+    else
+        err "stack did not report healthy after the upgrade"
+        err "the upgrade itself completed: fcv is $target and the collection count matched."
+        err "check what is actually failing:  csdlp status"
+        err "dump, if it is needed: $arch"
+        return 1
+    fi
 }
 
 # Total collections across every non-system database.

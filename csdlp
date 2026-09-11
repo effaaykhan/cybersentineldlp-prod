@@ -92,6 +92,39 @@ _running_img() { docker inspect "$(docker compose -f "$COMPOSE" ps -q "$1" 2>/de
 [ -z "$DASH_IMG" ] && DASH_IMG="$(_running_img dashboard)"
 
 # ─── subcommands ──────────────────────────────────────────────────────────
+# The major the data directory on disk actually IS, from its PG_VERSION file.
+#
+# A compose file pinning one major in front of a data directory written by
+# another is a crash loop with a message only in the container log: postgres
+# refuses to open it, docker restarts it, and `ps` shows "Restarting" with no
+# hint why. It is trivially detectable and worth detecting - it is the exact
+# state an interrupted or reverted major upgrade leaves behind.
+_pg_disk_major() {
+    local vol
+    vol="$(docker inspect "$(dc ps -aq postgres 2>/dev/null | head -1)" \
+           --format '{{range .Mounts}}{{if or (eq .Destination "/var/lib/postgresql/data") (eq .Destination "/var/lib/postgresql")}}{{.Name}}{{end}}{{end}}' 2>/dev/null)"
+    [ -n "$vol" ] || return 1
+    docker run --rm -v "$vol":/d alpine sh -c \
+        'find /d -maxdepth 3 -name PG_VERSION -exec cat {} \; 2>/dev/null | head -1' \
+        2>/dev/null | tr -d '\r\n '
+}
+
+# Warn when the pinned image and the data on disk disagree about the major.
+_check_pg_major() {
+    local img disk imaj
+    img="$(_svc_image postgres)"; [ -n "$img" ] || return 0
+    imaj="${img##*:}"; imaj="${imaj%%.*}"; imaj="${imaj%%-*}"
+    disk="$(_pg_disk_major)" || return 0
+    [ -n "$disk" ] || return 0
+    if [ "$imaj" != "$disk" ]; then
+        err "postgres MAJOR MISMATCH: $COMPOSE pins $imaj, the data directory is $disk"
+        err "  postgres will refuse to start and docker will restart it forever."
+        err "  set the image back to postgres:$disk-alpine, or restore a $imaj volume."
+        return 1
+    fi
+    return 0
+}
+
 cmd_status() {
     hd "CyberSentinel DLP — status"
     kv "dir" "$DIR"
@@ -458,6 +491,7 @@ cmd_update() {
     [ "$tag" = "latest" ] && { rm -f "$pinf"; tag=""; }
     hd "Update${tag:+ -> $tag}"
     _warn_dup_env || true
+    _check_pg_major || true
     # What is behind, before anything is touched. Same-major moves ride along
     # with the pull below; a major is reported and left alone, because it
     # rewrites an on-disk format and cannot be undone by re-tagging.

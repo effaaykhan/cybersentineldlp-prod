@@ -129,14 +129,21 @@ cmd_backup() {
     if [ -s "$dst/postgres.sql" ]; then
         ok "postgres -> postgres.sql ($(wc -c < "$dst/postgres.sql") bytes)"
     else
-        warn "postgres dump failed/empty (user=$pgu db=$pgd)"
-        sed 's/^/        /' "$pgerr" | head -5
+        err "postgres dump FAILED (user=$pgu db=$pgd) — postgres.sql is empty"
+        sed 's/^/        /' "$pgerr" | head -5 >&2
+        rm -f "$dst/postgres.sql"
     fi
     rm -f "$pgerr"
-    local mu mp; mu="$(_mg_user)"; mp="$(_mg_pass)"
-    if dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" > "$dst/mongo.archive" 2>/dev/null && [ -s "$dst/mongo.archive" ]; then
+    local mu mp mgerr; mu="$(_mg_user)"; mp="$(_mg_pass)"; mgerr="$(mktemp)"
+    dc exec -T mongodb sh -c "mongodump --quiet --username '$mu' --password '$mp' --authenticationDatabase admin --archive" > "$dst/mongo.archive" 2>"$mgerr"
+    if [ -s "$dst/mongo.archive" ]; then
         ok "mongodb -> mongo.archive ($(wc -c < "$dst/mongo.archive") bytes)"
-    else warn "mongo dump failed/empty"; fi
+    else
+        err "mongo dump FAILED (user=$mu) — mongo.archive is empty"
+        sed 's/^/        /' "$mgerr" | head -5 >&2
+        rm -f "$dst/mongo.archive"
+    fi
+    rm -f "$mgerr"
 
     # OpenSearch was missing from this entirely, and it is the one store here
     # that a version change cannot be rolled back out of: an index directory
@@ -501,12 +508,55 @@ cmd_update() {
 _svc_env() {
     dc exec -T "$1" printenv "$2" 2>/dev/null | tr -d '\r' | head -1
 }
-# .env first (it is the documented knob), the container as the source of truth,
-# then the historical default.
-_pg_user() { local v; v="$(envget POSTGRES_USER)"; [ -n "$v" ] || v="$(_svc_env postgres POSTGRES_USER)"; printf '%s' "${v:-dlp_user}"; }
-_pg_db()   { local v; v="$(envget POSTGRES_DB)";   [ -n "$v" ] || v="$(_svc_env postgres POSTGRES_DB)";   printf '%s' "${v:-cybersentineldlp}"; }
-_mg_user() { local v; v="$(envget MONGODB_USER)";  [ -n "$v" ] || v="$(_svc_env mongodb MONGO_INITDB_ROOT_USERNAME)"; printf '%s' "$v"; }
-_mg_pass() { local v; v="$(envget MONGODB_PASSWORD)"; [ -n "$v" ] || v="$(_svc_env mongodb MONGO_INITDB_ROOT_PASSWORD)"; printf '%s' "$v"; }
+# Credentials are PROVED, not read.
+#
+# POSTGRES_USER and POSTGRES_DB are honoured by the official image only at
+# initdb, on an empty volume. Edit .env afterwards and the file says one thing
+# while the cluster contains another - and every dump then fails with `role
+# "dlp_user" does not exist`, writes a zero-byte file, and reports success.
+# That is how a deployment ends up holding a shelf of empty backups and finds
+# out during a restore.
+#
+# So each candidate is tried against the server and the first one that actually
+# authenticates wins. If none do, the declared value is returned so the error
+# message names what was configured rather than something invented here.
+_pg_user() {
+    local c
+    for c in "$(envget POSTGRES_USER)" "$(_svc_env postgres POSTGRES_USER)" postgres dlp_user; do
+        [ -n "$c" ] || continue
+        if dc exec -T postgres psql -U "$c" -Atc 'SELECT 1' >/dev/null 2>&1; then
+            printf '%s' "$c"; return 0
+        fi
+    done
+    printf '%s' "$(envget POSTGRES_USER)"
+}
+_pg_db() {
+    local u c; u="$(_pg_user)"
+    for c in "$(envget POSTGRES_DB)" "$(_svc_env postgres POSTGRES_DB)" "$u" postgres; do
+        [ -n "$c" ] || continue
+        if dc exec -T postgres psql -U "$u" -d "$c" -Atc 'SELECT 1' >/dev/null 2>&1; then
+            printf '%s' "$c"; return 0
+        fi
+    done
+    printf '%s' "$(envget POSTGRES_DB)"
+}
+_mg_ok() { dc exec -T mongodb mongosh --quiet -u "$1" -p "$2" --authenticationDatabase admin --eval 'db.adminCommand({ping:1}).ok' 2>/dev/null | tr -d '\r' | grep -q 1; }
+_mg_user() {
+    local u p
+    u="$(envget MONGODB_USER)"; p="$(envget MONGODB_PASSWORD)"
+    _mg_ok "$u" "$p" && { printf '%s' "$u"; return 0; }
+    u="$(_svc_env mongodb MONGO_INITDB_ROOT_USERNAME)"; p="$(_svc_env mongodb MONGO_INITDB_ROOT_PASSWORD)"
+    _mg_ok "$u" "$p" && { printf '%s' "$u"; return 0; }
+    printf '%s' "$(envget MONGODB_USER)"
+}
+_mg_pass() {
+    local u p
+    u="$(envget MONGODB_USER)"; p="$(envget MONGODB_PASSWORD)"
+    _mg_ok "$u" "$p" && { printf '%s' "$p"; return 0; }
+    u="$(_svc_env mongodb MONGO_INITDB_ROOT_USERNAME)"; p="$(_svc_env mongodb MONGO_INITDB_ROOT_PASSWORD)"
+    _mg_ok "$u" "$p" && { printf '%s' "$p"; return 0; }
+    printf '%s' "$(envget MONGODB_PASSWORD)"
+}
 
 # ─── major database upgrades ──────────────────────────────────────────────
 # Kept OUT of `csdlp update` deliberately. Both rewrite an on-disk format, and

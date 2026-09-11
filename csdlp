@@ -729,11 +729,31 @@ cmd_upgrade_postgres() {
 
     ok "6/7 starting postgres and restoring"
     dc up -d postgres >/dev/null 2>&1
-    local i=0
-    until dc exec -T postgres pg_isready -U "$PG_USER" >/dev/null 2>&1; do
-        i=$((i + 1)); [ "$i" -gt 60 ] && { err "postgres did not become ready"; return 1; }
+    # A fresh major runs initdb before it will accept anything, and on a modest
+    # VM that is minutes, not seconds. The old budget here was 120s: postgres
+    # was still initialising, this gave up, and - because it gave up BEFORE the
+    # restore below - left a correctly upgraded but EMPTY cluster while
+    # reporting failure. The stack then looked healthy, because a health check
+    # that only proves connectivity is perfectly happy with an empty database.
+    #
+    # 10 minutes, with progress, and -U omitted: pg_isready only needs to know
+    # whether the server is accepting connections, and passing a role that does
+    # not exist in the new cluster yet would answer the wrong question.
+    local i=0 waited=""
+    until dc exec -T postgres pg_isready >/dev/null 2>&1; do
+        i=$((i + 1))
+        if [ "$i" -gt 300 ]; then
+            err "postgres did not become ready after 10 minutes"
+            err "the data volume has been cleared and NOT yet restored."
+            err "  dump:            $dump"
+            err "  original volume: $volpre"
+            err "recover with:  csdlp restore $(dirname "$dump")"
+            return 1
+        fi
+        if [ $((i % 15)) -eq 0 ]; then waited="$((i * 2))s"; printf '      still initialising (%s)...\n' "$waited"; fi
         sleep 2
     done
+    ok "    postgres $target accepting connections"
     _pg_run psql -d postgres < "$dump" >/dev/null 2>&1
     rows_after="$(_pg_run psql -d "$pgd" -Atc \
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" 2>/dev/null | tr -d '\r')"

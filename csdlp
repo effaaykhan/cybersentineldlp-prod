@@ -22,6 +22,7 @@
 #   csdlp secret admin-password  print the first-boot admin password (from manager logs)
 #   csdlp sso-cert <sub>         point SSO at the SIEM and trust its TLS certificate
 #   csdlp version                image tags/digests + API version
+#   csdlp self-update            fetch the newest csdlp + compose from the repo
 #   csdlp self-install           copy this script to /usr/local/bin/csdlp
 #
 set -uo pipefail
@@ -1020,6 +1021,60 @@ except Exception as e:
     esac
 }
 
+cmd_self_update() {
+    local repo="${CSDLP_REPO:-effaaykhan/cybersentineldlp-prod}"
+    local branch="${CSDLP_BRANCH:-main}"
+    local raw="https://raw.githubusercontent.com/${repo}/${branch}"
+    local auth=() tok; tok="$(envget AGENT_DIST_TOKEN)"
+    [ -n "$tok" ] && auth=(-H "Authorization: Bearer $tok")
+    hd "Self-update from ${repo}@${branch}"
+
+    # 1. the script itself. Safe to replace outright - it holds no local state.
+    local tmp; tmp="$(mktemp)"
+    if curl -fsSL "${auth[@]}" --max-time 60 "$raw/csdlp" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+        if head -1 "$tmp" | grep -q '^#!/usr/bin/env bash' && bash -n "$tmp" 2>/dev/null; then
+            if cmp -s "$tmp" "$DIR/csdlp"; then
+                ok "csdlp already current"
+            else
+                cp "$DIR/csdlp" "$DIR/csdlp.prev" 2>/dev/null
+                cat "$tmp" > "$DIR/csdlp" && chmod +x "$DIR/csdlp" && ok "csdlp updated (previous kept as csdlp.prev)"
+                [ -w /usr/local/bin ] && { cat "$tmp" > /usr/local/bin/csdlp 2>/dev/null && chmod +x /usr/local/bin/csdlp 2>/dev/null && ok "/usr/local/bin/csdlp updated"; }
+            fi
+        else
+            err "downloaded csdlp is not a valid script — keeping the current one"
+        fi
+    else
+        err "could not download csdlp (private repo? set AGENT_DIST_TOKEN in .env)"
+    fi
+    rm -f "$tmp"
+
+    # 2. the compose file is NEVER overwritten.
+    #
+    # `csdlp upgrade-postgres` and `upgrade-mongo` rewrite it as part of a
+    # migration - the image pin and, from Postgres 18, the mount path. Pulling
+    # the repo copy over that would put a 16-alpine pin back in front of an
+    # 18 data directory, which is a stack that will not start and a operator
+    # with no idea why. Fetch it alongside and let a human merge.
+    local newc; newc="$DIR/${COMPOSE}.new"
+    if curl -fsSL "${auth[@]}" --max-time 60 "$raw/${COMPOSE}" -o "$newc" 2>/dev/null && [ -s "$newc" ]; then
+        if cmp -s "$newc" "$DIR/$COMPOSE"; then
+            rm -f "$newc"; ok "$COMPOSE already current"
+        else
+            warn "$COMPOSE differs from the repository — NOT overwritten"
+            printf '    saved as %s\n' "$newc"
+            if command -v diff >/dev/null 2>&1; then
+                printf '    image lines that differ:\n'
+                diff <(grep -E '^\s+image:|:/var/lib/postgresql' "$DIR/$COMPOSE") \
+                     <(grep -E '^\s+image:|:/var/lib/postgresql' "$newc") \
+                     | sed 's/^/      /'
+            fi
+            printf '    review, then:  mv %s %s/%s\n' "$newc" "$DIR" "$COMPOSE"
+        fi
+    else
+        warn "could not download $COMPOSE"
+    fi
+}
+
 cmd_self_install() {
     local dest="/usr/local/bin/csdlp"
     cp "$0" "$dest" && chmod +x "$dest" && ok "installed to $dest" || err "install failed (need root?)"
@@ -1104,6 +1159,7 @@ case "${1:-}" in
     upgrade-mongo)       shift; cmd_upgrade_mongo "$@";;
     sso-cert) shift; cmd_sso_cert "$@";;
     self-install) shift; cmd_self_install "$@";;
+    self-update)  shift; cmd_self_update "$@";;
     ""|-h|--help|help) usage;;
     *) err "unknown command: $1"; echo; usage; exit 1;;
 esac

@@ -41,7 +41,17 @@ It covers:
 ### One-liner install
 
 ```bash
-TOKEN=github_pat_...          # the repository is private
+curl -fsSL https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo bash
+```
+
+This repository's visibility has changed more than once. While it is public the
+line above is all you need; while it is private GitHub answers **404** — not 403
+— to an anonymous caller, and every download fails looking like a missing file.
+The installer probes before it asks, so if that is the state you are in it will
+prompt for a token rather than leaving you to guess. To supply one up front:
+
+```bash
+TOKEN=github_pat_...
 curl -fsSL -H "Authorization: Bearer $TOKEN" \
   https://raw.githubusercontent.com/effaaykhan/cybersentineldlp-prod/main/install.sh | sudo GITHUB_TOKEN="$TOKEN" bash
 ```

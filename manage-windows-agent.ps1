@@ -377,7 +377,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
           Warn '.env and restart the manager, then re-run this one-liner.'
           Blank
           Hint 'Or, to install from GitHub this once, open PowerShell AS ADMINISTRATOR'
-          Hint 'and run (the repository is private, so the token is required):'
+          Hint 'and run (add -Headers with a token if the repo is private):'
           Blank
           Hint '  $t = Read-Host "GitHub token" -AsSecureString'
           Hint '  $p = [Runtime.InteropServices.Marshal]::PtrToStringBSTR(' 
@@ -441,7 +441,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Hint 'restart the manager. Endpoints then need no credential at all.'
     Blank
     Hint "Otherwise this device can pull from $GH_REPO directly."
-    Hint 'That repository is private, so it needs a token with read access.'
+    Hint 'If that repository is private it needs a token with read access.'
     Hint 'It is used for this session only and is never written to disk here.'
     Blank
     $ghTok = Read-SecretLine '   GitHub token (leave blank to skip)'

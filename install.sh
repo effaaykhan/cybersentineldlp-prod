@@ -6,7 +6,7 @@
 # no source code is ever placed on the production server. All services run from
 # pre-built images on GHCR.
 #
-# Usage (one-liner). The repository is PRIVATE, so the fetch of this script
+# Usage (one-liner). While the repository is private, the fetch of this script
 # needs a token too - GitHub answers 404, not 403, to an anonymous caller, so
 # without one the one-liner looks like a broken URL rather than a login prompt.
 # Passing the token through to the script as well means it is asked for once,
@@ -177,9 +177,10 @@ ensure_repo_access() {
     [ -n "${GITHUB_TOKEN}" ] && c_yellow "[!] The token provided cannot read ${GITHUB_REPO}."
 
     echo
-    _top "This repository is private"
-    _bar "GitHub answers 404 - not 403 - to an anonymous caller, so without a"
-    _bar "token the downloads below fail looking like missing files."
+    _top "This repository is not readable anonymously"
+    _bar "It is private right now. GitHub answers 404 - not 403 - to an"
+    _bar "anonymous caller, so without a token the downloads below fail"
+    _bar "looking like missing files."
     _bar ""
     _bar "Paste a token with read access to ${GITHUB_REPO}."
     _bar "It is saved to ${INSTALL_DIR}/${ENV_FILE} (mode 600, root only) as"

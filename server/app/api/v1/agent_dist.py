@@ -45,7 +45,7 @@ from typing import Optional
 import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -279,6 +279,30 @@ async def agent_dist_info():
         text = chk.read_text(encoding="utf-8", errors="replace").strip().split()
         out["sha256"] = text[0].upper() if text else None
     return out
+
+
+# The installer's own checksum, computed on demand.
+#
+# `irm <url> | iex` has NO integrity check of any kind: whatever comes back is
+# executed, and a truncated response or a tampering proxy is indistinguishable
+# from the real script. The agent binary has been checksum-verified since the
+# beginning; the script that fetches it never was, which is the wrong way round
+# - the script is what runs first and with the most privilege.
+#
+# Computed rather than stored so it cannot drift from the file being served: a
+# stale sidecar beside a fresh script would fail every verification and look
+# exactly like an attack.
+@router.api_route("/{script}.sha256", methods=["GET", "HEAD"])
+async def script_checksum(script: str):
+    name = f"{script}.sha256"
+    if script not in (SCRIPT_NAME,):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    await _ensure_fresh(script)
+    path = _dist_file(script)
+    if not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    body = f"{_sha256_file(path)}  {script}\n"
+    return PlainTextResponse(body, headers={"Cache-Control": "public, max-age=60"})
 
 
 @router.api_route("/{filename}", methods=["GET", "HEAD"])

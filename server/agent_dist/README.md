@@ -8,6 +8,7 @@ Serves `GET /api/v1/agent-dist/<file>` for four artifacts:
 | `cybersentineldlp_agent.exe` | the agent binary |
 | `cybersentineldlp_agent.exe.sha256` | its checksum, which the installer enforces |
 | `cybersentineldlp_agent.exe.version` | the version that binary is |
+| `manage-windows-agent.ps1.sha256` | the script's checksum, computed on demand from the file being served |
 
 Endpoints used to fetch these from `raw.githubusercontent.com`. That stopped
 working the day the repository went private — GitHub answers **404**, not 403,

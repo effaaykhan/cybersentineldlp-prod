@@ -253,6 +253,33 @@ elevated and pick from the menu:
 powershell -ExecutionPolicy Bypass -Command "irm http://<SERVER>:55100/api/v1/agent-dist/manage-windows-agent.ps1 | iex"
 ```
 
+### Verifying the installer before running it
+
+`irm … | iex` has no integrity check: whatever the server returns is executed,
+and a truncated response or a tampering proxy is indistinguishable from the real
+script. The agent binary has been checksum-verified from the start; the script
+that fetches it was not, which is the wrong way round — the script runs first and
+with the most privilege.
+
+The manager publishes the script's SHA-256 alongside it, computed from the file
+being served. To verify before running:
+
+```powershell
+$b = 'http://<SERVER>:55100/api/v1/agent-dist'
+$f = "$env:TEMP\csdlp-install.ps1"
+irm "$b/manage-windows-agent.ps1" -OutFile $f
+$want = (irm "$b/manage-windows-agent.ps1.sha256").Split(' ')[0]
+$got  = (Get-FileHash $f -Algorithm SHA256).Hash
+if ($got -ne $want) { Remove-Item $f -Force; throw "checksum mismatch - do not run this" }
+powershell -ExecutionPolicy Bypass -File $f
+```
+
+This also runs the script as a file rather than piping it into `iex`, so it can
+be read before and after, and Windows logs it like any other script. It does not
+change whether antivirus scans it — that is a separate problem, and the answer
+to it is an Authenticode signature.
+
+
 Replace `<SERVER>` with the DLP manager this endpoint reports to. The manager
 publishes the installer and the agent binary itself — endpoints do not need
 access to GitHub, and the repository being private no longer breaks installs.

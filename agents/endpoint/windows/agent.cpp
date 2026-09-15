@@ -5038,22 +5038,46 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              nemCfg.classifyFile = [this](const std::string& filePath,
                                           const std::string& eventType)
                      -> NetworkExfilMonitor::ClassifyResult {
-                 NetworkExfilMonitor::ClassifyResult out;
-                 try {
-                     const std::string name =
-                         std::filesystem::path(filePath).filename().string();
-                     PolicyEvaluationResult r =
-                         EvaluatePolicyRealtime(name, filePath, "", eventType);
-                     if (!r.evaluationSucceeded) return out;
-                     out.category = r.classificationLevel;
-                     out.score    = r.confidenceScore;
-                     out.labels   = r.matchedRules;
-                     if (!r.matchedRules.empty()) out.matchedRule = r.matchedRules[0];
-                     logger.Info("attachment inspected server-side: " + name +
-                                 " -> " + (out.category.empty() ? "none" : out.category) +
-                                 " [" + std::to_string(r.matchedRules.size()) + " rule(s)]");
-                 } catch (...) {}
-                 return out;
+                   NetworkExfilMonitor::ClassifyResult out;
+                   std::string name = filePath;
+                   try {
+                       name = std::filesystem::path(filePath).filename().string();
+                       PolicyEvaluationResult r =
+                           EvaluatePolicyRealtime(name, filePath, "", eventType);
+                       // An inspection that did not happen is NOT a clean file.
+                       //
+                       // This returned an empty category on failure, and empty
+                       // reads downstream as "nothing sensitive here" - so an
+                       // unreachable server, a refused upload, or an image whose
+                       // OCR failed all looked exactly like a photograph of
+                       // nothing. Silently: the only line written on this path was
+                       // the one after a SUCCESSFUL evaluation, so "the picture is
+                       // not being caught" and "the picture was never actually
+                       // inspected" were indistinguishable from outside.
+                       if (!r.evaluationSucceeded) {
+                           logger.Warning("attachment NOT inspected: " + name +
+                                          " - server-side evaluation failed" +
+                                          (r.reason.empty() ? std::string()
+                                                            : " (" + r.reason + ")") +
+                                          ". Treated as uninspected, NOT as clean.");
+                           return out;
+                       }
+                       out.inspected = true;
+                       out.category = r.classificationLevel;
+                       out.score    = r.confidenceScore;
+                       out.labels   = r.matchedRules;
+                       if (!r.matchedRules.empty()) out.matchedRule = r.matchedRules[0];
+                       logger.Info("attachment inspected server-side: " + name +
+                                   " -> " + (out.category.empty() ? "none" : out.category) +
+                                   " [" + std::to_string(r.matchedRules.size()) + " rule(s)]");
+                   } catch (const std::exception& e) {
+                       logger.Warning("attachment NOT inspected: " + name + " - " +
+                                      e.what() + ". Treated as uninspected, NOT as clean.");
+                   } catch (...) {
+                       logger.Warning("attachment NOT inspected: " + name +
+                                      " - unknown error. Treated as uninspected, NOT as clean.");
+                   }
+                   return out;
              };
 
              nemCfg.sendEvent = [this](const std::string& json) {

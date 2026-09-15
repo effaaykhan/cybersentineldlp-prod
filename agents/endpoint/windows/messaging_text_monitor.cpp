@@ -247,6 +247,27 @@ DWORD                 g_locSendBtnPid  = 0;
 // locator re-acquires immediately instead of waiting out its rate limit.
 std::atomic<bool>     g_refindComposer{false};
 
+// ── Thread liveness ───────────────────────────────────────────────────────
+//
+// "It worked for a while and then stopped" has exactly one shape that nothing
+// in here could see: a thread died. An exception escaping a loop body ends that
+// thread silently - no log, no crash, the agent keeps running and keeps
+// reporting itself healthy - and whatever that thread was responsible for
+// simply stops. The watchdog is the worst one to lose, because it owns
+// CheckHookHealth: lose it and a dropped input hook is never reinstalled, so
+// blocking stays off until the agent is restarted. Which is the symptom.
+//
+// Each timer-driven thread stamps its own beat. The others check it. No new
+// thread and no supervisor to lose: as long as ONE of them lives, a death gets
+// reported by name instead of being inferred from behaviour weeks later.
+//
+// The worker is deliberately NOT here - it waits on a condition variable, so a
+// quiet machine is indistinguishable from a dead one and the only honest
+// reading is no reading at all.
+std::atomic<long long> g_beatLocator{0};
+std::atomic<long long> g_beatSampler{0};
+std::atomic<long long> g_beatWatchdog{0};
+
 // Alert mode fires on every Enter, including the ones that resend the same
 // text; an operator does not need the same message five times.
 std::string            g_lastAuditText;
@@ -1721,11 +1742,31 @@ void ResolveDroppedFiles(HWND srcWnd, HWND target) {
 // callers - this reads a file and asks the server, and neither the sampler nor
 // a hook may wait for that.
 void InspectStagedFiles(std::vector<std::string> paths, DWORD targetPid) {
-    if (paths.empty() || !g_cfg.classifyFile) return;
+    if (paths.empty()) return;
+    // Was the hook even wired up? Returning quietly here meant that an agent
+    // built or configured without server-side file classification behaved
+    // exactly like one where every attachment came back clean - no block and
+    // no explanation, which is the hardest failure of all to report.
+    if (!g_cfg.classifyFile) {
+        LogWarn("a file was staged in a managed chat but no file classifier is "
+                "configured - attachments cannot be inspected on this agent");
+        return;
+    }
     for (const auto& path : paths) {
         NetworkExfilMonitor::ClassifyResult cls;
-        try { cls = g_cfg.classifyFile(path, "messaging_attachment"); } catch (...) {}
+        try { cls = g_cfg.classifyFile(path, "messaging_attachment"); }
+        catch (...) { LogWarn("classifying " + path + " threw"); }
         const std::string cat = ToLowerAscii(cls.category);
+        // Say what was decided, for every file. Until now the only line written
+        // was the one announcing a sensitive file, so "nothing happened" covered
+        // both "looked and it was fine" and "never actually looked".
+        if (!cls.inspected) {
+            LogWarn("staged attachment NOT inspected: " + path +
+                    " - it has NOT been cleared, the inspection did not complete");
+        } else {
+            LogInfo("staged attachment inspected: " + path + " -> " +
+                    (cls.category.empty() ? "no classification" : cls.category));
+        }
         if (cat == "confidential" || cat == "restricted") {
             {
                 std::lock_guard<std::mutex> lk(g_dropMx);
@@ -2770,6 +2811,43 @@ void WorkerThread() {
     if (comOk) CoUninitialize();
 }
 
+// Report a timer-driven thread that has stopped ticking.
+//
+// Sixty seconds: the slowest of these loops runs on a multi-second cadence and
+// can block briefly in UI Automation, so anything under that would cry wolf.
+// Logged once per death - it is a permanent condition until restart, and
+// repeating it four times a second would bury the line that matters.
+void CheckThreadHealth() {
+    static long long lastCheckMs = 0;
+    static bool reported[3] = { false, false, false };
+
+    const long long now = NowSteadyMs();
+    if (now - lastCheckMs < 10000) return;
+    lastCheckMs = now;
+
+    struct { const char* name; std::atomic<long long>* beat; } t[3] = {
+        { "locator",  &g_beatLocator  },
+        { "sampler",  &g_beatSampler  },
+        { "watchdog", &g_beatWatchdog },
+    };
+    for (int i = 0; i < 3; ++i) {
+        const long long b = t[i].beat->load();
+        if (!b) continue;                       // never started ticking yet
+        const long long silent = now - b;
+        if (silent > 60000) {
+            if (!reported[i]) {
+                reported[i] = true;
+                LogWarn(std::string("the ") + t[i].name + " thread has not ticked for " +
+                        std::to_string(silent / 1000) + "s - it has died. Messaging "
+                        "inspection is degraded or off until the agent is restarted. "
+                        "This is the cause of 'blocking worked and then stopped'.");
+            }
+        } else {
+            reported[i] = false;
+        }
+    }
+}
+
 // ── Is the hook still there? ──────────────────────────────────────────────
 //
 // There is no API that answers "is my hook still installed" — SetWindowsHookEx
@@ -2827,6 +2905,14 @@ void CheckHookHealth() {
 void WatchdogThread() {
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Everything below is inside try/catch. This thread owns
+        // CheckHookHealth, which is what reinstalls an input hook the OS has
+        // silently dropped - so of all the threads here it is the one that must
+        // not be allowed to die on an exception. Losing it turns a recoverable
+        // 20-second outage into blocking being off until the agent restarts.
+        try {
+        g_beatWatchdog.store(NowSteadyMs());
+        CheckThreadHealth();
         CheckHookHealth();
         if (g_decisionResolved.load()) continue;
         const long long started = g_holdStartMs.load();
@@ -2839,6 +2925,11 @@ void WatchdogThread() {
             g_decisionPending.store(false);
             LogWarn("inspection exceeded " + std::to_string(g_cfg.decisionTimeoutMs) +
                     "ms - keystroke released UNINSPECTED (the message was sent)");
+        }
+        } catch (...) {
+            // Never fatal here. A thrown decision is one lost keystroke; a dead
+            // watchdog is every subsequent one.
+            LogWarn("watchdog iteration threw - continuing");
         }
     }
 }
@@ -2924,6 +3015,7 @@ void LocatorThread() {
 
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        g_beatLocator.store(NowSteadyMs());
         if (g_stop.load()) break;
         if (!comOk) continue;
 
@@ -3126,6 +3218,10 @@ void SamplerThread() {
     const unsigned interval = g_cfg.sampleIntervalMs ? g_cfg.sampleIntervalMs : 250;
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+        g_beatSampler.store(NowSteadyMs());
+        // Checked from here as well as the watchdog, so that a dead WATCHDOG is
+        // still reported by something.
+        CheckThreadHealth();
         if (g_stop.load()) break;
         if (!comOk) continue;
 

@@ -37,6 +37,12 @@ struct ClassifyResult {
     double      score        = 0.0;
     std::string matchedRule;              // Name of first matched policy, if any
     std::vector<std::string> labels;      // Matched data-type labels
+    // Did the inspection actually HAPPEN? An empty category means "nothing
+    // sensitive found", and it used to mean that whether the file had been read
+    // or not - so an unreachable server, a refused upload and an image whose OCR
+    // failed all arrived downstream looking like a clean file. Uninspected is
+    // not clean; callers that enforce need to be able to tell the difference.
+    bool        inspected    = false;
 };
 
 // Callbacks the host agent provides. All must be thread-safe.

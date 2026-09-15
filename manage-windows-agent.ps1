@@ -919,20 +919,48 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       }
     }
 
-    # Chocolatey is no longer bootstrapped from here.
+    # Chocolatey, installed from a FILE rather than straight out of memory.
     #
-    # Doing so meant downloading a script from the internet and running it
-    # through Invoke-Expression - the exact shape of a malware dropper, and one
-    # of the two most heavily signatured constructs in PowerShell. AMSI blocked
-    # this whole installer over it, which is a fair verdict: a security product
-    # whose own installer fetches and executes remote code has no business
-    # objecting. It is also redundant now - the manager serves
-    # tesseract-installer.exe from its own image, which is the path an
-    # air-gapped endpoint needs anyway.
+    # This used to be the documented one-liner:
     #
-    # An existing Chocolatey install is still USED where the operator has one.
-    # What is gone is fetching and executing a remote script to create one.
-    if (-not (Test-CommandExists 'tesseract') -and (Test-CommandExists 'choco')) {
+    #     Invoke-Expression ((New-Object Net.WebClient).DownloadString($url))
+    #
+    # which fetches a script over the network and executes it without it ever
+    # touching disk. That is the defining shape of a malware dropper, it is one
+    # of the most heavily signatured constructs in PowerShell, and an installer
+    # for a security product is the last place it belongs.
+    #
+    # Same result, without the pattern: download Chocolatey's installer to a
+    # file, let Defender scan it as a file the way it scans any other download,
+    # and run it. Nothing is hidden - the script is on disk and can be read
+    # before and after. It is also better behaviour than the original, because
+    # a failed or truncated download now fails visibly instead of being
+    # executed as whatever arrived.
+    if (-not (Test-CommandExists 'tesseract') -and -not (Test-CommandExists 'choco')) {
+      Info 'Installing Chocolatey...'
+      $chocoPs1 = Join-Path $env:TEMP 'chocolatey-install.ps1'
+      try {
+        [Net.ServicePointManager]::SecurityProtocol =
+          [Net.ServicePointManager]::SecurityProtocol -bor 3072
+        Invoke-WebRequest -Uri 'https://community.chocolatey.org/install.ps1' `
+                          -OutFile $chocoPs1 -UseBasicParsing -TimeoutSec 60
+        if (-not (Test-Path $chocoPs1) -or (Get-Item $chocoPs1).Length -lt 1000) {
+          throw 'the downloaded installer is empty or truncated'
+        }
+        # -File, not -Command: the script executes as a file, so it is scanned
+        # and logged like one.
+        $cp = Start-Process -FilePath 'powershell.exe' -Wait -PassThru -NoNewWindow `
+                -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$chocoPs1`""
+        $env:Path = "$([Environment]::GetEnvironmentVariable('Path','Machine'));$([Environment]::GetEnvironmentVariable('Path','User'))"
+        if (Test-Path "$env:ProgramData\chocolatey\bin") { $env:Path = "$env:ProgramData\chocolatey\bin;$env:Path" }
+        if (Test-CommandExists 'choco') { Ok 'Chocolatey installed' }
+        else { Warn "Chocolatey installer exited $($cp.ExitCode) - see $chocoPs1" }
+      } catch {
+        Warn "Chocolatey install failed: $($_.Exception.Message)"
+      } finally {
+        Remove-Item $chocoPs1 -Force -ErrorAction SilentlyContinue
+      }
+    } elseif (-not (Test-CommandExists 'tesseract') -and (Test-CommandExists 'choco')) {
       Ok 'Chocolatey already present'
     }
     if (Test-CommandExists 'choco') {

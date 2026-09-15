@@ -54,6 +54,12 @@ router = APIRouter()
 DIST_DIR = pathlib.Path(__file__).resolve().parents[3] / "agent_dist"
 
 SCRIPT_NAME = "manage-windows-agent.ps1"
+# The Windows Security helper. Split out of the installer because a downloaded
+# script that reads the antivirus threat list and writes exclusions for itself
+# is indistinguishable from malware doing the same - Defender classified the
+# whole installer as Trojan:PowerShell/Killav.VDA!MTB and AMSI refused to run
+# any of it. Published separately so an administrator fetches it deliberately.
+DEFENDER_SCRIPT_NAME = "manage-windows-defender.ps1"
 EXE_NAME = "cybersentineldlp_agent.exe"
 SUM_NAME = EXE_NAME + ".sha256"
 VER_NAME = EXE_NAME + ".version"
@@ -80,6 +86,7 @@ _LOCAL_ONLY = {
 
 _ARTIFACTS = {
     SCRIPT_NAME: (SCRIPT_NAME, "text/plain"),
+    DEFENDER_SCRIPT_NAME: (DEFENDER_SCRIPT_NAME, "text/plain"),
     EXE_NAME: (f"agents/endpoint/windows/{EXE_NAME}", "application/octet-stream"),
     SUM_NAME: (f"agents/endpoint/windows/{SUM_NAME}", "text/plain"),
     VER_NAME: (f"agents/endpoint/windows/{VER_NAME}", "text/plain"),

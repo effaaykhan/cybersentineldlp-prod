@@ -919,19 +919,21 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       }
     }
 
-    if (Test-CommandExists 'tesseract') {
-      # Already sorted above; nothing to reach the internet for.
-    } elseif (Test-CommandExists 'choco') {
+    # Chocolatey is no longer bootstrapped from here.
+    #
+    # Doing so meant downloading a script from the internet and running it
+    # through Invoke-Expression - the exact shape of a malware dropper, and one
+    # of the two most heavily signatured constructs in PowerShell. AMSI blocked
+    # this whole installer over it, which is a fair verdict: a security product
+    # whose own installer fetches and executes remote code has no business
+    # objecting. It is also redundant now - the manager serves
+    # tesseract-installer.exe from its own image, which is the path an
+    # air-gapped endpoint needs anyway.
+    #
+    # An existing Chocolatey install is still USED where the operator has one.
+    # What is gone is fetching and executing a remote script to create one.
+    if (-not (Test-CommandExists 'tesseract') -and (Test-CommandExists 'choco')) {
       Ok 'Chocolatey already present'
-    } else {
-      Info 'Installing Chocolatey...'
-      try {
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
-        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        $env:Path = "$([Environment]::GetEnvironmentVariable('Path','Machine'));$([Environment]::GetEnvironmentVariable('Path','User'))"
-        if (Test-Path "$env:ProgramData\chocolatey\bin") { $env:Path = "$env:ProgramData\chocolatey\bin;$env:Path" }
-      } catch { Warn "Chocolatey install failed: $($_.Exception.Message)" }
     }
     if (Test-CommandExists 'choco') {
       if (Test-CommandExists 'tesseract') {

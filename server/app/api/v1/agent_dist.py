@@ -54,6 +54,7 @@ router = APIRouter()
 DIST_DIR = pathlib.Path(__file__).resolve().parents[3] / "agent_dist"
 
 SCRIPT_NAME = "manage-windows-agent.ps1"
+SCRIPT_SUM_NAME = SCRIPT_NAME + ".sha256"
 # The Windows Security helper. Split out of the installer because a downloaded
 # script that reads the antivirus threat list and writes exclusions for itself
 # is indistinguishable from malware doing the same - Defender classified the
@@ -288,30 +289,6 @@ async def agent_dist_info():
     return out
 
 
-# The installer's own checksum, computed on demand.
-#
-# `irm <url> | iex` has NO integrity check of any kind: whatever comes back is
-# executed, and a truncated response or a tampering proxy is indistinguishable
-# from the real script. The agent binary has been checksum-verified since the
-# beginning; the script that fetches it never was, which is the wrong way round
-# - the script is what runs first and with the most privilege.
-#
-# Computed rather than stored so it cannot drift from the file being served: a
-# stale sidecar beside a fresh script would fail every verification and look
-# exactly like an attack.
-@router.api_route("/{script}.sha256", methods=["GET", "HEAD"])
-async def script_checksum(script: str):
-    name = f"{script}.sha256"
-    if script not in (SCRIPT_NAME,):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
-    await _ensure_fresh(script)
-    path = _dist_file(script)
-    if not path.is_file():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
-    body = f"{_sha256_file(path)}  {script}\n"
-    return PlainTextResponse(body, headers={"Cache-Control": "public, max-age=60"})
-
-
 @router.api_route("/{filename}", methods=["GET", "HEAD"])
 async def download_artifact(filename: str):
     """The installer script, the agent binary, and its two sidecars.
@@ -320,6 +297,28 @@ async def download_artifact(filename: str):
     binary published here?" without pulling 4.5MB — without it such a probe gets
     405 and reports the artifact missing on a server publishing it correctly.
     """
+    # The installer script's checksum, computed on demand.
+    #
+    # `irm <url> | iex` has no integrity check: whatever comes back is executed,
+    # and a truncated response or a tampering proxy is indistinguishable from
+    # the real script. The agent binary has been checksum-verified from the
+    # start; the script that fetches it never was, which is the wrong way round.
+    #
+    # Handled HERE rather than on its own route. A separate "/{name}.sha256"
+    # path looks tidier and is a trap: FastAPI matches routes in declaration
+    # order, so it also captured cybersentineldlp_agent.exe.sha256 - a real
+    # file with a real sidecar - and answered 404 for it. Every endpoint then
+    # reported that the server was not publishing the agent at all.
+    if filename == SCRIPT_SUM_NAME:
+        await _ensure_fresh(SCRIPT_NAME)
+        script_path = _dist_file(SCRIPT_NAME)
+        if not script_path.is_file():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        return PlainTextResponse(
+            f"{_sha256_file(script_path)}  {SCRIPT_NAME}\n",
+            headers={"Cache-Control": "public, max-age=60"},
+        )
+
     media_type = _artifact_media_type(filename)
     if media_type is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")

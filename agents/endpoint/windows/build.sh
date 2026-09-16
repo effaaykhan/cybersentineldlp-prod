@@ -48,64 +48,22 @@ echo ""
 VER_COMMAS="$(echo "$AGENT_VER" | tr '.' ',')",0
 RC_OBJ=""
 if command -v windres >/dev/null 2>&1; then
-    # An application manifest, and a COMPLETE version resource.
+    # NO application manifest. It was added and is taken back out.
     #
-    # Both are identity, and identity is what this binary is short of. It is
-    # detected as Trojan:Win32/Bearfoos.B!ml - the !ml suffix meaning a machine
-    # learning classifier decided, not a signature. That model weighs what a
-    # file declares about itself alongside what it does, and what this one does
-    # is install a low-level keyboard hook, enumerate processes, read other
-    # applications' UI and watch removable media. That behaviour is identical to
-    # a keylogger's; the only things that distinguish the two are a signature,
-    # a reputation, and a coherent account of what the file claims to be.
+    # A manifest was tried as a way to give the unsigned binary some identity
+    # against the Bearfoos ML detection. It was not asked for, it did not
+    # address the detection, and it put runtime behaviour at risk for nothing:
+    # SetProcessDpiAwarenessContext fails with ERROR_ACCESS_DENIED when the
+    # process DPI awareness has already been fixed, and a manifest is one of the
+    # things that fixes it. EnsureDpiAwareness runs first in main() precisely
+    # because mouse-hook coordinates and UI Automation rectangles have to be
+    # measured in the same space - lose that and Enter still blocks (no
+    # coordinates involved) while the Send BUTTON stops being hit-tested, which
+    # is exactly what was reported after this shipped.
     #
-    # A real signature is still the answer and neither of these substitutes for
-    # one. But an unsigned binary with no manifest, no copyright and no explicit
-    # release flags looks like something built in a hurry to be thrown away,
-    # which is a description that fits malware better than it fits a product.
-    # These cost nothing and they are all true statements about the file.
-    #
-    # Deliberately NOT declared here: dpiAware. The agent sets per-monitor v2
-    # awareness at runtime (EnsureDpiAwareness, called first in main) because
-    # mouse-hook coordinates depend on it, and a manifest entry would change
-    # when that takes effect.
-    cat > agent.manifest <<'MANIFEST'
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="CyberSentinel.DLP.Agent"
-                    version="0.0.0.0" processorArchitecture="amd64"/>
-  <description>CyberSentinel DLP Endpoint Agent</description>
-  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-    <security>
-      <requestedPrivileges>
-        <!-- asInvoker: the agent never elevates itself. It runs at whatever
-             level the scheduled task gives it. -->
-        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
-      </requestedPrivileges>
-    </security>
-  </trustInfo>
-  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
-    <application>
-      <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/><!-- 7 -->
-      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/><!-- 8 -->
-      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/><!-- 8.1 -->
-      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/><!-- 10/11 -->
-    </application>
-  </compatibility>
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
-    </windowsSettings>
-  </application>
-</assembly>
-MANIFEST
-    # The version string has to be the real one, and the manifest is a heredoc
-    # with no expansion, so patch it in afterwards.
-    sed -i "s|version=\"0.0.0.0\"|version=\"${VER_COMMAS//,/.}\"|" agent.manifest
-
+    # The version-resource additions below are kept: they are file metadata with
+    # no runtime effect whatsoever.
     cat > version.rc <<RC
-1 24 "agent.manifest"
-
 1 VERSIONINFO
 FILEVERSION    ${VER_COMMAS}
 PRODUCTVERSION ${VER_COMMAS}

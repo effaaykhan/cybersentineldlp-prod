@@ -56,6 +56,12 @@
 #include <winioctl.h>
 #include <shellapi.h>
 
+// Which DPI mode the process ended up in; set by EnsureDpiAwareness() at the
+// top of main() and reported in the startup log. At file scope and up here
+// because it is read long before that function is defined.
+static const char* g_dpiMode = "not attempted";
+static DWORD       g_dpiErr  = 0;
+
 #pragma comment(lib, "shell32.lib")
 
 #pragma comment(lib, "cfgmgr32.lib")
@@ -4392,6 +4398,18 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      
      void Start() {
          logger.Info("Starting CyberSentinel DLP Agent...");
+         // Say which DPI mode was actually achieved. Mouse-send blocking
+         // compares a virtualised cursor position against a physical UI
+         // Automation rectangle, so "UNAWARE" here means the Send button can
+         // never be hit-tested - and Enter will still work, which makes the
+         // fault look like a messaging bug rather than a startup one.
+         if (std::string(g_dpiMode) == "per-monitor v2") {
+             logger.Info(std::string("DPI awareness: ") + g_dpiMode);
+         } else {
+             logger.Warning(std::string("DPI awareness: ") + g_dpiMode +
+                            (g_dpiErr ? " (SetProcessDpiAwarenessContext err=" +
+                                        std::to_string(g_dpiErr) + ")" : ""));
+         }
          // The version of the code that is RUNNING, which is not always the
          // version of the exe on disk: replacing the file while the old process
          // survives leaves a machine that hashes as updated and behaves as it
@@ -10660,6 +10678,19 @@ int HandleBlockedLaunch(int argc, char* argv[]) {
 // cannot silently drop it, and resolved dynamically so one binary still starts
 // on Windows versions predating each API. Newest first; each is a superset of
 // the next. Called before anything creates a window or touches UIA.
+// Which DPI mode the process actually ended up in. Read by the startup log.
+//
+// This used to succeed or fail in silence, and the difference is not cosmetic:
+// mouse-hook coordinates are virtualised for a DPI-unaware process while UI
+// Automation rectangles are physical, so if awareness is not established the
+// Send BUTTON cannot be hit-tested and mouse-send blocking stops working -
+// while Enter, which needs no coordinates, carries on fine. That is a very
+// specific symptom and it deserves a very specific line in the log rather than
+// an afternoon of guessing.
+//
+// SetProcessDpiAwarenessContext fails with ERROR_ACCESS_DENIED when awareness
+// has already been fixed for the process, which an application manifest is one
+// way of doing. So the failure is recorded with its error code.
 void EnsureDpiAwareness() {
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32) {
@@ -10667,14 +10698,18 @@ void EnsureDpiAwareness() {
         SetCtxFn setCtx = (SetCtxFn)(void*)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
         // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is the literal (HANDLE)-4.
         // Spelled out because the mingw headers in CI may not define it.
-        if (setCtx && setCtx((HANDLE)(INT_PTR)-4)) return;
+        if (setCtx) {
+            SetLastError(0);
+            if (setCtx((HANDLE)(INT_PTR)-4)) { g_dpiMode = "per-monitor v2"; return; }
+            g_dpiErr = GetLastError();
+        }
     }
     // Windows 8.1 .. 10/1607: per-monitor v1.
     HMODULE shcore = LoadLibraryW(L"Shcore.dll");   // deliberately not freed
     if (shcore) {
         typedef HRESULT (WINAPI *SetAwareFn)(int);
         SetAwareFn setAware = (SetAwareFn)(void*)GetProcAddress(shcore, "SetProcessDpiAwareness");
-        if (setAware && SUCCEEDED(setAware(2))) return;   // PROCESS_PER_MONITOR_DPI_AWARE
+        if (setAware && SUCCEEDED(setAware(2))) { g_dpiMode = "per-monitor v1"; return; }   // PROCESS_PER_MONITOR_DPI_AWARE
     }
     // Vista .. 8.0: system-DPI aware. Still puts UIA rectangles and cursor
     // positions in the same space on a single-display machine, which is the
@@ -10682,8 +10717,9 @@ void EnsureDpiAwareness() {
     if (user32) {
         typedef BOOL (WINAPI *SetLegacyFn)(void);
         SetLegacyFn setLegacy = (SetLegacyFn)(void*)GetProcAddress(user32, "SetProcessDPIAware");
-        if (setLegacy) setLegacy();
+        if (setLegacy && setLegacy()) { g_dpiMode = "system (legacy)"; return; }
     }
+    g_dpiMode = "UNAWARE - mouse-send blocking will not work";
 }
 
 int main(int argc, char* argv[]) {

@@ -264,6 +264,25 @@ std::atomic<bool>     g_refindComposer{false};
 // The worker is deliberately NOT here - it waits on a condition variable, so a
 // quiet machine is indistinguishable from a dead one and the only honest
 // reading is no reading at all.
+// Why the last left-click in a managed chat was NOT inspected.
+//
+// "Enter blocks, the Send button does not" has four possible causes and they
+// are indistinguishable from outside: the button was never located, its
+// rectangle went stale, the click landed outside it, or the hook never saw the
+// click at all. Each needs a different fix and we have guessed wrong about
+// which more than once.
+//
+// The hook may not log - a low-level hook that overruns LowLevelHooksTimeout is
+// removed by Windows without warning - so it stores a code and the sampler
+// prints it. Atomic stores only: no allocation, no lock, no formatting.
+enum ClickGate : int {
+    CLICK_NONE = 0, CLICK_NO_BUTTON, CLICK_STALE, CLICK_OUTSIDE, CLICK_INSPECTED
+};
+std::atomic<int>       g_clickGate{CLICK_NONE};
+std::atomic<long long> g_clickAgeMs{0};
+std::atomic<int>       g_clickX{0}, g_clickY{0};
+std::atomic<int>       g_clickRL{0}, g_clickRT{0}, g_clickRR{0}, g_clickRB{0};
+
 std::atomic<long long> g_beatLocator{0};
 std::atomic<long long> g_beatSampler{0};
 std::atomic<long long> g_beatWatchdog{0};
@@ -3219,6 +3238,37 @@ void SamplerThread() {
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(interval));
         g_beatSampler.store(NowSteadyMs());
+        // Report the last click that was not inspected, once per occurrence.
+        if (const int gate = g_clickGate.exchange(CLICK_NONE)) {
+            const int x = g_clickX.load(), y = g_clickY.load();
+            const int l = g_clickRL.load(), t_ = g_clickRT.load();
+            const int r = g_clickRR.load(), b = g_clickRB.load();
+            const long long age = g_clickAgeMs.load();
+            switch (gate) {
+                case CLICK_NO_BUTTON:
+                    LogWarn("click at (" + std::to_string(x) + "," + std::to_string(y) +
+                            ") NOT inspected: no Send button has been located in this app. "
+                            "Enter is still inspected. Hover over Send for a moment before "
+                            "clicking and it will be recognised.");
+                    break;
+                case CLICK_STALE:
+                    LogWarn("click at (" + std::to_string(x) + "," + std::to_string(y) +
+                            ") NOT inspected: the Send button rectangle is " +
+                            std::to_string(age) + "ms old (limit 3000ms) - the sampler has "
+                            "not re-measured it recently enough.");
+                    break;
+                case CLICK_OUTSIDE:
+                    LogInfo("click at (" + std::to_string(x) + "," + std::to_string(y) +
+                            ") is outside the Send button rect [" + std::to_string(l) + "," +
+                            std::to_string(t_) + " " + std::to_string(r) + "," +
+                            std::to_string(b) + "] - not a send");
+                    break;
+                case CLICK_INSPECTED:
+                    LogDbg("click landed on the Send button and was inspected");
+                    break;
+                default: break;
+            }
+        }
         // Checked from here as well as the watchdog, so that a dead WATCHDOG is
         // still reported by something.
         CheckThreadHealth();
@@ -3653,12 +3703,23 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     DWORD pid = 0;
     {
         std::lock_guard<std::mutex> lk(g_sendMx);
-        const bool fresh = g_sendPid && g_sendAtMs && (NowSteadyMs() - g_sendAtMs) <= 3000;
+        const long long age = g_sendAtMs ? (NowSteadyMs() - g_sendAtMs) : -1;
+        const bool fresh = g_sendPid && g_sendAtMs && age <= 3000;
         const bool inside = m->pt.x >= g_sendRect.left && m->pt.x < g_sendRect.right &&
                             m->pt.y >= g_sendRect.top  && m->pt.y < g_sendRect.bottom;
         if (!fresh || !inside) {
+            // Record WHY, for the sampler to report. Only stores happen here.
+            if (g_managedWnd.load(std::memory_order_relaxed)) {
+                g_clickX.store((int)m->pt.x); g_clickY.store((int)m->pt.y);
+                g_clickRL.store((int)g_sendRect.left); g_clickRT.store((int)g_sendRect.top);
+                g_clickRR.store((int)g_sendRect.right); g_clickRB.store((int)g_sendRect.bottom);
+                g_clickAgeMs.store(age);
+                g_clickGate.store(!g_sendPid || !g_sendAtMs ? CLICK_NO_BUTTON
+                                  : (!fresh ? CLICK_STALE : CLICK_OUTSIDE));
+            }
             return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
         }
+        g_clickGate.store(CLICK_INSPECTED);
         pid = g_sendPid;
     }
 

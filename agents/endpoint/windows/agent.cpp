@@ -638,7 +638,34 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
          return SendRequest(L"GET", path, "");
      }
      
+    static std::string DescribeWinHttpError(DWORD e) {
+        switch (e) {
+            case 0:     return "no error reported";
+            case 12002: return "timed out";
+            case 12007: return "server name not resolved (DNS)";
+            case 12029: return "cannot connect - nothing listening, or blocked";
+            case 12030: return "connection reset by the server";
+            case 12031: return "connection closed by the server";
+            case 12152: return "invalid response from the server";
+            case 12175: return "TLS/certificate failure";
+            case 12185: return "the server certificate has expired";
+            case 12186: return "the server certificate name does not match";
+            default:    return "WinHTTP error " + std::to_string(e);
+        }
+    }
+    std::string LastErrorText() const {
+        return DescribeWinHttpError(lastError) +
+               (lastError ? " (" + std::to_string(lastError) + ")" : "");
+    }
+
  private:
+    // Why the last transport-level failure happened. Every failure path in
+    // SendRequest used to return {0,""} without calling GetLastError(), so a
+    // name that does not resolve, a refused connection, a timeout and a TLS
+    // failure were one indistinguishable fact - different causes, different
+    // fixes, and an agent that silently went offline could not be diagnosed.
+    DWORD lastError = 0;
+
      void ParseUrl(const std::string& url) {
          // Parse: http(s)://host[:port][/path]
          //
@@ -661,8 +688,11 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
          }
      }
      
+
+
      std::pair<int, std::string> SendRequest(const wchar_t* method, const std::string& path, const std::string& data) {
-         if (!hConnect) return {0, ""};
+        lastError = 0;
+        if (!hConnect) { lastError = 12029; return {0, ""}; }
          
          // Combine base path with request path
          std::string fullPath = basePath + path;
@@ -671,7 +701,7 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
          HINTERNET hRequest = WinHttpOpenRequest(hConnect, method, wpath.c_str(),
              nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
          
-         if (!hRequest) return {0, ""};
+        if (!hRequest) { lastError = GetLastError(); return {0, ""}; }
          
          std::wstring headers = L"Content-Type: application/json\r\n";
          
@@ -679,7 +709,8 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
              (LPVOID)data.c_str(), data.length(), data.length(), 0);
          
          if (!result) {
-             WinHttpCloseHandle(hRequest);
+            lastError = GetLastError();
+            WinHttpCloseHandle(hRequest);
              return {0, ""};
          }
          
@@ -4423,6 +4454,24 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          // Test server connectivity
          logger.Info("Testing server connectivity...");
          RegisterAgent();
+         // Say plainly whether the link is up at startup, and if not, why. The
+         // top of the log should answer "what was this agent talking to, and
+         // could it reach it" without anyone having to infer it from the
+         // absence of errors.
+         {
+             auto [st, _] = httpClient->Get("/health");
+             if (st > 0) {
+                 logger.Info("server reachable at " + config.serverUrl +
+                             " (HTTP " + std::to_string(st) + ")");
+                 OnHeartbeatOk(0);
+             } else {
+                 logger.Warning("server NOT reachable at " + config.serverUrl + " - " +
+                                httpClient->LastErrorText() +
+                                ". the agent will keep retrying and will enforce cached "
+                                "policies meanwhile");
+                 OnHeartbeatFail(httpClient->LastErrorText());
+             }
+         }
          
          // Load cached policies FIRST so we are already enforcing if the server
          // is unreachable. A successful sync below replaces them; an
@@ -4447,6 +4496,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          }
          
          workerThreads.emplace_back(&DLPAgent::HeartbeatLoop, this);
+         workerThreads.emplace_back(&DLPAgent::ConnectionWatchdogLoop, this);
          workerThreads.emplace_back(&DLPAgent::PolicySyncLoop, this);
          workerThreads.emplace_back(&DLPAgent::ClipboardMonitor, this);
          workerThreads.emplace_back(&DLPAgent::UsbMonitor, this);
@@ -6072,14 +6122,145 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         return false;
     }
     
+    // ── Connection state ──────────────────────────────────────────────────
+    //
+    // The agent knew whether ONE heartbeat had worked and nothing else. There
+    // was no notion of "we were connected and now we are not", so a drop
+    // produced a single DEBUG line identical to the four hundred before it, and
+    // an agent that appeared DISCONNECTED in the dashboard left nothing behind
+    // explaining why. These four fields are the whole difference.
+    std::atomic<bool>      connOk{false};
+    std::atomic<int>       connFails{0};
+    std::atomic<long long> connDownSinceMs{0};
+    std::atomic<long long> connLastOkMs{0};
+    std::atomic<bool>      connWarnedTimeout{false};
+    // Beats the watchdog in main() reads, so a dead heartbeat thread is visible.
+    std::atomic<long long> heartbeatBeatMs{0};
+    // How many spooled events the last flush replayed, so the reconnect line can
+    // say what the outage actually cost. A counter rather than a return value:
+    // FlushSpooledEvents has several early returns and changing its signature
+    // would mean touching all of them for one number.
+    std::atomic<int> lastFlushCount{0};
+
+    static long long NowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    // How long to wait before the next attempt.
+    //
+    // The old loop always slept the full heartbeat interval - 30s by default -
+    // so a blip that cleared in two seconds still cost thirty, and four of them
+    // in a row crossed the server's 120s timeout and marked the agent
+    // disconnected when nothing was actually wrong. While down, retry quickly
+    // and back off: 5, 10, 20, then 30s. While up, the normal interval.
+    int NextDelaySeconds() const {
+        if (connOk.load()) return config.heartbeatInterval;
+        const int n = connFails.load();
+        if (n <= 1) return 5;
+        if (n == 2) return 10;
+        if (n == 3) return 20;
+        return (std::min)(30, (int)config.heartbeatInterval);
+    }
+
+    void OnHeartbeatOk(int flushed) {
+        heartbeatBeatMs.store(NowMs());
+        connLastOkMs.store(NowMs());
+        if (!connOk.exchange(true)) {
+            const long long since = connDownSinceMs.exchange(0);
+            const int attempts = connFails.exchange(0);
+            if (since) {
+                logger.Info("reconnected to " + config.serverUrl + " after " +
+                            std::to_string((NowMs() - since) / 1000) + "s and " +
+                            std::to_string(attempts) + " attempt(s)" +
+                            (flushed > 0 ? "; flushed " + std::to_string(flushed) +
+                                           " spooled event(s)" : ""));
+            } else {
+                logger.Info("connected to " + config.serverUrl);
+            }
+            connWarnedTimeout.store(false);
+        }
+        connFails.store(0);
+    }
+
+    void OnHeartbeatFail(const std::string& why) {
+        heartbeatBeatMs.store(NowMs());
+        const int n = connFails.fetch_add(1) + 1;
+        if (connOk.exchange(false)) {
+            connDownSinceMs.store(NowMs());
+            logger.Warning("lost connection to " + config.serverUrl + " - " + why +
+                           ". retrying");
+        } else {
+            const long long since = connDownSinceMs.load();
+            const long long downS = since ? (NowMs() - since) / 1000 : 0;
+            // The server gives up on an agent after AGENT_TIMEOUT_SECONDS (120).
+            // Say so once, at the moment it happens, because that is when the
+            // dashboard starts showing this endpoint as DISCONNECTED and it is
+            // the single most useful line in the file.
+            if (downS >= 120 && !connWarnedTimeout.exchange(true)) {
+                logger.Warning("down " + std::to_string(downS) + "s - the server now "
+                               "considers this agent DISCONNECTED. still retrying");
+            }
+            // Otherwise keep it quiet: first few attempts, then every ~10th.
+            if (n <= 3 || n % 10 == 0) {
+                logger.Info("reconnect attempt " + std::to_string(n) + " failed (" + why +
+                            "), down " + std::to_string(downS) + "s; next in " +
+                            std::to_string(NextDelaySeconds()) + "s");
+            }
+        }
+    }
+
+    // Is the heartbeat thread still alive?
+    //
+    // A thread that dies takes the heartbeat with it, the server stops hearing
+    // from this endpoint, and the dashboard shows DISCONNECTED - with nothing
+    // in the agent log, because the thread that would have logged the problem
+    // is the one that is gone. That failure is indistinguishable from a network
+    // outage from the outside, and it is the one explanation nobody can rule
+    // out without this check.
+    void ConnectionWatchdogLoop() {
+        bool reported = false;
+        while (running) {
+            for (int i = 0; i < 30 && running; ++i) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            if (!running) break;
+            const long long beat = heartbeatBeatMs.load();
+            if (!beat) continue;                       // not started yet
+            const long long silent = NowMs() - beat;
+            // Three times the longest delay the heartbeat loop can choose.
+            const long long limit = 3LL * 1000 *
+                (config.heartbeatInterval > 30 ? config.heartbeatInterval : 30);
+            if (silent > limit) {
+                if (!reported) {
+                    reported = true;
+                    logger.Error("the heartbeat thread has not run for " +
+                                 std::to_string(silent / 1000) + "s - it has stopped. "
+                                 "This endpoint will show as DISCONNECTED on the server "
+                                 "even though the agent process is alive, and no network "
+                                 "error was involved.");
+                }
+            } else {
+                reported = false;
+            }
+        }
+    }
+
     void HeartbeatLoop() {
          while (running) {
              try {
                  SendHeartbeat();
              } catch (...) {
+                 // Never fatal. A dead heartbeat thread is indistinguishable
+                 // from a dead network from the server's side, and it would
+                 // never recover on its own.
                  logger.Error("Heartbeat error");
+                 heartbeatBeatMs.store(NowMs());
              }
-             std::this_thread::sleep_for(std::chrono::seconds(config.heartbeatInterval));
+             const int delay = NextDelaySeconds();
+             for (int i = 0; i < delay && running; ++i) {
+                 std::this_thread::sleep_for(std::chrono::seconds(1));
+             }
          }
      }
      
@@ -6111,8 +6292,13 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  // The heartbeat is the agent's existing "server is up" signal —
                  // reuse it to drain anything buffered during an outage.
                  FlushSpooledEvents();
+                 OnHeartbeatOk(lastFlushCount.exchange(0));
              } else if (status == 0) {
-                 logger.Debug("Cannot reach server for heartbeat");
+                 // The transport failed. WHY it failed is now known, and it is
+                 // the difference between "the server is down", "DNS is wrong"
+                 // and "a firewall is eating this" - three problems that used to
+                 // produce one identical DEBUG line.
+                 OnHeartbeatFail(httpClient->LastErrorText());
              } else if (status == 404) {
                  // The server is up (we got a response) but doesn't know this
                  // agent_id. That happens when the agent first registered while
@@ -6123,8 +6309,14 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  // heartbeat then succeeds and flushes.
                  logger.Warning("Heartbeat 404 — agent not registered server-side; re-registering");
                  RegisterAgent();
+                 // The server answered, so the link itself is fine.
+                 OnHeartbeatOk(0);
              } else {
                  logger.Debug("Heartbeat response: HTTP " + std::to_string(status));
+                 // Reached the server and it said something unexpected. That is
+                 // a server-side problem, not a connectivity one - do not report
+                 // it as a lost connection.
+                 OnHeartbeatOk(0);
              }
          } catch (const std::exception& e) {
              logger.Debug(std::string("Heartbeat failed: ") + e.what());
@@ -8720,6 +8912,7 @@ if (shouldMonitor) {
                  }
                  if (status == 200 || status == 201) {
                      sent++;
+                    lastFlushCount.fetch_add(1);
                  } else if (PermanentRejection(status)) {
                      dropped++;          // step over it; see PermanentRejection
                  } else {

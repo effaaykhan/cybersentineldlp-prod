@@ -1001,11 +1001,17 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
           else { Warn 'Tesseract not on PATH yet - screen OCR fallback may need a new session/reboot' }
         } catch { Warn "Tesseract install failed: $($_.Exception.Message)" }
       }
-    } else {
+    } elseif (-not (Test-CommandExists 'tesseract')) {
+      # elseif, not else. This hung off the CHOCOLATEY check, so a machine that
+      # had just installed Tesseract successfully from the DLP server - the
+      # normal path, and the one that needs no internet - was told in the very
+      # next line that Tesseract was not installed, purely because Chocolatey
+      # happened to be absent. Two contradictory lines, the second of them
+      # wrong, about the step that had in fact just succeeded.
       Warn 'Tesseract not installed - the screen-capture OCR fallback is disabled.'
-      Hint 'The agent works without it. To enable OCR on machines with no internet,'
-      Hint 'stage tesseract-installer.exe in server/agent_dist/ on the DLP server'
-      Hint 'and re-run this installer.'
+      Hint 'The agent works without it. The DLP server publishes the installer from'
+      Hint 'its own image, so this usually means the server has not taken the update'
+      Hint 'that bakes it in. Update the server and re-run this installer.'
     }
 
     # -- Step 5: download + verify binary ------------------------------------
@@ -1074,6 +1080,13 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     #   * The browser extension has to report under this exact id so a device
     #     running BOTH appears once, not twice. This script is the only place
     #     that knows the identity and can hand it to the extension's policy.
+      # Remember whether this identity was CARRIED OVER or minted here. The
+      # summary reported "(migrated)" whenever $recoveredId held a value - and
+      # the else branch below fills that same variable with a brand new id, so a
+      # clean install announced "Clean install (no previous agent found)" in step
+      # 2 and then labelled its identity migrated in the summary. One variable,
+      # two meanings.
+      $idMigrated = [bool]$recoveredId
     if ($recoveredId) {
       Info "Preserving identity $recoveredId"
     } else {
@@ -1136,7 +1149,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Field 'Path'   $INSTALL_DIR
     Field 'Server' $serverURL
     Field 'Log'    (Join-Path $INSTALL_DIR $LOG_NAME)
-    if ($recoveredId) { Field 'ID' "$recoveredId (migrated)" 'Yellow' }
+    if ($recoveredId) {
+      $_tag = if ($idMigrated) { ' (migrated)' } else { ' (new)' }
+      Field 'ID' "$recoveredId$_tag" 'Yellow'
+    }
   }
 
   # ============================================================

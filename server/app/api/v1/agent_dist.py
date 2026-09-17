@@ -44,7 +44,7 @@ from typing import Optional
 
 import httpx
 import structlog
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse, PlainTextResponse
 
 logger = structlog.get_logger()
@@ -259,6 +259,20 @@ def _dist_file(name: str) -> pathlib.Path:
     return candidate
 
 
+def _served_script(path: pathlib.Path, request: Request) -> str:
+    """The script as the endpoint receives it: this server's address filled in.
+
+    One function, because the download path and the checksum path MUST agree
+    byte for byte. Computing the substitution in two places is how a checksum
+    comes to describe a file nobody was sent.
+    """
+    base = str(request.url).split("?")[0].rsplit("/", 1)[0]
+    if base.endswith(".sha256"):
+        base = base.rsplit("/", 1)[0]
+    return path.read_text(encoding="utf-8", errors="replace").replace(
+        "@@CSDLP_SERVED_FROM@@", base)
+
+
 @router.api_route("/info", methods=["GET", "HEAD"])
 async def agent_dist_info():
     """What this server is currently publishing, and whether it can refresh.
@@ -290,7 +304,7 @@ async def agent_dist_info():
 
 
 @router.api_route("/{filename}", methods=["GET", "HEAD"])
-async def download_artifact(filename: str):
+async def download_artifact(filename: str, request: Request):
     """The installer script, the agent binary, and its two sidecars.
 
     HEAD is answered as well as GET so a reachability probe can ask "is the
@@ -314,14 +328,44 @@ async def download_artifact(filename: str):
         script_path = _dist_file(SCRIPT_NAME)
         if not script_path.is_file():
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        # Hash what is actually SERVED, not what is on disk.
+        #
+        # The script now has this server's address substituted into it as it
+        # goes out, so the bytes on disk are not the bytes the endpoint
+        # receives. Hashing the file would publish a checksum that every
+        # verification fails - which looks exactly like tampering and would send
+        # an operator hunting for an attacker who is not there.
+        body = _served_script(script_path, request)
+        digest = hashlib.sha256(body.encode("utf-8")).hexdigest().upper()
         return PlainTextResponse(
-            f"{_sha256_file(script_path)}  {SCRIPT_NAME}\n",
+            f"{digest}  {SCRIPT_NAME}\n",
             headers={"Cache-Control": "public, max-age=60"},
         )
 
     media_type = _artifact_media_type(filename)
     if media_type is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+
+    # Tell the installer where it came from.
+    #
+    # `irm <url> | iex` hands the script its TEXT and not its URL, so a script
+    # fetched from this server had no idea which server that was. It guessed
+    # from the endpoint's own config, and on a device that had ever talked to a
+    # different deployment that guess is stale - one fetched from
+    # 192.168.2.204:55100 went looking at 192.168.1.204:55000 and reported that
+    # "the DLP server is not publishing the agent binary" about a machine it had
+    # never contacted.
+    #
+    # We know the answer: it is the address this request arrived on. Substituted
+    # as the file is served, so it is right even on an endpoint whose stored
+    # configuration points somewhere else entirely.
+    if filename in (SCRIPT_NAME, DEFENDER_SCRIPT_NAME):
+        await _ensure_fresh(filename)
+        path = _dist_file(filename)
+        if not path.is_file():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+        return PlainTextResponse(_served_script(path, request),
+                                 headers={"Cache-Control": "public, max-age=60"})
     # Local-only artifacts are never refreshed from upstream: they are staged by
     # an operator, and there is nothing in the repository to refresh them from.
     if filename in _ARTIFACTS:

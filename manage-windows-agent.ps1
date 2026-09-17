@@ -76,6 +76,23 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   $SCRIPT_FILE = 'manage-windows-agent.ps1'
   $DIST_PATH   = 'api/v1/agent-dist'
 
+  # Where this script was served from, stamped in by the manager as it hands
+  # the file over.
+  #
+  # `irm <url> | iex` gives the script the TEXT, not the URL - so a script
+  # fetched from a server has no idea which server that was. It resolved one
+  # from local state instead, and on a device that had ever talked to a
+  # different deployment that state is stale: a script fetched from
+  # 192.168.2.204:55100 went looking at 192.168.1.204:55000, found nothing,
+  # announced that the DLP server was not publishing the agent - about a server
+  # it had never contacted - and asked for a GitHub token to work around a
+  # problem that did not exist.
+  #
+  # The manager knows the address the request arrived on, so it substitutes it
+  # here. That is the most authoritative answer available: it is literally where
+  # this file came from, so it outranks anything on disk.
+  $SERVED_FROM = '@@CSDLP_SERVED_FROM@@'
+
   # GitHub is the BREAK-GLASS source, used only when the manager publishes
   # nothing. The repository is private, so this path needs a token - and unlike
   # the manager path, that token can read private source. It is therefore held
@@ -330,7 +347,14 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   # Order matters. The environment variable is first because the elevated copy of
   # this script is handed it explicitly - without that it would re-resolve from
   # scratch and ask for the server a second time in the new window.
+  # Order matters. CSDLP_DIST_BASE first: the elevated copy is handed it
+  # explicitly and must not re-resolve. Then where this script was served from,
+  # which is a fact rather than an inference. Local config last - it is the only
+  # one of the three that can be stale.
   $DIST_BASE = ConvertTo-DistBase $env:CSDLP_DIST_BASE
+  if (-not $DIST_BASE -and $SERVED_FROM -notmatch '@@') {
+    $DIST_BASE = ConvertTo-DistBase $SERVED_FROM
+  }
   if (-not $DIST_BASE) { $DIST_BASE = ConvertTo-DistBase (Get-KnownServerUrl) }
   $_d = Get-DistUrls $DIST_BASE
   if ($_d) { $SELF_URL = $_d.Self; $EXE_URL = $_d.Exe; $SUM_URL = $_d.Sum; $VER_URL = $_d.Ver }

@@ -6141,6 +6141,56 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
     // FlushSpooledEvents has several early returns and changing its signature
     // would mean touching all of them for one number.
     std::atomic<int> lastFlushCount{0};
+    // Wall-clock and local IP at the previous heartbeat.
+    //
+    // Two causes of "the agent went disconnected on its own" that no amount of
+    // network error reporting can explain, because nothing fails:
+    //
+    //   * the machine SLEPT. A laptop that suspends stops heartbeating, the
+    //     server's 120s cutoff elapses, and the dashboard shows disconnected.
+    //     On resume everything works again and there is not one error in the
+    //     log, because nothing went wrong - the agent simply was not running.
+    //   * the IP CHANGED. Wi-Fi roam, VPN up or down, docking station. The
+    //     endpoint is a different machine on the network than the one the
+    //     server last heard from.
+    //
+    // A steady clock cannot see the first: it does not advance while suspended,
+    // so the gap is invisible to it. Comparing it against the WALL clock is
+    // what makes a suspend detectable at all.
+    std::atomic<long long> lastBeatWallMs{0};
+    std::mutex             lastIpMutex;
+    std::string            lastKnownIp;
+
+    static long long NowWallMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch()).count();
+    }
+
+    // Did the machine sleep since the last heartbeat? Returns seconds, or 0.
+    long long DetectSuspendGap() {
+        const long long nowWall = NowWallMs();
+        const long long prev = lastBeatWallMs.exchange(nowWall);
+        if (!prev) return 0;
+        const long long wallGapS = (nowWall - prev) / 1000;
+        // Allowed: the interval, its longest backoff, and generous slack.
+        const long long expected = (config.heartbeatInterval > 30
+                                        ? config.heartbeatInterval : 30) + 60;
+        return wallGapS > expected ? wallGapS : 0;
+    }
+
+    void NoteIpIfChanged() {
+        std::string ip;
+        try { ip = GetRealIPAddress(); } catch (...) { return; }
+        if (ip.empty()) return;
+        std::lock_guard<std::mutex> lk(lastIpMutex);
+        if (lastKnownIp.empty()) { lastKnownIp = ip; return; }
+        if (lastKnownIp != ip) {
+            logger.Warning("this endpoint's IP changed from " + lastKnownIp + " to " + ip +
+                           " - a roam, VPN change or dock. The server may have been "
+                           "talking to the old address.");
+            lastKnownIp = ip;
+        }
+    }
 
     static long long NowMs() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -6249,6 +6299,19 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
     void HeartbeatLoop() {
          while (running) {
              try {
+                 // Before anything else: was this machine asleep? If so, say so
+                 // plainly. Otherwise the log shows a clean heartbeat, then a
+                 // clean heartbeat eight hours later, and an operator is left
+                 // wondering why the dashboard called the agent disconnected all
+                 // night when nothing failed.
+                 const long long slept = DetectSuspendGap();
+                 if (slept) {
+                     logger.Warning("no heartbeat for " + std::to_string(slept) + "s of wall "
+                                    "clock - this machine was asleep, hibernating or the agent "
+                                    "was not running. The server will have shown this endpoint "
+                                    "as DISCONNECTED for that period. Nothing failed.");
+                 }
+                 NoteIpIfChanged();
                  SendHeartbeat();
              } catch (...) {
                  // Never fatal. A dead heartbeat thread is indistinguishable

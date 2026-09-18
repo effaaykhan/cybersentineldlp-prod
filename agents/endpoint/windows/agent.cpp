@@ -812,7 +812,12 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
         // service should be growing without limit. This is the agent's worst
         // resource behaviour and it accumulates in silence: no error, no
         // warning, just a directory that never stops getting bigger.
-        static const int KEEP_ROTATED_LOGS = 5;
+        // Defaults, until the config is read. The logger exists before
+        // AgentConfig does - it has to, or nothing could report a config
+        // failure - so retention starts at the documented default and is
+        // updated once the file has been parsed.
+        std::atomic<int> retentionDays{14};
+        std::atomic<int> retentionMaxFiles{5};
 
         // Delete all but the newest KEEP_ROTATED_LOGS rotations.
         //
@@ -820,8 +825,10 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
         // %Y%m%d_%H%M%S, which sorts chronologically as text, and a name cannot
         // be changed by a backup tool or an antivirus scan touching the file the
         // way mtime can.
-        void PruneRotatedLogs() {
+        void PruneRotatedLogs(int retentionDays, int maxFiles) {
             try {
+                // Both unlimited: nothing to do, and say nothing about it.
+                if (retentionDays <= 0 && maxFiles <= 0) return;
                 const fs::path live(logFilePath);
                 const fs::path dir = live.parent_path();
                 const std::string prefix = live.filename().string() + ".";
@@ -852,18 +859,51 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
                     }
                     if (wellFormed) rotated.push_back(name);
                 }
-                if ((int)rotated.size() <= KEEP_ROTATED_LOGS) return;
-
                 std::sort(rotated.begin(), rotated.end());        // oldest first
-                const int drop = (int)rotated.size() - KEEP_ROTATED_LOGS;
+
+                // Two independent limits, applied together: a rotation goes if
+                // it fails EITHER, so whichever binds first wins. Age alone
+                // cannot bound disk - a chatty endpoint can rotate 10MB several
+                // times a day, and "keep 14 days" of that is gigabytes - and a
+                // count alone cannot express a retention policy in the terms
+                // anyone actually writes one in. Zero disables a limit.
+                std::set<std::string> doomed;
+
+                if (maxFiles > 0 && (int)rotated.size() > maxFiles) {
+                    const int drop = (int)rotated.size() - maxFiles;
+                    for (int i = 0; i < drop; ++i) doomed.insert(rotated[i]);
+                }
+
+                if (retentionDays > 0) {
+                    // The cutoff is compared against the name, not the file's
+                    // mtime: a backup tool or an antivirus scan touching a file
+                    // rewrites mtime and would make an old log look new. The
+                    // suffix this code wrote is the honest timestamp.
+                    const auto cutoff = std::chrono::system_clock::now() -
+                                        std::chrono::hours(24 * retentionDays);
+                    const std::time_t ct = std::chrono::system_clock::to_time_t(cutoff);
+                    std::tm ctm; localtime_s(&ctm, &ct);
+                    char cutoffStamp[32];
+                    strftime(cutoffStamp, sizeof(cutoffStamp), "%Y%m%d_%H%M%S", &ctm);
+                    for (const auto& name : rotated) {
+                        if (name.substr(prefix.size()) < std::string(cutoffStamp)) {
+                            doomed.insert(name);
+                        }
+                    }
+                }
+
+                if (doomed.empty()) return;
                 int removed = 0;
-                for (int i = 0; i < drop; ++i) {
+                for (const auto& name : doomed) {
                     std::error_code rm;
-                    if (fs::remove(dir / rotated[i], rm) && !rm) ++removed;
+                    if (fs::remove(dir / name, rm) && !rm) ++removed;
                 }
                 if (removed > 0) {
-                    Info("Pruned " + std::to_string(removed) + " old rotated log(s); "
-                         "keeping the newest " + std::to_string(KEEP_ROTATED_LOGS));
+                    Info("Pruned " + std::to_string(removed) + " rotated log(s) (keeping " +
+                         (maxFiles > 0 ? std::to_string(maxFiles) + " newest"
+                                       : std::string("unlimited count")) + ", " +
+                         (retentionDays > 0 ? std::to_string(retentionDays) + " days"
+                                            : std::string("unlimited age")) + ")");
                 }
             } catch (...) {
                 // Housekeeping must never take the logger down with it.
@@ -916,6 +956,24 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
         void Debug(const std::string& message) {
             Log("DEBUG", message);
         }
+
+        // Applied from agent_config.json once it has been read, and re-applied
+        // whenever it changes. 0 means unlimited for that limit; both 0 keeps
+        // every rotation forever, which is the pre-retention behaviour, chosen
+        // deliberately rather than by omission.
+        void SetLogRetention(int days, int maxFiles) {
+            const int d = days < 0 ? 14 : days;
+            const int f = maxFiles < 0 ? 5 : maxFiles;
+            const bool changed = (retentionDays.exchange(d) != d) ||
+                                 (retentionMaxFiles.exchange(f) != f);
+            if (changed) {
+                Info(std::string("Log retention: ") +
+                     (d > 0 ? std::to_string(d) + " days" : "unlimited age") + ", " +
+                     (f > 0 ? std::to_string(f) + " rotations" : "unlimited count") +
+                     (d <= 0 && f <= 0 ? " - rotated logs will never be deleted" : ""));
+                PruneRotatedLogs(d, f);
+            }
+        }
         
     private:
         void OpenLogFile() {
@@ -965,7 +1023,7 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
                         
                         Info("Log rotated: Previous log saved to " + rotatedPath);
                         Info("Log file size was: " + std::to_string(fileSize) + " bytes");
-                        PruneRotatedLogs();
+                        PruneRotatedLogs(retentionDays.load(), retentionMaxFiles.load());
                     }
                 }
             } catch (const std::exception& e) {
@@ -1030,6 +1088,23 @@ void Log(const std::string& level, const std::string& message) {
         std::string agentName;
         std::string serverUrl;
         int heartbeatInterval = 3;
+        // Rotated-log retention. Two independent limits; a rotation is deleted
+        // when it fails EITHER, so whichever binds first wins.
+        //
+        //   absent, blank or unparseable -> the default below
+        //   0                            -> UNLIMITED for that limit
+        //   N > 0                        -> the limit
+        //
+        // Both 0 restores the original behaviour - keep every rotation forever -
+        // but as a deliberate choice rather than an oversight.
+        //
+        // There is intentionally no value meaning "keep no rotations at all".
+        // The rotated log is where the explanation of a disconnect, a crash or a
+        // missed block lives; a setting whose effect is to destroy that evidence
+        // on a security agent is not worth offering. The smallest useful answer
+        // is one day, or one file.
+        int logRetentionDays     = 14;
+        int logRetentionMaxFiles = 5;
         int policySyncInterval = 60;
 
         // What to do when the DLP server can't answer (timeout, 5xx, exception).
@@ -1178,6 +1253,19 @@ void Log(const std::string& level, const std::string& message) {
                     heartbeatInterval = 3;
                 }
                 
+                // Log retention. Blank or unparseable keeps the default;
+                // an explicit 0 means unlimited and is honoured as given.
+                auto readRetention = [this, &content](const char* key, int dflt) -> int {
+                    const std::string v = ExtractJsonValue(content, key);
+                    if (v.empty()) return dflt;
+                    try {
+                        const int n = std::stoi(v);
+                        return n < 0 ? dflt : n;      // negative is meaningless
+                    } catch (...) { return dflt; }
+                };
+                logRetentionDays     = readRetention("log_retention_days", 14);
+                logRetentionMaxFiles = readRetention("log_retention_max_files", 5);
+
                 // Extract policy_sync_interval
                 std::string psInterval = ExtractJsonValue(content, "policy_sync_interval");
                 if (!psInterval.empty()) {
@@ -4515,6 +4603,9 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          logger.Info("Agent version: " + std::string(AGENT_VERSION));
          logger.Info("Server URL: " + config.serverUrl);
          logger.Info("Agent ID: " + config.agentId);
+         // Now that the config has been read, apply its retention settings. The
+         // logger has been running on defaults until this point.
+         logger.SetLogRetention(config.logRetentionDays, config.logRetentionMaxFiles);
          
          running = true;
          

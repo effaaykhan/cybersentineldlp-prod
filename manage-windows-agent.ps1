@@ -1070,6 +1070,12 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
         file_extensions = @('.pdf','.docx','.xlsx','.csv','.txt','.json','.xml','.sql','.pem','.key','.env','.conf')
       }
       quarantine_path = "$DATA_DIR\quarantine"; log_path = "$DATA_DIR\logs"; cache_path = "$DATA_DIR\cache"
+      # Rotated-log retention. A rotation is deleted when it fails EITHER limit,
+      # so whichever binds first wins - age alone cannot bound disk, because a
+      # busy endpoint rotates 10MB several times a day. 0 means unlimited for
+      # that limit; both 0 keeps every rotation forever.
+      log_retention_days = 14
+      log_retention_max_files = 5
     }
     # Identity is assigned HERE rather than left to the agent to mint on first
     # run. Two reasons:

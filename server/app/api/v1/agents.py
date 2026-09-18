@@ -1152,6 +1152,41 @@ class AgentPolicySyncResponse(BaseModel):
     generated_at: datetime
     policy_count: int
     policies: Dict[str, Any] = Field(default_factory=dict)
+    # Operational settings that are not policy, delivered on the same channel
+    # because it already exists, is versioned, runs every 60s and is cached for
+    # offline use. An agent too old to know this field ignores it, and an agent
+    # that has never synced falls back to its own agent_config.json - so this is
+    # additive in both directions.
+    settings: Dict[str, Any] = Field(default_factory=dict)
+
+
+async def _agent_settings(db: AsyncSession) -> Dict[str, Any]:
+    """Operational settings every agent should apply, from retention_config.
+
+    Read failures return {} rather than raising: a missing row, or a server
+    mid-upgrade whose columns do not exist yet, must not break policy sync. An
+    empty dict leaves the agent on whatever its own config says, which is the
+    same thing that happens when it cannot reach the server at all.
+    """
+    try:
+        from sqlalchemy import select
+        from app.models.retention_config import RetentionConfig
+        row = (await db.execute(
+            select(RetentionConfig).where(RetentionConfig.id == 1))).scalar_one_or_none()
+        if row is None:
+            return {"log_retention_days": 14, "log_retention_max_files": 5}
+        return {
+            "log_retention_days": row.agent_log_retention_days,
+            "log_retention_max_files": row.agent_log_retention_max_files,
+        }
+    except Exception as e:  # noqa: BLE001
+        # Never fail a policy sync over settings - but never fail SILENTLY
+        # either. An empty dict leaves every agent on its local config, which
+        # looks exactly like "the feature does not work" and would be blamed on
+        # the agent rather than on the server that could not answer.
+        logger.warning("could not read agent settings; agents keep their local "
+                       "configuration", error=str(e))
+        return {}
 
 
 _agent_policy_transformer = AgentPolicyTransformer()
@@ -1232,6 +1267,7 @@ async def sync_agent_policies(
                 generated_at=datetime.now(timezone.utc),
                 policy_count=0,
                 policies={},
+                settings=await _agent_settings(db),
             )
         return AgentPolicySyncResponse(
             status="updated",
@@ -1239,6 +1275,7 @@ async def sync_agent_policies(
             generated_at=datetime.now(timezone.utc),
             policy_count=0,
             policies={},
+            settings=await _agent_settings(db),
         )
 
     cache_service: Optional[CacheService] = None
@@ -1284,6 +1321,7 @@ async def sync_agent_policies(
             generated_at=generated_at,
             policy_count=bundle.get("policy_count", 0),
             policies={},
+            settings=await _agent_settings(db),
         )
 
     logger.info(
@@ -1300,6 +1338,7 @@ async def sync_agent_policies(
         generated_at=generated_at,
         policy_count=bundle.get("policy_count", 0),
         policies=bundle.get("policies", {}),
+        settings=await _agent_settings(db),
     )
 
 

@@ -293,6 +293,19 @@ async def _auto_init_schema_and_admin():
                 "ADD COLUMN IF NOT EXISTS decision VARCHAR(10) NOT NULL DEFAULT 'allow'"
             ))
 
+        # retention_config gained the two agent-log columns. The ORM declares
+        # them with server defaults, so a FRESH database gets them from
+        # create_all - but an existing deployment's table was built before they
+        # existed and create_all never alters an existing table. Without this an
+        # upgraded server raises UndefinedColumn on the first read.
+        async with _db.postgres_engine.begin() as conn:
+            for _col, _default in (("agent_log_retention_days", "14"),
+                                   ("agent_log_retention_max_files", "5")):
+                await conn.execute(text(
+                    f"ALTER TABLE retention_config ADD COLUMN IF NOT EXISTS {_col} "
+                    f"INTEGER NOT NULL DEFAULT {_default}"
+                ))
+
         # app_catalog — which web destinations are webmail / cloud / collaboration
         # / GenAI. Seeded from core.web_activity.DEFAULT_CATALOG so a fresh
         # deployment can classify a ChatGPT tab without anyone running a

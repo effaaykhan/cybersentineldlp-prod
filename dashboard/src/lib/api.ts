@@ -846,6 +846,11 @@ export const updateSharingConfig = async (
 export type RetentionConfig = {
   event_retention_days: number
   opensearch_retention_days: number
+  // Endpoint agent log retention. Not subject to the 90-day compliance floor
+  // above: that governs how long the SERVER keeps evidence, these are an
+  // endpoint's own disk budget. 0 means unlimited for either.
+  agent_log_retention_days: number
+  agent_log_retention_max_files: number
   minimum_days: number
   source: 'database' | 'environment'
   updated_at: string | null
@@ -872,7 +877,12 @@ export const getAbout = async (): Promise<AboutInfo> => {
   return data
 }
 export const updateRetentionConfig = async (
-  body: { event_retention_days: number; opensearch_retention_days: number },
+  body: {
+    event_retention_days: number
+    opensearch_retention_days: number
+    agent_log_retention_days?: number
+    agent_log_retention_max_files?: number
+  },
 ): Promise<RetentionConfig> => {
   const { data } = await apiClient.put('/system/retention', body)
   return data

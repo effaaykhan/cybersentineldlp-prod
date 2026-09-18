@@ -5457,6 +5457,29 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          }
      }
      
+     // Settings the server sends alongside policy.
+     //
+     // Absent -> leave the agent on whatever its own agent_config.json said.
+     // That is the same outcome as an unreachable server, and it means an older
+     // server, or one that has never had these set, cannot silently reset an
+     // endpoint's configuration to something nobody chose.
+     void ApplyAgentSettings(const std::string& response) {
+         try {
+             const std::string days  = config.ExtractJsonValue(response, "log_retention_days");
+             const std::string files = config.ExtractJsonValue(response, "log_retention_max_files");
+             if (days.empty() && files.empty()) return;
+             int d = config.logRetentionDays, f = config.logRetentionMaxFiles;
+             if (!days.empty())  { try { d = std::stoi(days);  } catch (...) {} }
+             if (!files.empty()) { try { f = std::stoi(files); } catch (...) {} }
+             if (d < 0 || f < 0) return;        // meaningless; keep what we have
+             // Logs only on change, and prunes immediately if the new limits bite.
+             logger.SetLogRetention(d, f);
+         } catch (...) {
+             // Settings are never worth failing a policy sync over.
+         }
+     }
+     
+
      void SyncPolicies(bool initial = false) {
          try {
              logger.Info("Syncing policy bundle from server...");
@@ -5477,6 +5500,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              
              if (status == 200) {
                  logger.Debug("Policy sync response (first 1000 chars): " + response.substr(0, 1000));
+                 // Operational settings ride the policy channel. Applied on EVERY 200,
+                 // including up_to_date: most syncs report no policy change, and a
+                 // setting delivered only alongside a policy change would almost never
+                 // arrive.
+                 ApplyAgentSettings(response);
                  
                  if (response.find("\"status\":\"up_to_date\"") != std::string::npos) {
                      logger.Info("Agent policy bundle up to date");

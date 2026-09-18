@@ -86,6 +86,10 @@ def _uid(user):
 class RetentionUpdate(BaseModel):
     event_retention_days: int
     opensearch_retention_days: int
+    # Optional: omitting them leaves the stored values alone, so an older
+    # dashboard that does not know about these cannot silently reset them.
+    agent_log_retention_days: Optional[int] = None
+    agent_log_retention_max_files: Optional[int] = None
 
 
 def _retention_out(row: Optional[RetentionConfig]) -> Dict[str, Any]:
@@ -94,6 +98,8 @@ def _retention_out(row: Optional[RetentionConfig]) -> Dict[str, Any]:
             "event_retention_days": max(MIN_RETENTION_DAYS, settings.EVENT_RETENTION_DAYS),
             "opensearch_retention_days": max(MIN_RETENTION_DAYS, settings.OPENSEARCH_RETENTION_DAYS),
             "minimum_days": MIN_RETENTION_DAYS,
+            "agent_log_retention_days": 14,
+            "agent_log_retention_max_files": 5,
             "source": "environment",
             "updated_at": None,
         }
@@ -101,6 +107,8 @@ def _retention_out(row: Optional[RetentionConfig]) -> Dict[str, Any]:
         "event_retention_days": row.event_retention_days,
         "opensearch_retention_days": row.opensearch_retention_days,
         "minimum_days": MIN_RETENTION_DAYS,
+        "agent_log_retention_days": row.agent_log_retention_days,
+        "agent_log_retention_max_files": row.agent_log_retention_max_files,
         "source": "database",
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -129,10 +137,24 @@ async def update_retention(
         db.add(row)
     row.event_retention_days = body.event_retention_days
     row.opensearch_retention_days = body.opensearch_retention_days
+    # The 90-day floor above is about how long THIS server keeps evidence. These
+    # are an endpoint's own disk budget and are deliberately not subject to it -
+    # a laptop holding 90 days of 10MB rotations would be holding gigabytes.
+    # 0 means unlimited; negative is meaningless and rejected.
+    if body.agent_log_retention_days is not None:
+        if body.agent_log_retention_days < 0:
+            raise HTTPException(400, "agent_log_retention_days cannot be negative (0 = unlimited)")
+        row.agent_log_retention_days = body.agent_log_retention_days
+    if body.agent_log_retention_max_files is not None:
+        if body.agent_log_retention_max_files < 0:
+            raise HTTPException(400, "agent_log_retention_max_files cannot be negative (0 = unlimited)")
+        row.agent_log_retention_max_files = body.agent_log_retention_max_files
     row.updated_by = _uid(current_user)
     await db.commit()
     await db.refresh(row)
     await audit_log(_uid(current_user), "system.retention.update",
                     {"event_retention_days": row.event_retention_days,
-                     "opensearch_retention_days": row.opensearch_retention_days})
+                     "opensearch_retention_days": row.opensearch_retention_days,
+                     "agent_log_retention_days": row.agent_log_retention_days,
+                     "agent_log_retention_max_files": row.agent_log_retention_max_files})
     return _retention_out(row)

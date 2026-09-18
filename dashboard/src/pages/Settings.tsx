@@ -25,7 +25,12 @@ export default function Settings() {
 
   const [about, setAbout] = useState<AboutInfo | null>(null)
   const [retention, setRetention] = useState<RetentionConfig | null>(null)
-  const [retForm, setRetForm] = useState({ event_retention_days: 180, opensearch_retention_days: 90 })
+  const [retForm, setRetForm] = useState({
+    event_retention_days: 180,
+    opensearch_retention_days: 90,
+    agent_log_retention_days: 14,
+    agent_log_retention_max_files: 5,
+  })
   const [savingRetention, setSavingRetention] = useState(false)
 
   // Real component versions for the About card. No super-admin gate: any
@@ -40,7 +45,14 @@ export default function Settings() {
     getRetentionConfig()
       .then((r) => {
         setRetention(r)
-        setRetForm({ event_retention_days: r.event_retention_days, opensearch_retention_days: r.opensearch_retention_days })
+        setRetForm({
+          event_retention_days: r.event_retention_days,
+          opensearch_retention_days: r.opensearch_retention_days,
+          // ?? rather than ||: 0 is a legitimate value meaning unlimited,
+          // and || would silently rewrite it to the default.
+          agent_log_retention_days: r.agent_log_retention_days ?? 14,
+          agent_log_retention_max_files: r.agent_log_retention_max_files ?? 5,
+        })
       })
       .catch(() => { /* non-fatal; card shows defaults */ })
   }, [isSuperAdmin])
@@ -56,7 +68,14 @@ export default function Settings() {
     try {
       const r = await updateRetentionConfig(retForm)
       setRetention(r)
-      setRetForm({ event_retention_days: r.event_retention_days, opensearch_retention_days: r.opensearch_retention_days })
+      setRetForm({
+          event_retention_days: r.event_retention_days,
+          opensearch_retention_days: r.opensearch_retention_days,
+          // ?? rather than ||: 0 is a legitimate value meaning unlimited,
+          // and || would silently rewrite it to the default.
+          agent_log_retention_days: r.agent_log_retention_days ?? 14,
+          agent_log_retention_max_files: r.agent_log_retention_max_files ?? 5,
+        })
       toast.success('Log retention updated')
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to update retention')
@@ -377,6 +396,34 @@ export default function Settings() {
               <p className="text-xs text-cs-muted">
                 Minimum {retention?.minimum_days ?? 90} days — enforced server-side. Applied daily by the cleanup task; logs newer than the window are always retained.
               </p>
+
+                {/* Endpoint agent log retention. Deliberately NOT under the compliance
+                    floor above: that governs how long this SERVER keeps evidence, these
+                    are an endpoint's own disk budget. */}
+                <div className="pt-4 border-t border-cs-hair-2">
+                  <h4 className="text-sm font-semibold text-cs-ink mb-1">Agent log retention (endpoints)</h4>
+                  <p className="text-xs text-cs-muted mb-3">
+                    How much rotated log each endpoint keeps. A rotation is deleted when it exceeds
+                    either limit, whichever comes first. <strong>0 means unlimited.</strong> Delivered
+                    to agents on policy sync, so a change reaches every endpoint within a minute.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-cs-ink-2 mb-2">Keep for (days)</label>
+                      <input type="number" min={0} className="input num"
+                        value={retForm.agent_log_retention_days} disabled={!isSuperAdmin}
+                        onChange={(e) => setRetForm({ ...retForm, agent_log_retention_days: Number(e.target.value) })} />
+                      <p className="mt-1 text-xs text-cs-muted">0 = never delete by age.</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-cs-ink-2 mb-2">Keep at most (files)</label>
+                      <input type="number" min={0} className="input num"
+                        value={retForm.agent_log_retention_max_files} disabled={!isSuperAdmin}
+                        onChange={(e) => setRetForm({ ...retForm, agent_log_retention_max_files: Number(e.target.value) })} />
+                      <p className="mt-1 text-xs text-cs-muted">0 = never delete by count. Each rotation is up to 10&nbsp;MB.</p>
+                    </div>
+                  </div>
+                </div>
               {isSuperAdmin && (
                 <button type="submit" disabled={savingRetention}
                   className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">

@@ -803,6 +803,72 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
         std::string logFilePath;
         std::chrono::system_clock::time_point lastRotationCheck;
         const size_t MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
+        // How many rotated logs to keep. Five, so the ceiling is ~60MB: the
+        // 10MB live file plus five rotations.
+        //
+        // Rotation renamed the old file and kept it FOREVER - nothing deleted
+        // anything, ever. A busy endpoint produced a 10MB file per rotation
+        // indefinitely, inside C:\Program Files, which is the last place a
+        // service should be growing without limit. This is the agent's worst
+        // resource behaviour and it accumulates in silence: no error, no
+        // warning, just a directory that never stops getting bigger.
+        static const int KEEP_ROTATED_LOGS = 5;
+
+        // Delete all but the newest KEEP_ROTATED_LOGS rotations.
+        //
+        // Selection is by FILENAME, not by write time. The suffix is
+        // %Y%m%d_%H%M%S, which sorts chronologically as text, and a name cannot
+        // be changed by a backup tool or an antivirus scan touching the file the
+        // way mtime can.
+        void PruneRotatedLogs() {
+            try {
+                const fs::path live(logFilePath);
+                const fs::path dir = live.parent_path();
+                const std::string prefix = live.filename().string() + ".";
+                if (dir.empty() || !fs::exists(dir)) return;
+
+                std::vector<std::string> rotated;
+                std::error_code ec;
+                for (const auto& e : fs::directory_iterator(dir, ec)) {
+                    if (ec) return;
+                    if (!e.is_regular_file(ec)) continue;
+                    const std::string name = e.path().filename().string();
+                    // The name must be the live log plus EXACTLY our rotation
+                    // suffix: ".YYYYMMDD_HHMMSS".
+                    //
+                    // A prefix match alone is not safe. Anything sharing the
+                    // prefix - an operator's "cybersentineldlp_agent.log.bak",
+                    // a copy taken for a support bundle - would be counted as a
+                    // rotation and could be deleted, because this function's
+                    // whole job is deleting the ones that sort earliest. This
+                    // code only removes files it can prove it wrote itself.
+                    if (name.size() != prefix.size() + 15) continue;
+                    if (name.compare(0, prefix.size(), prefix) != 0) continue;
+                    const std::string stamp = name.substr(prefix.size());
+                    bool wellFormed = (stamp[8] == '_');
+                    for (size_t i = 0; wellFormed && i < stamp.size(); ++i) {
+                        if (i == 8) continue;
+                        if (stamp[i] < '0' || stamp[i] > '9') wellFormed = false;
+                    }
+                    if (wellFormed) rotated.push_back(name);
+                }
+                if ((int)rotated.size() <= KEEP_ROTATED_LOGS) return;
+
+                std::sort(rotated.begin(), rotated.end());        // oldest first
+                const int drop = (int)rotated.size() - KEEP_ROTATED_LOGS;
+                int removed = 0;
+                for (int i = 0; i < drop; ++i) {
+                    std::error_code rm;
+                    if (fs::remove(dir / rotated[i], rm) && !rm) ++removed;
+                }
+                if (removed > 0) {
+                    Info("Pruned " + std::to_string(removed) + " old rotated log(s); "
+                         "keeping the newest " + std::to_string(KEEP_ROTATED_LOGS));
+                }
+            } catch (...) {
+                // Housekeeping must never take the logger down with it.
+            }
+        }
         
     public:
         Logger(const std::string& filename = "cybersentineldlp_agent.log") {
@@ -899,6 +965,7 @@ int RunHidden(const std::string& commandLine, DWORD timeoutMs = 30000) {
                         
                         Info("Log rotated: Previous log saved to " + rotatedPath);
                         Info("Log file size was: " + std::to_string(fileSize) + " bytes");
+                        PruneRotatedLogs();
                     }
                 }
             } catch (const std::exception& e) {

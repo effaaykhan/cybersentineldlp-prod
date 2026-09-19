@@ -85,9 +85,19 @@ _LOCAL_ONLY = {
     "tesseract-installer.exe": "application/octet-stream",
 }
 
+# The code-signing certificate's PUBLIC half, and its thumbprint.
+#
+# Published so an endpoint can trust this publisher and then verify the agent it
+# downloads. Public-key material only: the private key never leaves CI, where it
+# lives as a secret and is deleted from the runner after signing.
+CERT_NAME  = "csdlp-signing.cer"
+THUMB_NAME = "csdlp-signing.thumbprint"
+
 _ARTIFACTS = {
     SCRIPT_NAME: (SCRIPT_NAME, "text/plain"),
     DEFENDER_SCRIPT_NAME: (DEFENDER_SCRIPT_NAME, "text/plain"),
+    CERT_NAME:  (f"agents/endpoint/windows/{CERT_NAME}",  "application/x-x509-ca-cert"),
+    THUMB_NAME: (f"agents/endpoint/windows/{THUMB_NAME}", "text/plain"),
     EXE_NAME: (f"agents/endpoint/windows/{EXE_NAME}", "application/octet-stream"),
     SUM_NAME: (f"agents/endpoint/windows/{SUM_NAME}", "text/plain"),
     VER_NAME: (f"agents/endpoint/windows/{VER_NAME}", "text/plain"),

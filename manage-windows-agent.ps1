@@ -698,6 +698,119 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     $out | Select-Object -Unique
   }
 
+  # ── Code signing: trust the publisher, then verify what we downloaded ─────
+  #
+  # This replaces the Defender exclusion that used to live here. An exclusion
+  # tells antivirus to stop looking at a directory; a signature tells it who
+  # built the file, which is the question it was actually asking. One of those
+  # is why this installer was classified Trojan:PowerShell/Killav.
+  #
+  # HONESTY ABOUT THE TRUST MODEL: the certificate is fetched from the DLP
+  # server over plain HTTP. Anyone able to tamper with that connection could
+  # substitute their own root - and would then be trusted by every endpoint for
+  # ALL software, not merely this agent. That is a wider blast radius than the
+  # exe this installer already downloads and runs from the same connection, so
+  # it is worth stating rather than glossing.
+  #
+  # The safer deployment on a domain is Group Policy: Computer Configuration ->
+  # Policies -> Windows Settings -> Security Settings -> Public Key Policies,
+  # into BOTH Trusted Root Certification Authorities and Trusted Publishers.
+  # One policy, no per-machine step, and no certificate over HTTP. The
+  # thumbprint is printed below every time so it can be compared against the
+  # one your build actually used.
+  function Install-PublisherCertificate {
+    param([string]$Base)
+    if (-not $Base) { return $false }
+
+    $certUrl = "$Base/csdlp-signing.cer"
+    if (-not (Test-ArtifactUrl $certUrl $GH_HEADERS)) {
+      Hint 'This server publishes no signing certificate - the agent build is unsigned.'
+      return $false
+    }
+
+    $certPath = Join-Path $env:TEMP 'csdlp-signing.cer'
+    try {
+      Invoke-WebRequest -Uri $certUrl -OutFile $certPath -UseBasicParsing `
+                        -Headers $GH_HEADERS -TimeoutSec 30
+      $cert = New-Object Security.Cryptography.X509Certificates.X509Certificate2 $certPath
+    } catch {
+      Warn "Could not read the signing certificate: $($_.Exception.Message)"
+      Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+      return $false
+    }
+
+    # A certificate carrying a private key has no business being published, and
+    # would mean the signing key had leaked. Refuse it rather than install it.
+    if ($cert.HasPrivateKey) {
+      Err 'The published certificate contains a PRIVATE KEY. Refusing to install it.'
+      Err 'The signing key may be compromised - regenerate it before going further.'
+      Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+      return $false
+    }
+
+    Field 'Publisher'  $cert.Subject
+    Field 'Thumbprint' $cert.Thumbprint
+    Field 'Valid to'   $cert.NotAfter.ToString('yyyy-MM-dd')
+    if ($cert.NotAfter -lt (Get-Date)) {
+      Warn 'This certificate has EXPIRED. Signatures made with it will not validate.'
+    }
+
+    $already = $true
+    foreach ($store in 'Root','TrustedPublisher') {
+      $have = Get-ChildItem "Cert:\LocalMachine\$store" -ErrorAction SilentlyContinue |
+              Where-Object { $_.Thumbprint -eq $cert.Thumbprint }
+      if (-not $have) { $already = $false }
+    }
+    if ($already) {
+      Ok 'Publisher already trusted on this device'
+      Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+      return $true
+    }
+
+    # Both stores, or it does not work: Root makes the chain validate,
+    # TrustedPublisher makes Windows accept software signed by it without
+    # prompting. Installing only one leaves the signature untrusted.
+    $ok = $true
+    foreach ($store in 'Root','TrustedPublisher') {
+      try {
+        Import-Certificate -FilePath $certPath -CertStoreLocation "Cert:\LocalMachine\$store" `
+          -ErrorAction Stop | Out-Null
+      } catch {
+        Err "Could not add the certificate to $store : $($_.Exception.Message)"
+        $ok = $false
+      }
+    }
+    Remove-Item $certPath -Force -ErrorAction SilentlyContinue
+    if ($ok) {
+      Ok 'Publisher trusted (Root + Trusted Publishers)'
+      Hint 'Compare the thumbprint above against your build before relying on this.'
+    }
+    return $ok
+  }
+
+  # Is this binary genuinely signed by the publisher we just trusted?
+  #
+  # A stronger check than the SHA-256 sidecar, and a different one: the checksum
+  # says the file matches what the server published, the signature says who
+  # built it. A server that has been tampered with can publish a matching
+  # checksum for a file it altered; it cannot forge a signature without the key.
+  function Test-AgentSignature {
+    param([string]$ExePath)
+    try {
+      $sig = Get-AuthenticodeSignature -FilePath $ExePath -ErrorAction Stop
+    } catch {
+      Warn "Could not read the signature: $($_.Exception.Message)"
+      return $null
+    }
+    if ($sig.Status -eq 'NotSigned') { return $null }   # unsigned build
+    if ($sig.Status -eq 'Valid') {
+      Ok "Signature valid - $($sig.SignerCertificate.Subject)"
+      return $true
+    }
+    Err "Signature is NOT valid: $($sig.Status) - $($sig.StatusMessage)"
+    return $false
+  }
+
   function Register-AgentTask {
     param([string]$ExePath)
     try {
@@ -897,8 +1010,11 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Ok 'Directories ready'
     # Register the exclusion HERE, not after Step 5 writes the binary: an exe is
     # scanned as it lands, so an exclusion added afterwards protects nothing.
-    # (Defender exclusions are no longer registered from here - see the
-    #  Windows Security note above and manage-windows-defender.ps1.)
+    # Trust the publisher BEFORE the binary is fetched. Defender scans an
+    # exe as it lands, so a signature it cannot validate at that moment is
+    # no better than no signature at all - the same reasoning the old
+    # exclusion was placed here for, answered properly this time.
+    Install-PublisherCertificate $DIST_BASE | Out-Null
 
     # -- Step 4: OCR deps (optional) -----------------------------------------
     Step 4 $TOTAL 'OCR dependencies (Tesseract, optional)'
@@ -1039,6 +1155,19 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
         return
       }
       Ok "SHA-256 verified ($($actual.Substring(0,16))...)"
+
+      # The checksum says the file matches what the server published. The
+      # signature says who built it - a server that has been tampered with can
+      # publish a matching checksum for a file it altered, but cannot forge a
+      # signature without the key. An unsigned build returns $null and is
+      # allowed through on the checksum alone; an INVALID signature is not.
+      $sigOk = Test-AgentSignature $exePath
+      if ($sigOk -eq $false) {
+        Err 'Refusing to install a binary whose signature does not validate.'
+        Remove-Item $exePath -Force -ErrorAction SilentlyContinue
+        return
+      }
+      if ($null -eq $sigOk) { Hint 'This build is unsigned - verified by checksum only.' }
     } else {
       Warn 'No checksum sidecar reachable - integrity check skipped.'
     }
@@ -1190,8 +1319,11 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     if (-not (Test-Path $INSTALL_DIR)) {
       New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
     }
-    # (Defender exclusions are no longer registered from here - see the
-    #  Windows Security note above and manage-windows-defender.ps1.)
+    # Trust the publisher BEFORE the binary is fetched. Defender scans an
+    # exe as it lands, so a signature it cannot validate at that moment is
+    # no better than no signature at all - the same reasoning the old
+    # exclusion was placed here for, answered properly this time.
+    Install-PublisherCertificate $DIST_BASE | Out-Null
     $tmpExe  = Join-Path $INSTALL_DIR ($EXE_NAME + '.download')
 
     # Clear a .download left behind by a run Defender interrupted. Invoke-
@@ -1220,6 +1352,17 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
     $sizeMB = [math]::Round((Get-Item $tmpExe).Length / 1MB, 1)
     Ok "Downloaded + verified ($sizeMB MB, sha $($actual.Substring(0,12))...)"
+
+    # Checked on the TEMP copy, before anything replaces the running agent.
+    # A bad signature here costs a discarded download; the same discovery one
+    # step later would cost the installed agent.
+    $sigOk = Test-AgentSignature $tmpExe
+    if ($sigOk -eq $false) {
+      Err 'Signature invalid - the installed agent has been left untouched.'
+      Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+      return
+    }
+    if ($null -eq $sigOk) { Hint 'This build is unsigned - verified by checksum only.' }
 
     $binaryCurrent = $false
     if (Test-Path $exePath) {

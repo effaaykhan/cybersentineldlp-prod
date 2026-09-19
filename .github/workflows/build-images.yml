@@ -86,6 +86,13 @@ jobs:
           mkdir -p server/agent_dist
           cp manage-windows-agent.ps1 server/agent_dist/
           cp manage-windows-defender.ps1 server/agent_dist/
+          # The signing certificate, when a signed build has produced one. Not
+          # fatal if absent: an unsigned deployment simply has no publisher to
+          # trust, and the installer falls back to checksum verification.
+          cp agents/endpoint/windows/csdlp-signing.cer \
+             agents/endpoint/windows/csdlp-signing.thumbprint \
+             server/agent_dist/ 2>/dev/null || \
+             echo "::warning::no signing certificate to publish (unsigned build)"
           cp agents/endpoint/windows/cybersentineldlp_agent.exe \
              agents/endpoint/windows/cybersentineldlp_agent.exe.sha256 \
              agents/endpoint/windows/cybersentineldlp_agent.exe.version \

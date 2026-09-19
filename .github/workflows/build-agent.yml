@@ -78,6 +78,56 @@ jobs:
           cd agents/endpoint/windows
           bash build.sh
 
+      # Authenticode signature.
+      #
+      # Runs BEFORE the checksum below, because signing rewrites the file - a
+      # hash taken first would describe a binary nobody is ever sent.
+      #
+      # Skipped, loudly, when no certificate is configured. A build that fails
+      # because a secret is missing would block every agent fix on an
+      # administrative task, so an unsigned build still ships and says so.
+      #
+      # Timestamped: without it every signature, including on binaries already
+      # deployed to endpoints, becomes invalid the day the certificate expires.
+      - name: Sign the agent binary
+        id: sign
+        shell: pwsh
+        env:
+          PFX_B64:  ${{ secrets.CODE_SIGNING_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.CODE_SIGNING_PASSWORD }}
+        run: |
+          cd agents/endpoint/windows
+          if ([string]::IsNullOrWhiteSpace($env:PFX_B64)) {
+            Write-Host "::warning::CODE_SIGNING_PFX_BASE64 not set - shipping an UNSIGNED binary."
+            Write-Host "::warning::Endpoints will rely on the SHA-256 sidecar alone, and Defender"
+            Write-Host "::warning::may heuristically quarantine the unsigned exe."
+            "signed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'csdlp-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_B64))
+          try {
+            $pw = ConvertTo-SecureString $env:PFX_PASS -AsPlainText -Force
+            $cert = Get-PfxCertificate -FilePath $pfx -Password $pw
+            $r = Set-AuthenticodeSignature -FilePath cybersentineldlp_agent.exe `
+                   -Certificate $cert -HashAlgorithm SHA256 `
+                   -TimestampServer 'http://timestamp.digicert.com'
+            if ($r.Status -ne 'Valid') { throw "signing failed: $($r.Status) $($r.StatusMessage)" }
+            Write-Host "signed by $($cert.Subject)"
+            Write-Host "thumbprint $($cert.Thumbprint)"
+
+            # The PUBLIC half, published so an endpoint can trust this publisher.
+            # Exported from the same certificate that just signed, so the two can
+            # never describe different keys.
+            Export-Certificate -Cert $cert -FilePath csdlp-signing.cer -Type CERT | Out-Null
+            $cert.Thumbprint | Out-File -FilePath csdlp-signing.thumbprint -Encoding ascii -NoNewline
+            "signed=true" >> $env:GITHUB_OUTPUT
+            "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          } finally {
+            # Never leave a private key on the runner's disk.
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Verify + regenerate sha256
         shell: msys2 {0}
         run: |
@@ -104,6 +154,8 @@ jobs:
             agents/endpoint/windows/cybersentineldlp_agent.exe
             agents/endpoint/windows/cybersentineldlp_agent.exe.sha256
             agents/endpoint/windows/cybersentineldlp_agent.exe.version
+            agents/endpoint/windows/csdlp-signing.cer
+            agents/endpoint/windows/csdlp-signing.thumbprint
           retention-days: 30
 
       - name: Commit the built binary back to the repo
@@ -114,7 +166,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add agents/endpoint/windows/cybersentineldlp_agent.exe \
                   agents/endpoint/windows/cybersentineldlp_agent.exe.sha256 \
-                  agents/endpoint/windows/cybersentineldlp_agent.exe.version
+                  agents/endpoint/windows/cybersentineldlp_agent.exe.version \
+                  agents/endpoint/windows/csdlp-signing.cer \
+                  agents/endpoint/windows/csdlp-signing.thumbprint
           if git diff --cached --quiet; then
             echo "agent binary unchanged — nothing to commit"
             echo "committed=false" >> "$GITHUB_OUTPUT"

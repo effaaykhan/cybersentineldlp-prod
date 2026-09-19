@@ -77,11 +77,11 @@ BEGIN
   BEGIN
     BLOCK "040904b0"
     BEGIN
-      VALUE "CompanyName",      "CyberSentinel"
+      VALUE "CompanyName",      "Virtual Galaxy Infotech Ltd."
       VALUE "FileDescription",  "CyberSentinel DLP Endpoint Agent"
       VALUE "FileVersion",      "${AGENT_VER}"
       VALUE "InternalName",     "cybersentineldlp_agent"
-      VALUE "LegalCopyright",   "Copyright (C) CyberSentinel. All rights reserved."
+      VALUE "LegalCopyright",   "Copyright (C) Virtual Galaxy Infotech Ltd. All rights reserved."
       VALUE "OriginalFilename", "cybersentineldlp_agent.exe"
       VALUE "ProductName",      "CyberSentinel DLP Agent"
       VALUE "ProductVersion",   "${AGENT_VER}"

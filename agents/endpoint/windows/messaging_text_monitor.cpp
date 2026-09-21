@@ -1423,49 +1423,69 @@ IUIAutomationElement* SearchSendButtonUnder(IUIAutomation* uia, HWND rootWnd,
     IUIAutomationElement* placed = nullptr;   // best positional candidate so far
     LONG                  placedLeft = 0;
 
-    VARIANT want; VariantInit(&want);
-    want.vt = VT_I4; want.lVal = kButtonControlTypeId;
-    IUIAutomationCondition* cond = nullptr;
-    if (SUCCEEDED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, want, &cond)) && cond) {
-        IUIAutomationElementArray* arr = nullptr;
-        if (SUCCEEDED(root->FindAll(TreeScope_Descendants, cond, &arr)) && arr) {
-            int n = 0; arr->get_Length(&n);
-            for (int i = 0; i < n && !named; ++i) {
-                if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
-                IUIAutomationElement* el = nullptr;
-                if (FAILED(arr->GetElement(i, &el)) || !el) continue;
-                // No process filter. The root is a window inside the foreground
-                // app's OWN hierarchy, so anything under it belongs to that app
-                // whichever process draws it — and in a WebView2 app that is
-                // never the process that owns the window. Comparing against the
-                // window's pid rejected every button in the app, which is why
-                // "found no Send button" accompanied every other symptom.
+    // Button AND Image, as two filtered passes.
+    //
+    // This asked for Button alone, and the hover probe below has always accepted
+    // either - with a comment explaining exactly why: "Chromium-family apps
+    // expose an icon-only button as a Button whose only child is an Image, and
+    // the hit test under the cursor lands on whichever of the two is innermost."
+    //
+    // So the two paths disagreed about what a send control looks like, and the
+    // search is the one that has to work. Hovering found the button; the tree
+    // walk could not, and a click without a hover first was never inspected.
+    // That is the whole of "Enter blocks, the Send button does not".
+    //
+    // Two passes rather than one OR condition: CreateOrCondition is absent from
+    // the trimmed UIAutomation headers this file is required to build against,
+    // and the same reasoning that spells the control-type constants out by
+    // number applies here. Each pass is still filtered by the provider, which is
+    // what keeps this off the "return every descendant and sift" path that
+    // FindAll over a Chromium document otherwise becomes.
+    const CONTROLTYPEID kWanted[] = { kButtonControlTypeId, kImageControlTypeId };
+    for (const CONTROLTYPEID ctWanted : kWanted) {
+        if (named) break;
+        if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
+        VARIANT want; VariantInit(&want);
+        want.vt = VT_I4; want.lVal = ctWanted;
+        IUIAutomationCondition* cond = nullptr;
+        if (SUCCEEDED(uia->CreatePropertyCondition(UIA_ControlTypePropertyId, want, &cond)) && cond) {
+            IUIAutomationElementArray* arr = nullptr;
+            if (SUCCEEDED(root->FindAll(TreeScope_Descendants, cond, &arr)) && arr) {
+                int n = 0; arr->get_Length(&n);
+                for (int i = 0; i < n && !named; ++i) {
+                    if (deadlineMs && NowSteadyMs() >= deadlineMs) break;
+                    IUIAutomationElement* el = nullptr;
+                    if (FAILED(arr->GetElement(i, &el)) || !el) continue;
+                    // No process filter. The root is a window inside the
+                    // foreground app's OWN hierarchy, so anything under it
+                    // belongs to that app whichever process draws it - and in a
+                    // WebView2 app that is never the process owning the window.
+                    RECT r{};
+                    const bool measured = ElementRect(el, r);
 
-                RECT r{};
-                const bool measured = ElementRect(el, r);
-
-                // Measurable and button-shaped is a condition of the NAME match
-                // too. The only use anything found here is put to is a click
-                // rectangle, so a control we cannot measure is not a candidate,
-                // and a huge one is a container that happens to be named Send.
-                if (measured && ButtonSized(r) && ElementSuggestsSend(el)) {
-                    named = el; continue;                               // caller releases
+                    // Measurable and button-shaped is a condition of the NAME
+                    // match too: the only use anything found here is put to is a
+                    // click rectangle, so a control we cannot measure is not a
+                    // candidate, and a huge one is a container that happens to be
+                    // named Send.
+                    if (measured && ButtonSized(r) && ElementSuggestsSend(el)) {
+                        named = el; continue;                         // caller releases
+                    }
+                    if (composerRect && measured &&
+                        RectBesideComposer(r, *composerRect) &&
+                        (!placed || r.left < placedLeft)) {
+                        if (placed) placed->Release();
+                        placed = el; placedLeft = r.left;
+                        continue;                                     // kept, not released
+                    }
+                    el->Release();
                 }
-
-                if (composerRect && measured &&
-                    RectBesideComposer(r, *composerRect) &&
-                    (!placed || r.left < placedLeft)) {
-                    if (placed) placed->Release();
-                    placed = el; placedLeft = r.left;
-                    continue;                                           // kept, not released
-                }
-                el->Release();
+                arr->Release();
             }
-            arr->Release();
+            cond->Release();
         }
-        cond->Release();
+        VariantClear(&want);
     }
-    VariantClear(&want);
     root->Release();
 
     if (named) {

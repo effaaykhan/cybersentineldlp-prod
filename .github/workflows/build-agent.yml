@@ -109,17 +109,64 @@ jobs:
           try {
             $pw = ConvertTo-SecureString $env:PFX_PASS -AsPlainText -Force
             $cert = Get-PfxCertificate -FilePath $pfx -Password $pw
+
+            # Trust our own root ON THE RUNNER before signing.
+            #
+            # Set-AuthenticodeSignature signs the file and then VALIDATES the
+            # result, and validation walks the chain against this machine's trust
+            # stores. A self-signed certificate terminates in a root the runner
+            # has never heard of, so the signature is written correctly and the
+            # status still comes back:
+            #
+            #   UnknownError - A certificate chain processed, but terminated in a
+            #   root certificate which is not trusted by the trust provider.
+            #
+            # That is a statement about the RUNNER, not about the signature. The
+            # honest fix is to make the check meaningful rather than to accept a
+            # failing status: import the public half here, so "Valid" means the
+            # chain really did validate, exactly as it will on an endpoint that
+            # has been given the same certificate. The runner is ephemeral and
+            # discarded after the job, so nothing outside it is affected.
+            Export-Certificate -Cert $cert -FilePath csdlp-signing.cer -Type CERT | Out-Null
+            # LocalMachine needs elevation; CurrentUser does not and is consulted
+            # for the account doing the signing, so either is enough here.
+            $trusted = $false
+            foreach ($store in 'Cert:\LocalMachine\Root', 'Cert:\CurrentUser\Root') {
+              try {
+                Import-Certificate -FilePath csdlp-signing.cer -CertStoreLocation $store `
+                  -ErrorAction Stop | Out-Null
+                Write-Host "runner trusts the publisher via $store"
+                $trusted = $true
+                break
+              } catch {
+                Write-Host "could not import into ${store}: $($_.Exception.Message)"
+              }
+            }
+            if (-not $trusted) {
+              throw "could not trust the signing certificate on the runner - validation below would fail for that reason alone"
+            }
+
             $r = Set-AuthenticodeSignature -FilePath cybersentineldlp_agent.exe `
                    -Certificate $cert -HashAlgorithm SHA256 `
                    -TimestampServer 'http://timestamp.digicert.com'
             if ($r.Status -ne 'Valid') { throw "signing failed: $($r.Status) $($r.StatusMessage)" }
+
+            # Prove the signature is the one we intended, not merely that some
+            # signature validated: a chain can be valid and belong to a different
+            # certificate entirely.
+            $check = Get-AuthenticodeSignature -FilePath cybersentineldlp_agent.exe
+            if ($check.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+              throw "signed by an unexpected certificate: $($check.SignerCertificate.Thumbprint)"
+            }
+            if (-not $check.TimeStamperCertificate) {
+              Write-Host "::warning::no timestamp was applied - signatures will expire with the certificate"
+            }
             Write-Host "signed by $($cert.Subject)"
             Write-Host "thumbprint $($cert.Thumbprint)"
 
-            # The PUBLIC half, published so an endpoint can trust this publisher.
-            # Exported from the same certificate that just signed, so the two can
-            # never describe different keys.
-            Export-Certificate -Cert $cert -FilePath csdlp-signing.cer -Type CERT | Out-Null
+            # csdlp-signing.cer was written above, from the same certificate that
+            # signed, so the published public half can never describe a different
+            # key than the signature does.
             $cert.Thumbprint | Out-File -FilePath csdlp-signing.thumbprint -Encoding ascii -NoNewline
             "signed=true" >> $env:GITHUB_OUTPUT
             "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT

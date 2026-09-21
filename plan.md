@@ -49,6 +49,18 @@ policy because the channel was missing from `EventsAllowed()`.
 - ✅ Every agent source compiles (case-bridged UIA headers for the local mingw)
 - ✅ VERSION 1.4.8 → 1.4.9
 
+## Follow-on — Agent v1.4.10: the Send button click gate
+- ✅ Diagnosed from the endpoint log, not guessed: click (1856,961) was INSIDE
+  rect [1833,921 1894,982] and refused only for being 3426ms old vs a 3000ms limit
+- ✅ Rect refresh hoisted to the top of SamplerThread (was below a UIA read this
+  file documents taking 7s); loop ticks every 250ms
+- ✅ PublishSendBtn(nullptr) now clears the rect — a lost button was leaving a
+  1046967ms-old rectangle standing, reported as "stale" instead of "no button"
+- ✅ Age limit replaced by the invariant it stood for: trust the rect while
+  GetWindowRect says the window has not moved (3s outright, 30s ceiling)
+- ✅ Confined to the send-rect plumbing; Enter path and 1.4.9 attachment hold untouched
+- ✅ VERSION 1.4.9 → 1.4.10
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

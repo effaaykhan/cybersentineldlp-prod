@@ -8,6 +8,58 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖱 The Send button was found, measured correctly, and refused anyway — Agent v1.4.10 (September 21, 2026)
+
+### Summary
+
+Enter blocked a Restricted message; clicking Send sent it. The endpoint log
+named the cause exactly:
+
+```
+17:43:33.989  click at (1784,793) is outside the Send button rect [1833,921 1894,982]
+17:43:35.054  click at (1856,961) NOT inspected: the rectangle is 3426ms old (limit 3000ms)
+```
+
+(1856,961) is **inside** [1833,921 1894,982]. The button was located, the
+rectangle was right, the click landed on it — and it was refused for being
+426ms over an age limit.
+
+### Two causes
+
+**The rectangle was re-measured last.** The refresh sat at the bottom of
+`SamplerThread`, below the composer read and the classification. That loop ticks
+every 250ms, but this file already documents a Chromium composer read taking
+seven seconds, so the measurement only happened once the slow work above it
+finished. Observed ages: 3426ms, 4574ms, 64473ms. Hoisted to the top of the
+loop, where it is one property read behind nothing that can stall.
+
+**A lost button kept its rectangle.** `PublishSendBtn(nullptr, 0)` released the
+element but left `g_sendRect` / `g_sendAtMs` standing, so clicks were refused as
+"stale" against a rectangle describing a control that no longer existed —
+`1046967ms old`, seventeen minutes. It is now cleared with the element, and such
+a click is reported as "no Send button", which is both true and actionable.
+
+### The age limit itself
+
+A rectangle goes stale when the button **moves**, which happens when its window
+moves or resizes — not when a clock runs out. Inside 3s the cached rectangle is
+trusted outright; beyond that it is trusted for as long as `GetWindowRect` says
+the window is precisely where it was when the measurement was taken (a
+non-blocking user32 call, the only kind the hook may make), up to a 30s ceiling.
+
+A composer growing to two lines still moves the button inside a stationary
+window, and that case falls back to the previous behaviour — the click lands
+outside the cached rectangle and is not inspected, exactly as before. No
+regression, and the common case now works.
+
+### Scope
+
+`messaging_text_monitor.cpp` only, and within it only the Send-button rectangle
+plumbing. The Enter path, the attachment hold added in 1.4.9, and every other
+monitor are untouched.
+
+---
+
 ## 📎 Attachments were sent before their inspection finished — Agent v1.4.9 (September 21, 2026)
 
 ### Summary

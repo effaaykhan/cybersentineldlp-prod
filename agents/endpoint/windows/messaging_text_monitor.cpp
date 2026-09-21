@@ -165,6 +165,13 @@ std::mutex g_sendMx;
 RECT       g_sendRect  = {0, 0, 0, 0};
 DWORD      g_sendPid   = 0;
 long long  g_sendAtMs  = 0;
+// The window the rectangle was measured in, and where that window was at the
+// time. A Send button moves when its window moves; it does not move when the
+// window sits still. That is the fact the age limit below was standing in
+// for, and checking it directly is both cheaper and correct - GetWindowRect
+// is a non-blocking user32 call, safe on the hook thread.
+HWND       g_sendWnd     = nullptr;
+RECT       g_sendWndRect = {0, 0, 0, 0};
 // A swallowed button-down must have its button-up swallowed too, or the app
 // sees a release it never saw pressed and can latch a drag.
 std::atomic<bool> g_swallowNextUp{false};
@@ -3132,6 +3139,16 @@ void PublishSendBtn(IUIAutomationElement* el, DWORD pid) {
         if (el) el->AddRef();
         g_locSendBtn = el; g_locSendBtnPid = pid;
     }
+    // A button we no longer hold has no rectangle. Leaving the last one
+    // standing is why a click was refused as stale with a rectangle 1046967ms
+    // old - seventeen minutes after the control it described had gone.
+    // Reported as "no Send button" instead, it at least names what to fix.
+    if (!el) {
+        std::lock_guard<std::mutex> lk(g_sendMx);
+        g_sendRect = RECT{0, 0, 0, 0};
+        g_sendPid = 0; g_sendAtMs = 0;
+        g_sendWnd = nullptr; g_sendWndRect = RECT{0, 0, 0, 0};
+    }
     if (old) old->Release();
 }
 
@@ -3452,6 +3469,34 @@ void SamplerThread() {
 
             if (!EnsureUia(uia, uiaComplainedAt, false)) continue;
 
+            // ── Keep the Send button's rectangle current ─────────────────────────
+            // Hoisted to the TOP of this loop. It used to sit at the bottom, below the
+            // composer read and the classification - and this file already documents
+            // that read taking seven seconds on a Chromium app. The loop ticks every
+            // 250ms, but the rectangle was only re-measured once the slow work above it
+            // finished, so a real click on Send was refused for being 3426ms old against
+            // a 3000ms limit. Measuring first costs one property read and is not behind
+            // anything that can stall.
+            {
+                DWORD spid = 0;
+                IUIAutomationElement* btn = AcquireSendBtn(spid);
+                if (btn) {
+                    RECT r{};
+                    if (spid == t.pid && ElementRect(btn, r) &&
+                        r.right > r.left && r.bottom > r.top) {
+                        // The window is recorded with it, so the hook can ask whether
+                        // the button can have moved rather than guessing from a clock.
+                        RECT wr{};
+                        const bool haveWr = t.wnd && GetWindowRect(t.wnd, &wr);
+                        std::lock_guard<std::mutex> lk(g_sendMx);
+                        g_sendRect = r; g_sendPid = spid; g_sendAtMs = NowSteadyMs();
+                        g_sendWnd = haveWr ? t.wnd : nullptr;
+                        g_sendWndRect = haveWr ? wr : RECT{0, 0, 0, 0};
+                    }
+                    btn->Release();
+                }
+            }
+
             // Who the message is going to. Refreshed every few seconds rather
             // than every pass - the user switching chat is a human-speed event,
             // and this costs a few hit tests. Cached because EmitEvent has no
@@ -3588,20 +3633,6 @@ void SamplerThread() {
                 }
             }
 
-            // ── Keep the Send button's rectangle current ─────────────────
-            // One property read. Re-measuring matters: the button moves when
-            // the window moves, resizes, or the composer grows to two lines.
-            DWORD spid = 0;
-            IUIAutomationElement* btn = AcquireSendBtn(spid);
-            if (btn) {
-                RECT r{};
-                if (spid == t.pid && ElementRect(btn, r) &&
-                    r.right > r.left && r.bottom > r.top) {
-                    std::lock_guard<std::mutex> lk(g_sendMx);
-                    g_sendRect = r; g_sendPid = spid; g_sendAtMs = NowSteadyMs();
-                }
-                btn->Release();
-            }
 
             std::lock_guard<std::mutex> lk(g_snapMx);
             // Stored even when empty. A sample that is never cleared would block
@@ -3846,7 +3877,24 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     {
         std::lock_guard<std::mutex> lk(g_sendMx);
         const long long age = g_sendAtMs ? (NowSteadyMs() - g_sendAtMs) : -1;
-        const bool fresh = g_sendPid && g_sendAtMs && age <= 3000;
+        // A rectangle goes stale when the button MOVES - which happens when its
+        // window moves or resizes - not when a clock runs out. A real click on Send
+        // was refused for being 3426ms old against this 3000ms limit, on a rectangle
+        // that was still exactly right. So: inside 3s trust it outright; beyond that,
+        // trust it for as long as the window is precisely where it was when we
+        // measured. GetWindowRect is a non-blocking user32 call, which is the only
+        // kind this hook is allowed to make.
+        bool fresh = g_sendPid && g_sendAtMs && age >= 0 && age <= 3000;
+        if (!fresh && g_sendPid && g_sendAtMs && age >= 0 && age <= 30000 && g_sendWnd) {
+            RECT nowRect{};
+            if (GetWindowRect(g_sendWnd, &nowRect) &&
+                nowRect.left   == g_sendWndRect.left  &&
+                nowRect.top    == g_sendWndRect.top   &&
+                nowRect.right  == g_sendWndRect.right &&
+                nowRect.bottom == g_sendWndRect.bottom) {
+                fresh = true;
+            }
+        }
         const bool inside = m->pt.x >= g_sendRect.left && m->pt.x < g_sendRect.right &&
                             m->pt.y >= g_sendRect.top  && m->pt.y < g_sendRect.bottom;
         if (!fresh || !inside) {

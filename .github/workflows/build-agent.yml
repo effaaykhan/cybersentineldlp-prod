@@ -180,8 +180,13 @@ jobs:
           git push origin main
           echo "committed=true" >> "$GITHUB_OUTPUT"
 
-      # The manager publishes this binary to endpoints at /api/v1/agent-dist, and
-      # the image is seeded with it at build time. But the commit above carries
+      # The manager publishes this binary AND the signing certificate to endpoints
+      # at /api/v1/agent-dist, and the image is seeded with both at build time.
+      # The certificate matters as much as the binary here: without it in the
+      # image an endpoint has no publisher to trust, so the signature on the exe
+      # cannot validate and the installer falls back to checksum-only - signing
+      # the binary but never shipping the certificate would look like signing was
+      # not working at all. But the commit above carries
       # [skip ci] - correctly, or the image build would loop - so the image
       # workflow's push trigger does NOT fire here. Without this dispatch the
       # manager image would keep shipping the PREVIOUS agent until some unrelated
@@ -189,7 +194,7 @@ jobs:
       # a stale binary while reporting success. Dispatch it explicitly instead.
       #
       # No loop: the image workflow commits nothing.
-      - name: Rebuild the manager image so it ships this agent
+      - name: Rebuild the manager image so it ships this agent and its certificate
         if: steps.commitback.outputs.committed == 'true'
         shell: bash
         env:

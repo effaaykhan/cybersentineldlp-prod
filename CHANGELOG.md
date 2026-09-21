@@ -8,6 +8,55 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🩺 Agent v1.4.7 — honest policy-state reporting (September 21, 2026)
+
+### Summary
+
+Two reporting defects found while diagnosing a test endpoint that logged
+`NO ACTIVE POLICIES FOUND!` while enforcing its messaging policy correctly.
+Neither changed enforcement; both made a healthy agent look broken.
+
+### "NO ACTIVE POLICIES FOUND!" on an enforcing agent (fixed)
+
+The verdict was computed from `allowEvents`, which the policy bundle sets from
+only four categories:
+
+```cpp
+allowEvents = hasFilePolices || hasClipboardPolicies ||
+              hasUsbDevicePolicies || hasUsbTransferPolicies;
+```
+
+Messaging, printing, application control, network shares and web activity are
+each synced from their own endpoint and were never represented in the bundle,
+so an endpoint whose only policy was `messaging_app_control` reported that it
+had no policies and "will not generate events" — while blocking messages and
+sending events normally (`SendEvent` gates on `EventsAllowed()`, which does
+count every channel).
+
+The startup verdict now asks `EventsAllowed()`, and the two bundle-scoped
+messages say what they actually measured instead of claiming a global verdict.
+
+### Console showed `policy_sync_status: never` forever (fixed)
+
+The Windows agent reported `policy_version` in its heartbeat but never
+`policy_sync_status`, `policy_last_synced_at` or `policy_sync_error`, so the
+server kept the `"never"` it writes at registration no matter how many syncs
+succeeded — an agent syncing every 60 seconds displayed as one that had never
+synced.
+
+Every exit path of `SyncPolicies` now records an outcome, using the same
+vocabulary the Linux agent already used so one console column means the same
+thing on both platforms: `never | up_to_date | success | error_<http status> |
+exception`. A recorded outcome is final, so a throw from the per-channel
+fetches that run after the bundle is applied cannot relabel a successful sync.
+`policy_sync_error` is sent even when empty, so a success clears the previous
+failure's text instead of leaving it pinned beside a `success` status.
+
+No server change was required — `HeartbeatRequest` already accepted all three
+fields.
+
+---
+
 ## 🔐 v2.1.1 — Random per-deployment admin password (July 17, 2026)
 
 ### Summary

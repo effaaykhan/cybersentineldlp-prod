@@ -2248,6 +2248,18 @@ static ClassificationResult Classify(const std::string& content,
      std::atomic<bool> allowEvents{false};
      
      std::string activePolicyVersion;
+
+     // Policy-sync bookkeeping. The console showed "never" forever because the
+     // Windows agent reported only policy_version and never these, so the server
+     // kept the value it wrote at registration no matter how many syncs
+     // succeeded. The vocabulary is deliberately identical to the Linux agent's
+     // so one console column means the same thing on both platforms:
+     //   never | up_to_date | success | error_<http status> | exception
+     std::mutex policySyncStateMutex;
+     std::string policySyncStatus{"never"};
+     std::string policySyncAt;      // ISO8601; empty until a sync actually completes
+     std::string policySyncError;
+
      std::string lastClipboard;
      std::string lastActiveWindow;
      std::string lastActiveFile;
@@ -4644,12 +4656,17 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
             ScanAndStoreExistingFiles();
         }
          
-         if (!allowEvents) {
+         // Runs after the first sync, so every channel has reported in by now.
+         // EventsAllowed() — not allowEvents — is the question worth asking: an
+         // endpoint whose only policy is a messaging one enforces and reports just
+         // fine, and warning about it trains operators to ignore the warning.
+         if (!EventsAllowed()) {
              logger.Warning("==============================================");
-             logger.Warning("WARNING: No active policies found!");
-             logger.Warning("The agent will continue running but won't");
-             logger.Warning("generate events until policies are configured");
-             logger.Warning("on the server.");
+             logger.Warning("WARNING: no active policy in ANY channel");
+             logger.Warning("(file, clipboard, USB, messaging, print,");
+             logger.Warning(" application control, network share).");
+             logger.Warning("The agent keeps running but will not generate");
+             logger.Warning("events until a policy is assigned on the server.");
              logger.Warning("==============================================");
          }
          
@@ -5480,7 +5497,26 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      }
      
 
+     // Record the outcome of a policy sync so the heartbeat can report it.
+     // Every exit path of SyncPolicies goes through here — an outcome that is
+     // not recorded is indistinguishable from one that never happened, which
+     // is why the console read "never" on an agent syncing every 60 seconds.
+     void NotePolicySync(const std::string& status, const std::string& error = "") {
+         std::lock_guard<std::mutex> lock(policySyncStateMutex);
+         policySyncStatus = status;
+         policySyncAt     = GetCurrentTimestampISO();
+         policySyncError  = error.substr(0, 500);
+     }
+
      void SyncPolicies(bool initial = false) {
+         // An outcome recorded below is final: the per-channel fetches that run
+         // after the bundle is applied have their own error handling, and a throw
+         // escaping one of them must not relabel a sync that already succeeded.
+         bool outcomeRecorded = false;
+         auto note = [&](const std::string& st, const std::string& err = std::string()) {
+             outcomeRecorded = true;
+             NotePolicySync(st, err);
+         };
          try {
              logger.Info("Syncing policy bundle from server...");
              
@@ -5508,6 +5544,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  
                  if (response.find("\"status\":\"up_to_date\"") != std::string::npos) {
                      logger.Info("Agent policy bundle up to date");
+                     note("up_to_date");
                  } else {
                      logger.Info("Policy bundle received from server");
                      ApplyPolicyBundle(response);
@@ -5515,12 +5552,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      // server is unreachable still enforces the last known
                      // policy instead of enforcing nothing at all.
                      SavePolicyBundleToCache(response);
+                     note("success");
                  }
              } else if (status == 0) {
                  logger.Error("Cannot connect to server for policy sync");
                  logger.Error("Make sure server is running at: " + config.serverUrl);
+                 note("exception", "cannot connect to " + config.serverUrl);
              } else {
                  logger.Warning("Policy sync failed: HTTP " + std::to_string(status));
+                 note("error_" + std::to_string(status), response);
                  if (!response.empty()) {
                      logger.Warning("Response: " + response.substr(0, 500));
                  }
@@ -5547,8 +5587,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              ApplyBrowserExtensionPolicy();
          } catch (const std::exception& e) {
              logger.Error(std::string("Failed to sync policies: ") + e.what());
+             if (!outcomeRecorded) NotePolicySync("exception", e.what());
          } catch (...) {
              logger.Error("Unknown error syncing policies");
+             if (!outcomeRecorded) NotePolicySync("exception", "unknown error");
          }
      }
      
@@ -5610,7 +5652,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              if (allowEvents) {
                  logger.Info("Enforcing CACHED policies until the server confirms a newer bundle");
              } else {
-                 logger.Warning("Cached policy bundle contained no active policies");
+                 logger.Info("Cached bundle carries no file/clipboard/USB policies; other channels sync on connect.");
              }
          } catch (const std::exception& e) {
              logger.Warning(std::string("Could not load cached policy bundle: ") + e.what());
@@ -5828,12 +5870,16 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              logger.Info("  - Clipboard Policy: " + policy.name + " (Action: " + policy.action + ")");
          }
          
+         // Scoped on purpose. THIS BUNDLE carries only the file / clipboard / USB
+         // categories. Messaging, printing, application control, network shares and
+         // web activity each sync from their own endpoint and are not counted here,
+         // so "NO ACTIVE POLICIES FOUND" was routinely printed on an endpoint that
+         // was enforcing a messaging policy perfectly well — sending operators to
+         // hunt a fault that did not exist. The honest verdict needs every channel,
+         // which only EventsAllowed() knows; see the startup check for that.
          if (!allowEvents) {
-             logger.Warning("============================================================");
-             logger.Warning("  NO ACTIVE POLICIES FOUND!");
-             logger.Warning("  Agent will not generate events.");
-             logger.Warning("  Please configure policies on server.");
-             logger.Warning("============================================================");
+             logger.Info("No file/clipboard/USB policies in this bundle — those monitors stay idle.");
+             logger.Info("Messaging, print, application, network-share and web policies sync separately.");
          } else {
              logger.Info(">> Agent is actively monitoring based on " + policyCount + " server policies");
          }
@@ -6529,6 +6575,20 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              json.AddString("os_version", GetOSVersionDetail());
              if (!activePolicyVersion.empty()) {
                  json.AddString("policy_version", activePolicyVersion);
+             }
+             // Report the sync outcome alongside the version. Without these the server
+             // keeps the "never" it wrote at registration, so a healthy agent looks
+             // like one that has never synced. Same fields the Linux agent sends.
+             {
+                 std::lock_guard<std::mutex> lock(policySyncStateMutex);
+                 json.AddString("policy_sync_status", policySyncStatus);
+                 if (!policySyncAt.empty()) {
+                     json.AddString("policy_last_synced_at", policySyncAt);
+                 }
+                 // Sent even when empty. The server writes any non-null value, so skipping
+                 // it on success would leave the previous failure's text pinned beside a
+                 // "success" status forever.
+                 json.AddString("policy_sync_error", policySyncError);
              }
              
              auto [status, response] = httpClient->Put(

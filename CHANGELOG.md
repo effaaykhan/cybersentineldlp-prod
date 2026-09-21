@@ -8,6 +8,51 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📎 Attachments were sent before their inspection finished — Agent v1.4.9 (September 21, 2026)
+
+### Summary
+
+Sending a picture in a managed chat showed the DLP block notice *seconds after
+the picture had already gone out*. The notice was real; the block was not.
+
+### What was wrong
+
+A staged file is classified on a worker thread — read it, OCR it, ask the
+server. For a screenshot that is **seconds**. Both send gates could only ask
+*"is there a verdict?"*, never *"is one coming?"*:
+
+* **Click gate** — `MouseProc` called `PendingDropFor()`, found nothing (the OCR
+  was still running), fell through to `return CallNextHookEx(...)` and the click
+  went to the app. The image was sent. The verdict landed afterwards and raised
+  the notice.
+* **Enter gate** — `DecideAndAct` assumed the same thing in a comment:
+  *"Already classified, on a thread, at drop time - so this costs a mutex and the
+  keystroke is not held while a file is inspected."* True for a file dropped a
+  while ago, false for a picture attached two seconds before Enter.
+* Even a held keystroke would not have survived: `decisionTimeoutMs` defaults to
+  **1200ms** and the watchdog released it uninspected — its own log line says
+  *"the message was sent"*.
+
+There was no in-flight state anywhere; `grep` found none.
+
+### The fix
+
+`StagedInspectionScope` marks an inspection in flight for as long as
+`InspectStagedFiles` runs, and both gates now hold the send while one is
+outstanding:
+
+* The click is swallowed and replayed with `ReleaseClick()` if the file comes
+  back clean, so a cleared attachment costs the user only what the OCR actually
+  took — the wait is a condition variable, woken the instant the verdict lands,
+  not a poll.
+* The watchdog extends the hold while an attachment is being inspected instead
+  of releasing at 1.2s.
+* Ceiling of **8s**, and reaching it **blocks**. A file nobody finished reading
+  has not been shown to be safe — the same `uninspectable ≠ clean` rule the rest
+  of the pipeline already follows.
+
+---
+
 ## 📸 Screen capture control policy — Agent v1.4.8 (September 21, 2026)
 
 ### Summary

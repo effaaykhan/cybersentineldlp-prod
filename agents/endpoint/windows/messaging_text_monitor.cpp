@@ -114,6 +114,10 @@ std::atomic<bool> g_decisionPending{false};
 std::atomic<bool>      g_decisionResolved{true};
 std::atomic<long long> g_holdStartMs{0};
 std::atomic<bool>      g_holdCtrl{false};
+// True when the current hold was extended for an attachment inspection, so
+// the watchdog knows a timeout here means "could not read the file" rather
+// than "could not read the text box" - and must not end it by sending.
+std::atomic<bool>      g_holdForAttachment{false};
 
 // Why an unmanaged app is worth a log line at all: the hook's silent exit for
 // "not one of ours" is correct behaviour and was also completely undebuggable.
@@ -217,6 +221,67 @@ std::string              g_dropExe;
 long long                g_dropAtMs = 0;
 std::string              g_dropPath;
 NetworkExfilMonitor::ClassifyResult g_dropCls;
+
+long long NowSteadyMs();   // defined below; needed by the helpers here
+
+// ── Staged-attachment inspection, in flight ──────────────────────────────
+//
+// A staged file is classified on a worker thread: read it, OCR it, ask the
+// server. For a screenshot that is SECONDS, not milliseconds. Until this
+// existed the only question either send gate could ask was "is there a
+// verdict?" - never "is one coming?" - so a picture clicked away before its
+// OCR landed went out uninspected, and the block notice appeared afterwards,
+// about a message the user had already sent. That is the worst shape this
+// failure can take: it looks like enforcement while being the absence of it.
+//
+// The send is now held while an inspection is in flight. The wait ends the
+// instant the verdict lands (condition variable, not a poll), so a clean
+// attachment costs the user whatever the OCR actually took and no more.
+std::mutex              g_inspMx;
+std::condition_variable g_inspCv;
+DWORD                   g_inspPid   = 0;
+int                     g_inspBusy  = 0;
+long long               g_inspStart = 0;
+
+// Ceiling on holding a send for an attachment verdict. Only ever reached by
+// an inspection that is genuinely stuck; reaching it BLOCKS, because an
+// attachment nobody managed to read has not been shown to be safe.
+constexpr int kAttachmentHoldMs = 8000;
+
+// Marks an inspection in flight for as long as it is in scope.
+struct StagedInspectionScope {
+    explicit StagedInspectionScope(DWORD pid) {
+        std::lock_guard<std::mutex> lk(g_inspMx);
+        g_inspPid = pid; g_inspStart = NowSteadyMs(); ++g_inspBusy;
+    }
+    ~StagedInspectionScope() {
+        {
+            std::lock_guard<std::mutex> lk(g_inspMx);
+            if (g_inspBusy > 0) --g_inspBusy;
+        }
+        // Wakes every held send immediately - this is what keeps a cleared
+        // attachment from costing the user the whole ceiling.
+        g_inspCv.notify_all();
+    }
+};
+
+// Is an attachment staged in this app still being inspected? The age check
+// keeps a crashed or wedged inspection from holding every later send.
+bool StagedInspectionInFlight(DWORD pid) {
+    std::lock_guard<std::mutex> lk(g_inspMx);
+    if (g_inspBusy <= 0) return false;
+    if (pid && g_inspPid && g_inspPid != pid) return false;
+    return NowSteadyMs() - g_inspStart <= kAttachmentHoldMs;
+}
+
+// Wait for it to finish. True = it completed and the verdict is readable;
+// false = the ceiling was reached first, which the caller must treat as
+// "not cleared" rather than "clean".
+bool AwaitStagedInspection(int budgetMs) {
+    std::unique_lock<std::mutex> lk(g_inspMx);
+    return g_inspCv.wait_for(lk, std::chrono::milliseconds(budgetMs),
+                             [] { return g_inspBusy <= 0; });
+}
 std::atomic<bool>        g_dropBusy{false};
 std::atomic<bool>        g_dropNoSourceLogged{false};
 
@@ -1791,6 +1856,10 @@ void InspectStagedFiles(std::vector<std::string> paths, DWORD targetPid) {
                 "configured - attachments cannot be inspected on this agent");
         return;
     }
+
+    // From here until this returns, both send gates know a verdict is coming
+    // and will hold a send rather than let it race the OCR.
+    StagedInspectionScope inFlight(targetPid);
     for (const auto& path : paths) {
         NetworkExfilMonitor::ClassifyResult cls;
         try { cls = g_cfg.classifyFile(path, "messaging_attachment"); }
@@ -2059,6 +2128,19 @@ ComposerRead ReadComposerRetry(IUIAutomation* uia, HWND wnd, DWORD pid, unsigned
 // ── Releasing a held keystroke ────────────────────────────────────────────
 // Replay as a genuine keypress. Windows stamps it LLKHF_INJECTED, which the
 // hook checks first, so this cannot come back round to us.
+// Replay a click we held. SetCursorPos first, because the pointer may have
+// moved while the verdict was pending and the app decides what was clicked
+// from where the cursor is. Windows stamps the injected events
+// LLMHF_INJECTED, which MouseProc checks first, so this cannot come back
+// round to us.
+void ReleaseClick(POINT pt) {
+    SetCursorPos(pt.x, pt.y);
+    INPUT in[2] = {};
+    in[0].type = INPUT_MOUSE; in[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    in[1].type = INPUT_MOUSE; in[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    SendInput(2, in, sizeof(INPUT));
+}
+
 void ReleaseKeystroke(bool withCtrl) {
     INPUT in[4] = {};
     int n = 0;
@@ -2443,6 +2525,23 @@ void ReportUninspectable(const std::string& exe, DWORD pid) {
 void DecideAndAct(IUIAutomation* uia, HWND wnd, DWORD pid, bool withCtrl,
                   const std::vector<std::string>& types, const std::string& exeHint) {
     const std::string exe = exeHint.empty() ? ProcessExeName(pid) : exeHint;
+
+    // If an attachment for this app is still being inspected, wait for it. The
+    // comment below used to say the verdict was "already classified, on a thread,
+    // at drop time" - true for a file dropped a while ago, false for the picture
+    // the user attached two seconds before pressing Enter. The watchdog has been
+    // told to extend the hold while this is outstanding.
+    if (StagedInspectionInFlight(pid)) {
+        g_holdForAttachment.store(true);
+        if (!AwaitStagedInspection(kAttachmentHoldMs)) {
+            LogWarn("attachment inspection exceeded " +
+                    std::to_string(kAttachmentHoldMs) + "ms in " + exe +
+                    " - send BLOCKED uninspected (fail closed)");
+            ShowBlockedNotice(exe, "an attachment that could not be inspected in time");
+            ResolveDrop();
+            return;
+        }
+    }
 
     // A sensitive file was dropped into this window and is waiting to be sent.
     // Decided before anything is read: the message box may be empty or hold an
@@ -2956,14 +3055,37 @@ void WatchdogThread() {
         if (g_decisionResolved.load()) continue;
         const long long started = g_holdStartMs.load();
         if (!started) continue;
-        if (NowSteadyMs() - started < (long long)g_cfg.decisionTimeoutMs) continue;
+        const long long heldFor = NowSteadyMs() - started;
+        if (heldFor < (long long)g_cfg.decisionTimeoutMs) continue;
+
+        // The normal budget is sized for reading a text box, not for OCR-ing a
+        // screenshot. Releasing here is exactly what let a picture go out
+        // uninspected while its inspection was still running.
+        if (StagedInspectionInFlight(0) && heldFor < (long long)kAttachmentHoldMs) {
+            g_holdForAttachment.store(true);
+            continue;
+        }
 
         const bool ctrl = g_holdCtrl.load();
+        const bool wasAttachment = g_holdForAttachment.exchange(false);
         if (ClaimDecision()) {
-            ReleaseKeystroke(ctrl);
-            g_decisionPending.store(false);
-            LogWarn("inspection exceeded " + std::to_string(g_cfg.decisionTimeoutMs) +
-                    "ms - keystroke released UNINSPECTED (the message was sent)");
+            if (wasAttachment) {
+                // Fail closed: a file nobody finished reading has not been shown
+                // to be safe. The keystroke is dropped, not replayed.
+                g_decisionPending.store(false);
+                LogWarn("attachment inspection exceeded " +
+                        std::to_string(kAttachmentHoldMs) +
+                        "ms - keystroke BLOCKED uninspected (fail closed)");
+                DWORD fpid = 0;
+                GetWindowThreadProcessId(GetForegroundWindow(), &fpid);
+                ShowBlockedNotice(ProcessExeName(fpid),
+                                  "an attachment that could not be inspected in time");
+            } else {
+                ReleaseKeystroke(ctrl);
+                g_decisionPending.store(false);
+                LogWarn("inspection exceeded " + std::to_string(g_cfg.decisionTimeoutMs) +
+                        "ms - keystroke released UNINSPECTED (the message was sent)");
+            }
         }
         } catch (...) {
             // Never fatal here. A thrown decision is one lost keystroke; a dead
@@ -3757,6 +3879,55 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
             via = "dropped-file"; fromDrop = true;
         }
     }
+    // An attachment staged in this app is still being inspected. Hold the click
+    // until the verdict lands rather than letting the send race the OCR: this is
+    // exactly the case where the picture went out and the block notice arrived
+    // seconds later, about a message that had already been sent.
+    if (!fromDrop && StagedInspectionInFlight(pid)) {
+        const POINT pt = m->pt;
+        g_swallowNextUp.store(true);
+        std::thread([pid, pt]() {
+            const bool finished = AwaitStagedInspection(kAttachmentHoldMs);
+            const std::string exe = ProcessExeName(pid);
+    
+            std::string dropPath;
+            NetworkExfilMonitor::ClassifyResult dropCls;
+            if (PendingDropFor(pid, exe, dropPath, dropCls)) {
+                const std::string what = DescribeLabels(dropCls);
+                const std::string severity =
+                    (ToLowerAscii(dropCls.category) == "restricted") ? "critical" : "high";
+                try {
+                    EmitEvent(exe, pid, "BLOCK", severity, dropCls,
+                              "Blocked sensitive file staged in " + exe + " (" +
+                              dropCls.category + ") - " + dropPath, dropPath,
+                              "send_button", GetForegroundWindow());
+                } catch (...) {}
+                LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" +
+                        dropCls.category + " detected=[" + what +
+                        "] via=staged-file-held-click path=" + dropPath);
+                ShowBlockedNotice(exe, what.empty() ? std::string("a sensitive file") : what);
+                ClearPendingDrop();
+                return;                 // the send stays swallowed
+            }
+    
+            if (!finished) {
+                // Fail closed. An attachment nobody managed to finish reading has
+                // not been shown to be safe, and releasing it here would be the
+                // same silent leak this hold exists to close.
+                LogWarn("attachment inspection exceeded " +
+                        std::to_string(kAttachmentHoldMs) + "ms in " + exe +
+                        " - send BLOCKED uninspected (fail closed)");
+                ShowBlockedNotice(exe, "an attachment that could not be inspected in time");
+                return;
+            }
+    
+            // Cleared. Replay the click the user actually made.
+            LogInfo("staged attachment cleared in " + exe + " - releasing the held send");
+            ReleaseClick(pt);
+        }).detach();
+        return 1;                       // swallow while the verdict is pending
+    }
+
     if (!fromDrop) {
         std::lock_guard<std::mutex> lk(g_snapMx);
         const long long age = g_snapAtMs ? (NowSteadyMs() - g_snapAtMs) : -1;

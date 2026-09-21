@@ -37,6 +37,18 @@ policy because the channel was missing from `EventsAllowed()`.
 - ✅ Temp validation policy deleted from Postgres
 - ✅ Dashboard image rebuilt; manager restarted (volume-mounted)
 
+## Follow-on — Agent v1.4.9: attachments raced their own inspection
+- ✅ Root cause: no "inspection in flight" state; both send gates could only ask
+  "is there a verdict?", so a picture went out while its OCR was still running
+  and the block notice appeared afterwards
+- ✅ `StagedInspectionScope` marks `InspectStagedFiles` in flight
+- ✅ Click gate holds the click, replays it via `ReleaseClick()` when cleared
+- ✅ Enter gate waits in `DecideAndAct`; watchdog extends past its 1200ms budget
+- ✅ 8s ceiling, fail closed (uninspectable ≠ clean); CV wake so a clean file
+  releases the instant OCR finishes
+- ✅ Every agent source compiles (case-bridged UIA headers for the local mingw)
+- ✅ VERSION 1.4.8 → 1.4.9
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

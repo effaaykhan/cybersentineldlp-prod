@@ -1,39 +1,47 @@
-# Plan — Agent v1.4.7: honest policy-state reporting
+# Plan — `screen_capture_control` policy (Agent v1.4.8)
 
-Triggered by a test endpoint logging `NO ACTIVE POLICIES FOUND!` while its
-messaging policy was enforcing correctly.
+Screen capture was the only enforced channel with no policy behind it:
+`screenMonitor->Start()` ran unconditionally, the level threshold and tool list
+were compiled in, and its events were dropped on any endpoint with no other
+policy because the channel was missing from `EventsAllowed()`.
 
-## Diagnosis
-- ✅ Confirmed server-side bundle is healthy: `/policies/sync` returns 2 policies
-  (`web_activity_control`, `messaging_app_control`), version `583d00d1…`
-- ✅ Confirmed `/messaging-app-policy` returns `enforced:true, action:block`,
-  `whatsapp.root.exe` listed, `inspect_messages:true`, 10 data types
-- ✅ Confirmed per-channel fetches run outside the `status==200` branch, so they
-  refresh even when the bundle reports `up_to_date`
-- ✅ Confirmed `SendEvent` gates on `EventsAllowed()` (all channels), not
-  `allowEvents` (bundle-only) — so events were never actually being dropped
-- ✅ Root cause: the warning is computed from the bundle's four categories only
+## Server
+- ✅ `domains.py`: `screen_capture_control` → THREAT
+- ✅ `ScreenCapturePolicyResponse` + `GET /agents/{id}/screen-capture-policy`
+- ✅ mode+action folded into the suppression flags server-side (audit can never suppress)
+- ✅ empty `levels` collapses to `enforced:false` rather than meaning "all levels"
+- ✅ suspended agent returns the same inert shape
 
-## Fix 1 — warning tells the truth
-- ✅ Startup verdict now uses `EventsAllowed()` instead of `allowEvents`
-- ✅ Bundle-tail message scoped to "no file/clipboard/USB policies in this bundle"
-- ✅ Cached-bundle message scoped likewise, demoted Warning → Info
+## Agent (Windows only — Linux untouched)
+- ✅ `ScreenCapturePolicy` struct + `ApplyPolicy` / `GetPolicy` / `IsExcepted`
+- ✅ keyboard hook gated on the policy; alert mode records without swallowing
+- ✅ capture-tool watcher uses the policy's list; terminates only when told to
+- ✅ content scanner skips the Tesseract OCR pass entirely with no policy
+- ✅ levels + exceptions decide sensitivity, not a hardcoded pair
+- ✅ event reports the real level, the action actually taken, and the deciding policy
+- ✅ `screenCaptureEnforced` added to `EventsAllowed()`
+- ✅ `FetchScreenCapturePolicy()` on every sync; initial policy pushed when the monitor starts
+- ✅ VERSION 1.4.7 → 1.4.8
 
-## Fix 2 — agent reports its sync state
-- ✅ Added `policySyncStatus / policySyncAt / policySyncError` (+ mutex)
-- ✅ `NotePolicySync()` helper; every exit path of `SyncPolicies` records an outcome
-- ✅ Guarded so a later per-channel throw cannot relabel a successful sync
-- ✅ Heartbeat sends all three fields; error sent even when empty so success clears it
-- ✅ Vocabulary matches the Linux agent (`never|up_to_date|success|error_<n>|exception`)
-- ✅ No server change needed — `HeartbeatRequest` already accepts the fields
+## Dashboard
+- ✅ `screen_capture_control` in `PolicyType` + `ScreenCaptureControlConfig`
+- ✅ tile in PolicyTypeSelector ("The endpoint itself"), icon + label in policyUtils
+- ✅ `ScreenCaptureControlForm` (levels, mode, action, 5 toggles, tool list, exceptions)
+- ✅ summary line, default config, modal wiring
 
 ## Verification
-- ✅ `x86_64-w64-mingw32-g++-posix -std=c++17 -fsyntax-only agent.cpp` → exit 0
-- ✅ Live server accepts a 1.4.7-shaped heartbeat (HTTP 200) and stores all three
-  fields; test record restored to its pre-test state afterwards
-- ✅ `VERSION` bumped 1.4.6 → 1.4.7 (same commit, per CI guard)
+- ✅ Endpoint: no policy → `enforced:false`; active → full config; audit forces
+  suppression flags false; empty levels → `enforced:false`
+- ✅ `agent.cpp` + `screen_capture_monitor.cpp` compile clean (mingw, `-fsyntax-only`)
+- ✅ `npx tsc --noEmit`: zero errors in any file touched (47 pre-existing elsewhere)
+- ✅ Temp validation policy deleted from Postgres
+- ✅ Dashboard image rebuilt; manager restarted (volume-mounted)
 
 ## Remaining
-- ⬜ Commit + push so CI builds and signs the 1.4.7 binary
-- ⬜ Update endpoint, confirm the warning is gone and console shows a real sync status
-- ⬜ Still pending from 1.4.6: the three Send-button / file-inspection tests
+- ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
+- ⬜ Create a real `screen_capture_control` policy in the console
+- ⬜ Still pending from 1.4.6: Send-button + file-inspection tests
+
+## ⚠ Behaviour change
+Screen capture is no longer enforced until a policy exists. Deliberate, and
+consistent with every other channel — but it must be called out on upgrade.

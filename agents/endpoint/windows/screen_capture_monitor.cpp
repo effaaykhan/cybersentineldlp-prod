@@ -1,4 +1,5 @@
 #include "screen_capture_monitor.h"
+#include <cctype>
 #include <tlhelp32.h>
 #include <iostream>
 #include <algorithm>
@@ -25,6 +26,53 @@ ScreenCaptureMonitor::ScreenCaptureMonitor(CaptureCallback callback, LogCallback
 ScreenCaptureMonitor::~ScreenCaptureMonitor() {
     Stop();
     s_instance = nullptr;
+}
+
+static std::string SCM_ToLower(std::string v) {
+    std::transform(v.begin(), v.end(), v.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    return v;
+}
+
+void ScreenCaptureMonitor::ApplyPolicy(const ScreenCapturePolicy& policy) {
+    {
+        std::lock_guard<std::mutex> lock(m_policyMutex);
+        m_policy = policy;
+        // Normalise once, here, so every comparison downstream is a plain
+        // lowercase match and no hot path pays for case folding.
+        for (auto& t : m_policy.tools)           t = SCM_ToLower(t);
+        for (auto& u : m_policy.exceptUsers)     u = SCM_ToLower(u);
+        for (auto& pr : m_policy.exceptProcesses) pr = SCM_ToLower(pr);
+    }
+    // Published after the struct, so the hook never sees "enforced" with a
+    // half-written policy behind it.
+    m_blockKeyboard.store(policy.enforced && policy.blockKeyboard);
+    m_policyEnforced.store(policy.enforced);
+
+    // An un-enforced policy must not leave a stale "sensitive" verdict armed;
+    // the scan thread may not run again for a second and the hook would keep
+    // swallowing keys in the meantime.
+    if (!policy.enforced) {
+        m_screenIsSensitive.store(false);
+        m_blockGraceActive.store(false);
+    }
+}
+
+ScreenCapturePolicy ScreenCaptureMonitor::GetPolicy() const {
+    std::lock_guard<std::mutex> lock(m_policyMutex);
+    return m_policy;
+}
+
+bool ScreenCaptureMonitor::IsExcepted(const std::string& processName,
+                                      const std::string& user) const {
+    const std::string proc = SCM_ToLower(processName);
+    const std::string usr  = SCM_ToLower(user);
+    std::lock_guard<std::mutex> lock(m_policyMutex);
+    for (const auto& p : m_policy.exceptProcesses)
+        if (!p.empty() && p == proc) return true;
+    for (const auto& u : m_policy.exceptUsers)
+        if (!u.empty() && u == usr) return true;
+    return false;
 }
 
 bool ScreenCaptureMonitor::Start() {
@@ -118,7 +166,7 @@ void ScreenCaptureMonitor::TerminateProcessByName(const std::string& processName
     CloseHandle(hSnap);
 }
 
-void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
+void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method, bool suppressed) {
     // EVENT-ONLY: this used to also clear the clipboard and show its own
     // MessageBox. The keyboard hook now handles enforcement (clipboard +
     // popup), so doing it again here would produce TWO popups for every
@@ -127,9 +175,21 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
     std::string windowTitle = GetActiveWindowTitle();
     std::string processName = GetForegroundProcessName();
 
-    bool isSensitive   = m_screenIsSensitive.load();
-    std::string classification = isSensitive ? "Restricted" : "Public";
-    std::string action         = isSensitive ? "Block"      : "Allow";
+    bool isSensitive = m_screenIsSensitive.load();
+
+    std::string classification;
+    {
+        std::lock_guard<std::mutex> lock(m_classMutex);
+        classification = m_lastClassification;
+    }
+    if (!isSensitive) classification = "Public";
+
+    // "Block" has to mean the capture did not happen. Reporting a block for an
+    // alert-mode policy would put a blocked screenshot on the dashboard that
+    // the user in fact still took.
+    std::string action = !isSensitive ? "Allow" : (suppressed ? "Block" : "Alert");
+
+    ScreenCapturePolicy pol = GetPolicy();
 
     char username[256] = {0};
     DWORD userSize = sizeof(username);
@@ -144,6 +204,8 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
     event.containsSensitiveData = isSensitive;
     event.actionTaken           = action;
     event.timestamp             = GetTimestamp();
+    event.policyId              = pol.policyId;
+    event.policyName            = pol.policyName;
 
     if (m_callback) m_callback(event);
 }
@@ -204,6 +266,13 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
     // (non-transient) foreground window, so it covers the popup-race
     // window without unfairly blocking screenshots taken AFTER the user
     // has moved focus to a genuinely non-sensitive window.
+    // No active screen_capture_control policy -> this channel does nothing.
+    // Not "allow and log": an operator who has not asked for screen-capture
+    // control should not be shipped events about their own PrintScreen key.
+    if (!s_instance->m_policyEnforced.load()) {
+        return CallNextHookEx(s_keyboardHook, nCode, wParam, lParam);
+    }
+
     bool sensitive   = s_instance->m_screenIsSensitive.load();
     bool grace       = s_instance->m_blockGraceActive.load();
     long long nowCheckMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -217,15 +286,31 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
 
         // Emit the event asynchronously so we don't slow down the hook.
         std::thread([method]() {
-            if (s_instance) s_instance->HandleCaptureAttempt(method);
+            if (s_instance) s_instance->HandleCaptureAttempt(method, false);
         }).detach();
 
         return CallNextHookEx(s_keyboardHook, nCode, wParam, lParam);
     }
 
-    // Sensitive content is on screen — swallow the key and warn the user.
+    // Sensitive content is on screen. Whether we actually withhold the
+    // keystroke is the policy's call, not ours — the server already folded
+    // mode+action into this one flag, so "audit" and "alert" both land here
+    // with it false and the user keeps their screenshot.
+    const bool suppress = s_instance->m_blockKeyboard.load();
     const char* reason = sensitive ? "sensitive content currently on screen"
                                    : "block grace pending re-classification";
+
+    if (!suppress) {
+        // Audit / alert: record the attempt, change nothing the user sees.
+        if (s_instance->m_logger) s_instance->m_logger("WARNING",
+            "SCREEN_CAPTURE_WOULD_BLOCK: " + method + " — " + reason +
+            " (policy is not in block mode; capture allowed)");
+        std::thread([method]() {
+            if (s_instance) s_instance->HandleCaptureAttempt(method, false);
+        }).detach();
+        return CallNextHookEx(s_keyboardHook, nCode, wParam, lParam);
+    }
+
     if (s_instance->m_logger) s_instance->m_logger("WARNING",
         "SCREEN_CAPTURE_BLOCKED: " + method + " — " + reason);
 
@@ -243,11 +328,20 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
         s_instance->m_lastPopupMs.store(nowMs);
     }
 
-    std::thread([method, showPopup]() {
+    // Read the two presentation toggles once, outside the hook's hot path.
+    bool wipeClipboard = true, notifyUser = true;
+    {
+        std::lock_guard<std::mutex> lock(s_instance->m_policyMutex);
+        wipeClipboard = s_instance->m_policy.clearClipboard;
+        notifyUser    = s_instance->m_policy.notifyUser;
+    }
+    showPopup = showPopup && notifyUser;
+
+    std::thread([method, showPopup, wipeClipboard]() {
         if (!s_instance) return;
 
         // Defensive: clear clipboard in case anything slipped through.
-        if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
+        if (wipeClipboard && OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
 
         if (showPopup) {
             HWND fgWnd = GetForegroundWindow();
@@ -265,7 +359,7 @@ LRESULT CALLBACK ScreenCaptureMonitor::LowLevelKeyboardProc(int nCode, WPARAM wP
             }
         }
 
-        s_instance->HandleCaptureAttempt(method);
+        s_instance->HandleCaptureAttempt(method, true);
     }).detach();
 
     return 1; // swallow — no screenshot taken
@@ -326,6 +420,20 @@ void ScreenCaptureMonitor::ContentScanThread() {
     std::string lastClass = "Public";
 
     while (m_running) {
+        // No active policy -> nothing to classify. This also switches OFF the
+        // Tesseract OCR pass, which is by far the most expensive thing this
+        // agent does; before the policy existed it ran forever on every
+        // endpoint whether or not anyone wanted screen-capture control.
+        if (!m_policyEnforced.load()) {
+            if (m_screenIsSensitive.exchange(false) && m_logger) {
+                m_logger("INFO", "SCREEN_SCAN_IDLE: no active screen-capture policy");
+            }
+            for (int i = 0; i < 10 && m_running; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            continue;
+        }
+
         HWND fg = GetForegroundWindow();
 
         // Transient foreground (taskbar, popup, desktop, start menu) →
@@ -357,8 +465,28 @@ void ScreenCaptureMonitor::ContentScanThread() {
             lastClass = classification;
         }
 
-        bool nowSensitive = (classification == "Restricted" ||
-                             classification == "Confidential");
+        // Which levels count as sensitive is the policy's call. It used to be
+        // a hardcoded Restricted+Confidential pair, so an operator who only
+        // cared about Restricted had no way to say so.
+        bool nowSensitive = false;
+        {
+            char uname[256] = {0};
+            DWORD usize = sizeof(uname);
+            GetUserNameA(uname, &usize);
+            if (!IsExcepted(GetForegroundProcessName(), uname)) {
+                std::lock_guard<std::mutex> lock(m_policyMutex);
+                for (const auto& lv : m_policy.levels) {
+                    if (_stricmp(lv.c_str(), classification.c_str()) == 0) {
+                        nowSensitive = true;
+                        break;
+                    }
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_classMutex);
+            m_lastClassification = classification;
+        }
         bool wasSensitive = m_screenIsSensitive.exchange(nowSensitive);
 
         // We just produced a fresh classification on a real foreground
@@ -431,6 +559,21 @@ void ScreenCaptureMonitor::ProcessMonitorThread() {
     std::set<std::string> knownCapProcesses;
 
     while (m_running) {
+        // The watched list is the policy's, not a compiled-in constant, so an
+        // operator can add the capture tool their org actually uses without
+        // waiting for an agent build. CAPTURE_PROCESSES survives only as the
+        // fallback for a server too old to send the field.
+        ScreenCapturePolicy pol = GetPolicy();
+        if (!pol.enforced || !pol.blockCaptureTools) {
+            knownCapProcesses.clear();
+            for (int i = 0; i < 20 && m_running; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            continue;
+        }
+        const std::vector<std::string>& watched =
+            pol.tools.empty() ? CAPTURE_PROCESSES : pol.tools;
+
         HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (hSnap != INVALID_HANDLE_VALUE) {
             PROCESSENTRY32 pe;
@@ -443,7 +586,7 @@ void ScreenCaptureMonitor::ProcessMonitorThread() {
                     std::string procLower = procName;
                     std::transform(procLower.begin(), procLower.end(), procLower.begin(), ::tolower);
 
-                    for (const auto& capProc : CAPTURE_PROCESSES) {
+                    for (const auto& capProc : watched) {
                         std::string capLower = capProc;
                         std::transform(capLower.begin(), capLower.end(), capLower.begin(), ::tolower);
 
@@ -457,17 +600,33 @@ void ScreenCaptureMonitor::ProcessMonitorThread() {
                                 std::string classification = "Public";
                                 if (m_classifier) classification = m_classifier(windowTitle, procName);
 
-                                bool isSensitive = (classification == "Restricted" || classification == "Confidential");
-
-                                if (isSensitive) {
-                                    TerminateProcessByName(procName);
-                                    // Also clear clipboard
-                                    if (OpenClipboard(NULL)) { EmptyClipboard(); CloseClipboard(); }
-                                    if (m_logger) m_logger("WARNING", "SCREEN_ACTION_ENFORCED: Terminated " +
-                                                           procName + " — " + classification + " data visible");
+                                bool isSensitive = false;
+                                for (const auto& lv : pol.levels) {
+                                    if (_stricmp(lv.c_str(), classification.c_str()) == 0) {
+                                        isSensitive = true;
+                                        break;
+                                    }
                                 }
 
-                                HandleCaptureAttempt("capture_tool");
+                                if (isSensitive && pol.terminateTools) {
+                                    TerminateProcessByName(procName);
+                                    if (pol.clearClipboard && OpenClipboard(NULL)) {
+                                        EmptyClipboard(); CloseClipboard();
+                                    }
+                                    if (m_logger) m_logger("WARNING", "SCREEN_ACTION_ENFORCED: Terminated " +
+                                                           procName + " — " + classification + " data visible");
+                                } else if (isSensitive) {
+                                    // Audit / alert: the tool keeps running and the
+                                    // attempt is recorded. Killing a user's running
+                                    // application is not something an "alert" policy
+                                    // is allowed to do.
+                                    if (m_logger) m_logger("WARNING", "SCREEN_ACTION_WOULD_ENFORCE: " +
+                                                           procName + " — " + classification +
+                                                           " data visible (policy is not in block mode)");
+                                }
+
+                                HandleCaptureAttempt("capture_tool",
+                                                      isSensitive && pol.terminateTools);
                             }
                         }
                     }

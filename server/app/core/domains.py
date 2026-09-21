@@ -46,6 +46,10 @@ POLICY_TYPE_DOMAIN = {
     "messaging_app_control": PolicyDomain.THREAT,
     "screen_capture": PolicyDomain.THREAT,
     "screen_capture_monitoring": PolicyDomain.THREAT,
+    # Screen capture control — alert/block PrintScreen, Win+Shift+S and
+    # known capture tools while classified content is on screen. Enforced
+    # agent-side by the low-level keyboard hook + capture-process watcher.
+    "screen_capture_control": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,
     "print_monitoring": PolicyDomain.THREAT,
     # Data Protection — content handling

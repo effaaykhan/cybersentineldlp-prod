@@ -3,7 +3,7 @@
 import { PolicyType } from '@/types/policy'
 import {
   Clipboard, FileText, Usb, HardDrive, Shield, UploadCloud, Mail, Network,
-  Printer, AppWindow, Bluetooth, FolderInput, MessageSquare, Globe,
+  Printer, AppWindow, Bluetooth, FolderInput, MessageSquare, Globe, Camera,
 } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
@@ -53,6 +53,7 @@ const GROUPS: { name: string; blurb: string; items: Entry[] }[] = [
       { type: 'printer_control', label: 'Printer Control', description: 'Block all printing, or only network or local printers', icon: Printer },
       { type: 'print_content_prevention', label: 'Print Content', description: 'Inspect the document itself and stop sensitive print jobs', icon: Printer },
       { type: 'application_control', label: 'Application Control', description: 'Allow or block actions by the application performing them', icon: AppWindow },
+      { type: 'screen_capture_control', label: 'Screen Capture', description: 'PrintScreen, Win+Shift+S and capture tools while classified content is on screen', icon: Camera },
     ],
   },
   {

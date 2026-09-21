@@ -13,7 +13,7 @@ import {
   USBTransferConfig,
   FileTransferConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, UploadCloud, Mail, Network, MessageSquare, Globe } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, UploadCloud, Mail, Network, MessageSquare, Globe, Camera } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -44,6 +44,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Globe
     case 'messaging_app_control':
       return MessageSquare
+    case 'screen_capture_control':
+      return Camera
     default:
       return FileText
   }
@@ -78,6 +80,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Web Activity Control'
     case 'messaging_app_control':
       return 'Messaging App Control'
+    case 'screen_capture_control':
+      return 'Screen Capture Control'
     default:
       return 'Unknown'
   }

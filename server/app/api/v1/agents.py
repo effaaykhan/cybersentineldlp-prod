@@ -2228,6 +2228,155 @@ async def messaging_app_policy(
     )
 
 
+# ── Screen capture control ────────────────────────────────────────────────
+# Alert or block screen capture while classified content is on screen. The
+# agent enforces locally: a low-level keyboard hook swallows PrintScreen /
+# Alt+PrintScreen / Win+Shift+S, and a watcher spots known capture tools.
+#
+# This channel used to be hardcoded ON with no policy behind it at all, which
+# meant it could not be tuned, audited or switched off, and its events were
+# dropped on any endpoint with no OTHER policy (SendEvent gates on the set of
+# enforced channels, and screen capture was not in it). It is now policy-driven
+# like every other channel: no active policy, no enforcement.
+_DEFAULT_CAPTURE_TOOLS = [
+    "snippingtool.exe", "screenclippinghost.exe", "screensketch.exe",
+    "greenshot.exe", "sharex.exe", "lightshot.exe",
+    "snagit32.exe", "snagit.exe", "obs64.exe", "obs32.exe",
+    "camtasiastudio.exe", "bandicam.exe", "screentogif.exe",
+    "flameshot.exe", "picpick.exe", "faststone.exe",
+]
+
+# Levels that make a screen "sensitive". Mirrors the agent's own check and the
+# print-content policy's vocabulary.
+_CAPTURE_LEVELS = ("Public", "Internal", "Confidential", "Restricted")
+_DEFAULT_CAPTURE_LEVELS = ["Confidential", "Restricted"]
+
+
+def _capture_levels(cfg: dict) -> List[str]:
+    """Normalise the configured classification levels, preserving rank order."""
+    raw = cfg.get("levels")
+    if not isinstance(raw, list):
+        return list(_DEFAULT_CAPTURE_LEVELS)
+    wanted = {str(x).strip().lower() for x in raw if str(x).strip()}
+    picked = [lv for lv in _CAPTURE_LEVELS if lv.lower() in wanted]
+    # An explicit empty selection is honoured — see mode below for why that is
+    # expressed as "not enforcing" rather than silently meaning "everything".
+    return picked
+
+
+class ScreenCapturePolicyResponse(BaseModel):
+    enforced: bool                  # an active screen_capture_control policy exists
+    mode: str                       # "enforce" | "audit" (audit = log what WOULD be blocked)
+    action: str                      # "alert" (event only) | "block" (suppress the capture)
+    levels: List[str]               # classification levels that make a screen sensitive
+    block_keyboard: bool            # swallow PrintScreen / Alt+PrintScreen / Win+Shift+S
+    block_capture_tools: bool       # watch for known screen-capture applications
+    terminate_tools: bool           # kill such a tool (vs. only raising an event)
+    clear_clipboard: bool           # wipe the clipboard after a blocked capture
+    notify_user: bool               # show the endpoint popup
+    tools: List[str]                # capture-tool exe names (lowercased)
+    exception_users: List[str]      # users exempt (lowercased)
+    exception_processes: List[str]  # foreground processes never treated as sensitive
+    policy_id: Optional[str] = None
+    policy_name: Optional[str] = None
+    generated_at: datetime
+
+
+def _screen_capture_off(reason_mode: str = "enforce") -> "ScreenCapturePolicyResponse":
+    """The one shape meaning 'do nothing', so every early return agrees."""
+    return ScreenCapturePolicyResponse(
+        enforced=False, mode=reason_mode, action="alert", levels=[],
+        block_keyboard=False, block_capture_tools=False, terminate_tools=False,
+        clear_clipboard=False, notify_user=False, tools=[],
+        exception_users=[], exception_processes=[],
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+@router.get("/{agent_id}/screen-capture-policy", response_model=ScreenCapturePolicyResponse)
+async def screen_capture_policy(
+    agent_id: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    The screen-capture control policy the endpoint enforces locally. While the
+    foreground window classifies to one of ``levels``, the agent suppresses
+    PrintScreen / Win+Shift+S and (optionally) terminates known capture tools.
+    In ``audit`` mode nothing is suppressed and the attempt is only recorded.
+    Requires X-Agent-Key (backward-compatible: no key -> allowed).
+    """
+    await verify_agent_key(http_request)
+
+    if await _SUSP.is_suspended(agent_id):
+        return _screen_capture_off()
+
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "screen_capture_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    if not policy:
+        return _screen_capture_off()
+
+    cfg = policy.config or {}
+
+    mode = (cfg.get("mode") or "enforce").lower()
+    if mode not in ("enforce", "audit", "off"):
+        mode = "enforce"
+    if mode == "off":
+        return _screen_capture_off("off")
+
+    levels = _capture_levels(cfg)
+    # Unticking every level asks for nothing to be sensitive, which is the same
+    # instruction as "do not enforce". Saying it as enforced=False means the
+    # agent cannot mistake it for "the server is too old to send this field"
+    # and fall back to a built-in list — the trap the messaging policy hit.
+    if not levels:
+        return _screen_capture_off(mode)
+
+    # Default to alert so enabling a policy never starts swallowing a user's
+    # keystrokes until an admin opts into "block".
+    action = (cfg.get("action") or "alert").lower()
+    if action not in ("alert", "block"):
+        action = "alert"
+
+    def _flag(key: str, default: bool) -> bool:
+        v = cfg.get(key)
+        return default if v is None else bool(v)
+
+    # In audit mode nothing may actually be suppressed, whatever the toggles
+    # say — that is the entire meaning of audit, and enforcing it here keeps
+    # every agent build honest rather than trusting each to re-derive it.
+    enforcing = (mode == "enforce") and (action == "block")
+    tools = _lc_list(cfg.get("tools")) or list(_DEFAULT_CAPTURE_TOOLS)
+    exc = cfg.get("exceptions") or {}
+
+    return ScreenCapturePolicyResponse(
+        enforced=True,
+        mode=mode,
+        action=action,
+        levels=levels,
+        block_keyboard=enforcing and _flag("block_keyboard", True),
+        block_capture_tools=_flag("block_capture_tools", True),
+        terminate_tools=enforcing and _flag("terminate_tools", True),
+        clear_clipboard=enforcing and _flag("clear_clipboard", True),
+        notify_user=_flag("notify_user", True),
+        tools=tools,
+        exception_users=_lc_list(exc.get("users")),
+        exception_processes=_lc_list(exc.get("processes")),
+        policy_id=str(policy.id),
+        policy_name=policy.name,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
 # ── Wireless / Bluetooth transfer control ─────────────────────────────────
 # Block file transfer over Bluetooth (Object Push / File Transfer profiles) and
 # Wi-Fi Direct / Nearby Sharing, while leaving audio (headphones) + input (HID)

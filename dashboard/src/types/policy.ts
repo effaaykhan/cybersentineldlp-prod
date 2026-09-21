@@ -15,6 +15,7 @@ export type PolicyType =
   | 'wireless_transfer_control'
   | 'network_share_control'
   | 'messaging_app_control'
+  | 'screen_capture_control'
   | 'google_drive_local_monitoring'
   | 'google_drive_cloud_monitoring'
   | 'onedrive_cloud_monitoring'
@@ -105,6 +106,32 @@ export interface NetworkShareControlConfig {
     users?: string[]        // users / groups exempt
     paths?: string[]        // source path prefixes exempt
     file_types?: string[]   // extensions exempt (no leading dot)
+  }
+}
+
+export interface ScreenCaptureControlConfig {
+  // enforce = act on the toggles below; audit = record what WOULD be blocked and
+  // change nothing the user sees. Audit wins over action: in audit mode the
+  // server sends every suppression flag as false whatever action says.
+  mode?: 'enforce' | 'audit'
+  // alert = raise an event and let the capture happen; block = withhold it.
+  // Defaults to alert so enabling a policy never starts swallowing keystrokes.
+  action?: 'alert' | 'block'
+  // Classification levels that make the screen sensitive. Unticking every level
+  // is a real choice and switches enforcement off, rather than silently meaning
+  // "all of them".
+  levels?: Array<'Public' | 'Internal' | 'Confidential' | 'Restricted'>
+  block_keyboard?: boolean       // swallow PrintScreen / Alt+PrintScreen / Win+Shift+S
+  block_capture_tools?: boolean  // watch for known screen-capture applications
+  terminate_tools?: boolean      // kill such a tool, vs. only raising an event
+  clear_clipboard?: boolean      // wipe the clipboard after a blocked capture
+  notify_user?: boolean          // show the endpoint popup
+  // Capture-tool exe names. Empty = the built-in list (Snipping Tool, ShareX,
+  // Greenshot, OBS, Snagit, …).
+  tools?: string[]
+  exceptions?: {
+    users?: string[]      // users exempt
+    processes?: string[]  // foreground apps never treated as sensitive
   }
 }
 

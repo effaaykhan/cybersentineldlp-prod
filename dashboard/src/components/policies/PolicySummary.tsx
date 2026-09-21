@@ -149,6 +149,15 @@ function describe(d: Draft): ReactNode {
     const n = (c.apps || []).length
     return `Inspects attachments in ${n ? `${n} managed app${n === 1 ? '' : 's'}` : 'the built-in messaging apps'}.`
   }
+  if (type === 'screen_capture_control') {
+    const lv = (c.levels || []) as string[]
+    if (!lv.length) return 'No classification levels selected — nothing is enforced.'
+    const what = c.action === 'block' ? 'Blocks' : 'Records'
+    const where = lv.join(' and ')
+    return c.mode === 'audit'
+      ? `Records screen capture of ${where} content without blocking it.`
+      : `${what} screen capture while ${where} content is on screen.`
+  }
   if (type === 'network_share_control') {
     return c.mode === 'block_all'
       ? 'Blocks every copy to a network share.'

@@ -8,6 +8,68 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📸 Screen capture control policy — Agent v1.4.8 (September 21, 2026)
+
+### Summary
+
+Screen capture was the one enforced channel with no policy behind it. It is now
+policy-driven like every other channel, with a new `screen_capture_control`
+policy type, its own endpoint, and a config form in the console.
+
+### What was wrong
+
+`screenMonitor->Start()` was called unconditionally in `agent.cpp` — no policy
+check and no config key. That meant:
+
+* **No way to turn it off or tune it.** The block threshold was a hardcoded
+  `Restricted || Confidential`, and the 17 watched capture tools were compiled
+  into the binary.
+* **Its events were silently dropped.** `SendEvent` gates on `EventsAllowed()`,
+  and screen capture had no flag in that set — so on an endpoint with no *other*
+  policy, a screenshot was blocked on screen and the event proving it never
+  reached the console.
+* **The OCR pass ran forever on every endpoint**, whether or not anyone wanted
+  screen-capture control. It is the most expensive thing the agent does.
+* **The event lied about the level.** It reported a flat `"Restricted"` whenever
+  the sensitive flag was set, and named no policy.
+
+### The policy
+
+`GET /agents/{agent_id}/screen-capture-policy`, modelled on the messaging one.
+No active policy → `enforced: false`, and the agent suppresses nothing, kills
+nothing, raises nothing and runs no OCR.
+
+| Setting | Meaning |
+|---|---|
+| `mode` | `enforce` / `audit` — audit records what *would* be blocked |
+| `action` | `alert` / `block` — defaults to alert |
+| `levels` | classification levels that make the screen sensitive |
+| `block_keyboard` | withhold PrintScreen / Alt+PrintScreen / Win+Shift+S |
+| `block_capture_tools` | watch for screen-capture applications |
+| `terminate_tools` | close such a tool, vs. only recording it |
+| `clear_clipboard` | wipe the clipboard after a blocked capture |
+| `notify_user` | show the endpoint notice |
+| `tools` | capture-tool exe names (empty = built-in list) |
+| `exceptions.users` / `exceptions.processes` | exempt users / foreground apps |
+
+The server resolves `mode` + `action` into the three suppression flags, so audit
+mode arrives at the agent with all of them false and the agent never re-derives
+that. Unticking every level collapses to `enforced: false` rather than silently
+meaning "every level" — the same trap the messaging policy's data types hit.
+
+### Also fixed
+
+`EventsAllowed()` now counts this channel, the event carries `policy_id` /
+`policy_name`, and it reports the level the scanner actually produced.
+
+### ⚠ Behaviour change on upgrade
+
+Screen capture **stops being enforced** until a `screen_capture_control` policy
+is created and made active. That is deliberate and matches every other channel,
+but a deployment relying on the old always-on behaviour must create the policy.
+
+---
+
 ## 🩺 Agent v1.4.7 — honest policy-state reporting (September 21, 2026)
 
 ### Summary

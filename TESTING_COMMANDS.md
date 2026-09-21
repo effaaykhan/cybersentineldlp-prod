@@ -744,6 +744,42 @@ docker-compose logs celery-worker | grep -i error
 
 ---
 
+## Step 11b: Screen Capture Control
+
+Screen capture is policy-driven from agent v1.4.8. With no active
+`screen_capture_control` policy the agent suppresses nothing and runs no OCR.
+
+```bash
+# What the endpoint is told. Needs the agent's key from Mongo.
+AID=<agent-uuid>
+KEY=$(docker exec cybersentineldlp-mongodb mongosh --quiet -u dlp_user \
+  -p "$MONGODB_PASSWORD" --authenticationDatabase admin \
+  --eval "print(db.getSiblingDB('cybersentinel_dlp').agents.findOne({agent_id:'$AID'}).api_key)")
+
+curl -s "http://localhost:55100/api/v1/agents/$AID/screen-capture-policy" \
+  -H "X-Agent-Key: $KEY" | python3 -m json.tool
+```
+
+Expected with no policy: `"enforced": false` and every flag false.
+
+With an active policy, check these hold:
+
+| Console setting | Response |
+|---|---|
+| Mode = Audit | `block_keyboard`, `terminate_tools`, `clear_clipboard` all `false` even when action is Block |
+| No levels ticked | `"enforced": false` |
+| Action = Alert | `block_keyboard: false`; the user keeps the screenshot |
+
+On the endpoint, `cybersentineldlp_agent.log` should show one of:
+
+```
+Screen capture control: enforced=true mode=enforce action=block levels=[Confidential,Restricted] keyboard=block tools=16 (terminate)
+Screen capture monitoring started — IDLE: no active screen_capture_control policy, ...
+SCREEN_SCAN_IDLE: no active screen-capture policy
+SCREEN_CAPTURE_WOULD_BLOCK: printscreen — ... (policy is not in block mode; capture allowed)
+SCREEN_CAPTURE_BLOCKED: printscreen — sensitive content currently on screen
+```
+
 ## Step 12: Cleanup (After Testing)
 
 ### 11.1 Stop Agents

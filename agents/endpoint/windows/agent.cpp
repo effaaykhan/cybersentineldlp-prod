@@ -2394,6 +2394,19 @@ static ClassificationResult Classify(const std::string& content,
     // and alerts (default) or blocks the app on a sensitive attachment. All app
     // names / users / extensions stored lowercase. Alert-first: action defaults
     // to "alert" so enabling a policy never kills an app until an admin opts in.
+    // Synced from GET /agents/{id}/screen-capture-policy. Screen capture used to
+    // be hardcoded on with no policy behind it: it could not be tuned or switched
+    // off, its OCR pass ran on every endpoint forever, and its events were dropped
+    // on any agent with no OTHER policy because this channel was missing from
+    // EventsAllowed(). It is now policy-driven like every other channel.
+    std::atomic<bool> screenCaptureEnforced{false};
+    std::mutex screenPolicyMutex;
+    ScreenCapturePolicy screenPolicy;
+    // Set once the monitor exists. Start() runs the first policy sync BEFORE it
+    // constructs the monitors, so the fetched policy is held here and pushed
+    // again the moment the monitor comes up.
+    std::shared_ptr<ScreenCaptureMonitor> screenMonitorRef;
+
     std::atomic<bool> messagingEnforced{false};
     std::string messagingAction;                        // "alert" | "block"
     // Typed chat text (messaging_text_monitor). Server-driven and OFF unless the
@@ -3053,6 +3066,60 @@ if (!shouldBlock) {
 
      // Fetch the managed messaging / thick-client attachment-control policy. Called
      // each sync; keeps last-known config on any transient error/outage.
+     // Fetch the screen-capture control policy. Called each sync; keeps the
+     // last-known configuration on any transient error so a brief outage does
+     // not silently drop enforcement.
+     void FetchScreenCapturePolicy() {
+         try {
+             if (!httpClient) return;
+             auto [status, response] = httpClient->Get(
+                 "/agents/" + config.agentId + "/screen-capture-policy");
+             if (status != 200) return;   // keep last-known on error/outage
+
+             ScreenCapturePolicy p;
+             p.enforced = JsonBoolTrue(response, "enforced");
+             p.mode     = config.ExtractJsonValue(response, "mode");
+             p.action   = config.ExtractJsonValue(response, "action");
+             p.levels   = ParseJsonStrArray(response, "levels");
+             // The server has already folded mode+action into these, so audit mode
+             // arrives with every suppression flag false. Do not second-guess it.
+             p.blockKeyboard     = JsonBoolTrue(response, "block_keyboard");
+             p.blockCaptureTools = JsonBoolTrue(response, "block_capture_tools");
+             p.terminateTools    = JsonBoolTrue(response, "terminate_tools");
+             p.clearClipboard    = JsonBoolTrue(response, "clear_clipboard");
+             p.notifyUser        = JsonBoolTrue(response, "notify_user");
+             p.tools             = ParseJsonStrArray(response, "tools");
+             p.exceptUsers       = ParseJsonStrArray(response, "exception_users");
+             p.exceptProcesses   = ParseJsonStrArray(response, "exception_processes");
+             p.policyId          = config.ExtractJsonValue(response, "policy_id");
+             p.policyName        = config.ExtractJsonValue(response, "policy_name");
+
+             std::shared_ptr<ScreenCaptureMonitor> mon;
+             {
+                 std::lock_guard<std::mutex> lock(screenPolicyMutex);
+                 screenPolicy = p;
+                 mon = screenMonitorRef;
+             }
+             screenCaptureEnforced.store(p.enforced);
+             if (mon) mon->ApplyPolicy(p);
+
+             // Log the levels in full. "levels=2" cannot answer the only question
+             // ever asked of this line - is the level I am testing with actually
+             // covered - and the answer is rarely what the operator assumes.
+             std::string lv;
+             for (const auto& l : p.levels) { if (!lv.empty()) lv += ","; lv += l; }
+             logger.Info("Screen capture control: enforced=" + std::string(p.enforced ? "true" : "false") +
+                         " mode=" + (p.mode.empty() ? "off" : p.mode) +
+                         " action=" + (p.action.empty() ? "alert" : p.action) +
+                         " levels=[" + lv + "]" +
+                         " keyboard=" + std::string(p.blockKeyboard ? "block" : "allow") +
+                         " tools=" + std::to_string(p.tools.size()) +
+                         (p.terminateTools ? " (terminate)" : " (detect only)"));
+         } catch (...) {
+             logger.Error("FetchScreenCapturePolicy failed");
+         }
+     }
+
      void FetchMessagingAppPolicy() {
          try {
              if (!httpClient) return;
@@ -4664,7 +4731,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              logger.Warning("==============================================");
              logger.Warning("WARNING: no active policy in ANY channel");
              logger.Warning("(file, clipboard, USB, messaging, print,");
-             logger.Warning(" application control, network share).");
+             logger.Warning(" application control, network share,");
+             logger.Warning(" screen capture).");
              logger.Warning("The agent keeps running but will not generate");
              logger.Warning("events until a policy is assigned on the server.");
              logger.Warning("==============================================");
@@ -5106,6 +5174,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("severity", event.containsSensitiveData ? "high" : "low");
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.classification);
+                 // Which rule decided, so a blocked screenshot can be traced back to the
+                 // policy that blocked it (and the one to change to stop it).
+                 if (!event.policyId.empty())   json.AddString("policy_id", event.policyId);
+                 if (!event.policyName.empty()) json.AddString("policy_name", event.policyName);
                  // Report WHAT was detected, not just the level. The content-scan
                  // thread stashed the matched data-type labels + score for the most
                  // recent sensitive verdict; attach them so the dashboard shows the
@@ -5146,7 +5218,21 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              screenClassifier
          );
          screenMonitor->Start();
-         logger.Info("Screen capture monitoring started");
+         ScreenCapturePolicy initialScreenPolicy;
+         {
+             // Start() ran the first policy sync before the monitors were built, so
+             // whatever it fetched is already waiting in screenPolicy. Publish the
+             // handle and push that policy now; later syncs reach the monitor
+             // directly through screenMonitorRef.
+             std::lock_guard<std::mutex> lock(screenPolicyMutex);
+             screenMonitorRef     = screenMonitor;
+             initialScreenPolicy  = screenPolicy;
+         }
+         screenMonitor->ApplyPolicy(initialScreenPolicy);
+         logger.Info(std::string("Screen capture monitoring started — ") +
+                     (initialScreenPolicy.enforced
+                          ? "enforcing the active screen_capture_control policy"
+                          : "IDLE: no active screen_capture_control policy, nothing is suppressed and no OCR runs"));
 
          // ── Print Monitor ──
          auto printClassifier = [this](const std::string& docName, const std::string& processName) -> std::string {
@@ -5577,6 +5663,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              FetchApplicationControl();
              // Refresh the messaging / thick-client attachment-control policy too.
              FetchMessagingAppPolicy();
+             // Refresh the screen-capture control policy too.
+             FetchScreenCapturePolicy();
              // Refresh the wireless / Bluetooth transfer-control policy too.
              FetchWirelessPolicy();
              // Refresh the network file-share transfer-control policy too.
@@ -9051,7 +9139,8 @@ if (shouldMonitor) {
      bool EventsAllowed() const {
          return allowEvents.load()            || messagingEnforced.load()   ||
                 printerControlEnforced.load() || appControlEnforced.load()  ||
-                usbDeviceControlEnforced.load() || netShareEnforced.load();
+                usbDeviceControlEnforced.load() || netShareEnforced.load() ||
+                screenCaptureEnforced.load();
      }
 
      // Will this event EVER be accepted?

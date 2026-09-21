@@ -13,6 +13,7 @@ import {
   WirelessTransferControlConfig,
   NetworkShareControlConfig,
   MessagingAppControlConfig,
+  ScreenCaptureControlConfig,
   PrintContentConfig,
   WebActivityControlConfig,
   USBTransferConfig,
@@ -35,6 +36,7 @@ import ApplicationControlForm from './ApplicationControlForm'
 import WirelessTransferControlForm from './WirelessTransferControlForm'
 import NetworkShareControlForm from './NetworkShareControlForm'
 import MessagingAppControlForm from './MessagingAppControlForm'
+import ScreenCaptureControlForm from './ScreenCaptureControlForm'
 import PrintContentForm from './PrintContentForm'
 import WebActivityControlForm from './WebActivityControlForm'
 import NetworkPreventionPolicyForm from './NetworkPreventionPolicyForm'
@@ -130,7 +132,7 @@ const WIDE_FORMS: PolicyType[] = [
 const usesClassificationBuilder = (t: PolicyType | null): boolean =>
   t === 'classification_aware_policy' || isChannelPolicy(t)
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | WebActivityControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | ScreenCaptureControlConfig | PrintContentConfig | WebActivityControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'cloud_upload_prevention':
@@ -226,6 +228,23 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
     case 'messaging_app_control':
       return { action: 'alert', apps: [], exceptions: {} } as MessagingAppControlConfig
 
+    // Alert-first, and only on the two levels that mean "sensitive" out of the
+    // box. Withholding a user's PrintScreen key is the most visible thing this
+    // product does on an endpoint, so it is opted into, never inherited.
+    case 'screen_capture_control':
+      return {
+        mode: 'enforce',
+        action: 'alert',
+        levels: ['Confidential', 'Restricted'],
+        block_keyboard: true,
+        block_capture_tools: true,
+        terminate_tools: true,
+        clear_clipboard: true,
+        notify_user: true,
+        tools: [],
+        exceptions: {},
+      } as ScreenCaptureControlConfig
+
     case 'print_content_prevention':
       return { mode: 'enforce', levels: ['Confidential', 'Restricted'] } as PrintContentConfig
 
@@ -299,7 +318,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | PrintContentConfig | WebActivityControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBDeviceControlConfig | PrinterControlConfig | ApplicationControlConfig | WirelessTransferControlConfig | NetworkShareControlConfig | MessagingAppControlConfig | ScreenCaptureControlConfig | PrintContentConfig | WebActivityControlConfig | USBTransferConfig | FileTransferConfig | NetworkPreventionConfig>(
     withConfigDefaults(
       editingPolicy?.type || (editingPolicy ? 'classification_aware_policy' : null),
       editingPolicy?.config
@@ -828,6 +847,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'messaging_app_control' && (
                   <MessagingAppControlForm
                     config={config as MessagingAppControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'screen_capture_control' && (
+                  <ScreenCaptureControlForm
+                    config={config as ScreenCaptureControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

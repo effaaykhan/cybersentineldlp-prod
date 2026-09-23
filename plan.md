@@ -98,6 +98,17 @@ policy because the channel was missing from `EventsAllowed()`.
 - ✅ Probe order: pointer -> beside composer -> window corner
 - ✅ VERSION 1.4.12 → 1.4.13
 
+## Follow-on — Agent v1.4.14: enforce at staging, not at the send
+- ✅ User chose staging-time enforcement after the send gate failed five ways
+- ✅ InspectStagedFiles now acts on a Confidential/Restricted verdict:
+  block -> terminate the app + BLOCK event + notice (same as the file-dialog path)
+  alert -> ALERT event only, app untouched
+- ✅ Send gates left in place as the secondary catch for typed messages
+- ✅ Forward-declared DescribeLabels/EmitEvent/ShowBlockedNotice/ClearPendingDrop
+  (all defined below InspectStagedFiles); EmitEvent defaults moved to the decl
+- ✅ Accepted trade-off: acts even on a file that was only being previewed
+- ✅ VERSION 1.4.13 → 1.4.14
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

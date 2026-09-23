@@ -1863,10 +1863,34 @@ void ResolveDroppedFiles(HWND srcWnd, HWND target) {
     InspectStagedFiles(paths, tpid);
 }
 
+// Defined below, where the event plumbing and the classifier are in scope.
+// Staging-time enforcement needs them here.
+std::string DescribeLabels(const NetworkExfilMonitor::ClassifyResult& cls);
+void EmitEvent(const std::string& exe, DWORD pid, const std::string& action,
+               const std::string& severity,
+               const NetworkExfilMonitor::ClassifyResult& cls,
+               const std::string& reason, const std::string& text,
+               const std::string& via = "", HWND wnd = nullptr);
+void ShowBlockedNotice(const std::string& appExe, const std::string& what);
+void ClearPendingDrop();
+
 // Classify files staged for sending and, if any is sensitive, hold that verdict
 // against the application until it sends. Already on its own thread in both
 // callers - this reads a file and asks the server, and neither the sampler nor
 // a hook may wait for that.
+// Same enforcement the file-dialog path uses: stop the app before the
+// attachment reaches its TLS-encrypted upload. There is no gentler lever in
+// user mode - we cannot reach into the app and un-stage a file it is already
+// holding.
+bool TerminateMessagingApp(DWORD pid) {
+    if (!pid) return false;
+    HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+    if (!h) return false;
+    const bool ok = TerminateProcess(h, 1) != FALSE;
+    CloseHandle(h);
+    return ok;
+}
+
 void InspectStagedFiles(std::vector<std::string> paths, DWORD targetPid) {
     if (paths.empty()) return;
     // Was the hook even wired up? Returning quietly here meant that an agent
@@ -1906,7 +1930,53 @@ void InspectStagedFiles(std::vector<std::string> paths, DWORD targetPid) {
                 g_dropPath = path;  g_dropCls = cls;
             }
             LogWarn("a sensitive file was staged in a managed chat: " + path +
-                    " (" + cls.category + ") - the next send in this app will be blocked");
+                    " (" + cls.category + ")");
+
+            // Act HERE, not at the send.
+            //
+            // Waiting for the send meant recognising the Send button in a Chromium UI
+            // that rebuilds itself mid-conversation, and doing it faster than a person
+            // can click. On one measured run the verdict was armed at 12:58:36 and the
+            // button was not located until 12:58:40 - 1.5s AFTER the file had gone. The
+            // detection side was never the problem; the race was. The file-dialog path
+            // never had this problem because it has always acted at selection time.
+            //
+            // The send gates below are left in place. They still catch a typed message,
+            // and they still catch an attachment if this returns without acting.
+            const DWORD  tpid     = targetPid;
+            const std::string exe = ProcessExeName(tpid);
+            NetworkExfilMonitor::MessagingVerdict mv = AskPolicy(ToLowerAscii(exe));
+            const std::string what = DescribeLabels(cls);
+            const std::string severity =
+                (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
+            if (mv.block) {
+                const bool killed = TerminateMessagingApp(tpid);
+                try {
+                    EmitEvent(exe, tpid, "BLOCK", severity, cls,
+                              "Blocked sensitive file staged in " + exe + " (" +
+                              cls.category + ") - " + path +
+                              (killed ? "" : " [terminate failed]"),
+                              path, "staged_file", nullptr);
+                } catch (...) {}
+                LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
+                        " detected=[" + what + "] via=staged-file path=" + path +
+                        (killed ? " (app terminated)" : " (terminate FAILED)"));
+                ShowBlockedNotice(exe, what.empty() ? std::string("a sensitive file") : what);
+                // Acted. Leaving the verdict armed would block the next unrelated send
+                // in this app for the whole five-minute window.
+                if (killed) ClearPendingDrop();
+            } else {
+                // Audit-first default: recorded, not interrupted. The send gates still
+                // hold the verdict, so an alert-mode policy behaves exactly as before.
+                try {
+                    EmitEvent(exe, tpid, "ALERT", severity, cls,
+                              "Sensitive file staged in " + exe + " (" + cls.category +
+                              ") - " + path + ". Alert only - not blocked.",
+                              path, "staged_file", nullptr);
+                } catch (...) {}
+                LogWarn("POLICY_DECISION messaging decision=ALERT category=" + cls.category +
+                        " via=staged-file path=" + path);
+            }
             break;
         }
     }
@@ -2373,7 +2443,7 @@ void EmitEvent(const std::string& exe, DWORD pid, const std::string& action,
                const std::string& severity,
                const NetworkExfilMonitor::ClassifyResult& cls,
                const std::string& reason, const std::string& text,
-               const std::string& via = "", HWND wnd = nullptr) {
+               const std::string& via, HWND wnd) {
     if (!g_cfg.sendEvent) return;
     std::ostringstream j;
     j << "{";

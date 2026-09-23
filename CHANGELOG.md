@@ -8,6 +8,49 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛑 Sensitive attachments are stopped at staging, not at the send — Agent v1.4.14 (September 23, 2026)
+
+### Summary
+
+The drop/paste attachment path now acts the moment a file is classified, the
+same way the file-dialog path always has, instead of waiting to catch the send.
+
+### Why
+
+The detection side was never the problem. On the measured run the `.avif` was
+detected, OCR'd, classified **Restricted** and armed at 12:58:36 — and the file
+still went out at 12:58:38, because the Send button was not located until
+12:58:40. The verdict was ready two seconds early; the gate simply lost a race.
+
+Catching the exact send meant recognising a button in a Chromium UI that
+rebuilds itself mid-conversation, faster than a person can click. That gate has
+now failed five distinct ways (control type, stale rectangle, hover-only,
+captionless pictures, acquisition lag), each a correct fix for a different part
+of the same fragile assumption. The file-dialog path never had any of these
+problems, because it has always acted at selection time.
+
+### What changed
+
+When `InspectStagedFiles` classifies a staged file Confidential/Restricted:
+
+* **`action: block`** — terminate the app before the attachment reaches its
+  TLS-encrypted upload (there is no gentler lever in user mode; we cannot reach
+  into the app and un-stage a file it already holds), emit a BLOCK event, show
+  the notice. Exactly what the file-dialog path does.
+* **`action: alert`** — emit an ALERT event and leave the app alone. Audit-first
+  behaviour is unchanged.
+
+The send gates are left in place. They still catch typed messages, and they
+still catch an attachment if this path declines to act.
+
+### Trade-off, accepted deliberately
+
+This acts even if the file was only being previewed and would never have been
+sent. That is the cost of not depending on a race, and it was chosen over
+continuing to patch the gate.
+
+---
+
 ## ⏱ The Send button was found 1.5 seconds after the send — Agent v1.4.13 (September 23, 2026)
 
 ### Summary

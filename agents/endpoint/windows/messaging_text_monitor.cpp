@@ -304,6 +304,7 @@ std::atomic<bool>      g_convLoggedOnce{false};
 // Said once per app, not four times a second, when the pointer probe works out
 // where Send is - it is the line that tells an operator the mouse is covered.
 std::atomic<bool> g_hoverSaidSo{false};
+std::atomic<bool> g_besideSaidSo{false};
 
 // ── What the locator has found ─────────────────────────────────────
 // Both threads live in the COM multithreaded apartment, so an interface pointer
@@ -1943,11 +1944,16 @@ void ClearPendingDrop() {
 // per message is handled without a re-find. Publishes straight into the
 // rectangle the mouse hook reads - there is no element to cache, which is the
 // point.
-bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
-                             const RECT* composerRect) {
+// One point, asked once. Extracted from the hover probe so the same rules can
+// be applied to a point the user has not reached yet.
+//
+// Returns true when it published a rectangle. When it saw a clickable,
+// button-sized control that it declined to call Send, *declined is filled in so
+// the caller can say so - that line is the difference between knowing an app
+// labels its send control unusually and guessing.
+bool TryPublishSendAtPoint(IUIAutomation* uia, const TargetApp& t, POINT p,
+                           const RECT* composerRect, std::string* declined) {
     if (!uia || !t.wnd) return false;
-    POINT p{};
-    if (!GetCursorPos(&p)) return false;
     RECT wr{};
     if (!GetWindowRect(t.wnd, &wr)) return false;
     if (p.x < wr.left || p.x >= wr.right || p.y < wr.top || p.y >= wr.bottom) return false;
@@ -1961,15 +1967,12 @@ bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
     // button belongs to the renderer - WhatsApp's is msedgewebview2.exe while
     // the window is WhatsApp.Root.exe - so an equality test against the
     // foreground pid rejected the exact control it was meant to find, and did so
-    // silently. The same filter had already been dropped from the composer and
-    // Send-button searches; this copy was missed, and it is why the hover probe
-    // never published a rectangle on WhatsApp.
+    // silently.
     //
-    // Nothing is lost by removing it: the cursor is already proven to be inside
+    // Nothing is lost by its absence: the point is already proven to be inside
     // the managed window's rectangle above, and the size, control-type and
     // name/position tests below still have to pass. The rectangle is published
-    // against t.pid either way, so the mouse hook's snapshot check still
-    // compares like with like.
+    // against t.pid either way, so the mouse hook compares like with like.
     if (ElementRect(el, r)) {
         // The hit test returns the innermost node, which for an icon button is
         // the Image inside it rather than the Button itself - hence Image
@@ -1986,31 +1989,81 @@ bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
                 (composerRect && RectBesideComposer(r, *composerRect))) {
                 std::lock_guard<std::mutex> lk(g_sendMx);
                 g_sendRect = r; g_sendPid = t.pid; g_sendAtMs = NowSteadyMs();
+                // Recorded here too. The probe publishes a rectangle without
+                // caching an element, so without this the hook's "has the window
+                // moved?" test had nothing to compare against on the one path
+                // that was actually finding the button.
+                g_sendWnd     = t.wnd;
+                g_sendWndRect = wr;
                 published = true;
-            } else {
-                // Hovering something clickable and button-sized that we decline
-                // to call Send. Where the composer cannot be read there is no
-                // positional fallback either, so the name is the only test left;
-                // if an app labels its send control in a way this does not
-                // recognise, this line is the difference between knowing that
-                // and guessing. Once a minute, not once a frame.
-                const long long now  = NowSteadyMs();
-                const long long last = g_hoverMissLoggedMs.load(std::memory_order_relaxed);
-                if (!last || now - last > 60000) {
-                    g_hoverMissLoggedMs.store(now, std::memory_order_relaxed);
-                    LogInfo("locator saw a clickable control under the pointer in " +
-                            t.exe + " but does not recognise it as Send - " +
-                            ElementDescription(el) + " size=" +
+            } else if (declined) {
+                *declined = ElementDescription(el) + " size=" +
                             std::to_string(r.right - r.left) + "x" +
-                            std::to_string(r.bottom - r.top) +
-                            (composerRect ? ""
-                                          : " (no message-box rectangle, so the name was the only test)"));
-                }
+                            std::to_string(r.bottom - r.top);
             }
         }
     }
     el->Release();
     return published;
+}
+
+// ── The pointer as the cheap search ───────────────────────────────
+//
+// FindSendButton walks the whole descendant tree, which on a Chromium document
+// costs seconds. ElementFromPoint asks about ONE point and costs a fraction of
+// that, and there is a point worth asking about: nobody clicks Send without
+// first moving the pointer onto it.
+//
+// It also covers what the tree walk cannot. The walk runs on a timer against a
+// tree that rebuilds itself constantly; this runs against whatever is under the
+// cursor at that instant, so an app that renames or re-creates its send control
+// per message is handled without a re-find.
+bool ProbeHoveredSendControl(IUIAutomation* uia, const TargetApp& t,
+                             const RECT* composerRect) {
+    POINT p{};
+    if (!GetCursorPos(&p)) return false;
+    std::string declined;
+    if (TryPublishSendAtPoint(uia, t, p, composerRect, &declined)) return true;
+    if (!declined.empty()) {
+        // Once a minute, not once a frame.
+        const long long now  = NowSteadyMs();
+        const long long last = g_hoverMissLoggedMs.load(std::memory_order_relaxed);
+        if (!last || now - last > 60000) {
+            g_hoverMissLoggedMs.store(now, std::memory_order_relaxed);
+            LogInfo("locator saw a clickable control under the pointer in " +
+                    t.exe + " but does not recognise it as Send - " + declined +
+                    (composerRect ? ""
+                                  : " (no message-box rectangle, so the name was the only test)"));
+        }
+    }
+    return false;
+}
+
+// ── Where Send has to be, asked directly ──────────────────────────
+//
+// The tree walk fails on WhatsApp ("by name or beside the message box") and the
+// hover probe only fires once the pointer is already on the control - so the
+// FIRST send of a session was never inspected, and the user had to hover before
+// the agent would block anything. That is not a control; it is a control with a
+// documented bypass.
+//
+// The button's position is not a mystery, though. RectBesideComposer already
+// states where it must be: level with the message box, to its right, within
+// 250px. Those are points ElementFromPoint can be asked about without waiting
+// for the pointer to arrive. Outermost first, because the send control sits at
+// the end of the row of composer buttons.
+bool ProbeSendBesideComposer(IUIAutomation* uia, const TargetApp& t,
+                             const RECT* composerRect) {
+    if (!composerRect) return false;
+    const RECT& c = *composerRect;
+    if (c.right <= c.left || c.bottom <= c.top) return false;
+    const LONG y = c.top + (c.bottom - c.top) / 2;
+    static const LONG kOffsets[] = { 200, 150, 110, 80, 56, 36, 20 };
+    for (const LONG dx : kOffsets) {
+        POINT p{ c.right + dx, y };
+        if (TryPublishSendAtPoint(uia, t, p, composerRect, nullptr)) return true;
+    }
+    return false;
 }
 
 // One root, one pass. Extracted so the same rules about what counts as a
@@ -3238,6 +3291,7 @@ void LocatorThread() {
                 }
                 lastSendFindMs = 0; sendMisses = 0; hadText = false;
                 g_hoverSaidSo.store(false);
+                g_besideSaidSo.store(false);
                 continue;
             }
 
@@ -3326,10 +3380,19 @@ void LocatorThread() {
 
                 // Cheap, every pass, and independent of the cached element.
                 if (!sendBtn) {
-                    if (ProbeHoveredSendControl(uia, t, haveCr ? &cr : nullptr) &&
-                        !g_hoverSaidSo.exchange(true)) {
-                        LogInfo("locator recognised the control under the pointer in " +
-                                t.exe + " as Send - a click on it is now inspected");
+                    if (ProbeHoveredSendControl(uia, t, haveCr ? &cr : nullptr)) {
+                        if (!g_hoverSaidSo.exchange(true)) {
+                            LogInfo("locator recognised the control under the pointer in " +
+                                    t.exe + " as Send - a click on it is now inspected");
+                        }
+                    // The pointer is somewhere else, or has not arrived yet. Ask where the
+                    // button has to be anyway - otherwise the first send of every session
+                    // goes out uninspected, which is what the endpoint log showed.
+                    } else if (ProbeSendBesideComposer(uia, t, haveCr ? &cr : nullptr)) {
+                        if (!g_besideSaidSo.exchange(true)) {
+                            LogInfo("locator found the Send control beside the message box in " +
+                                    t.exe + " - a click on it is inspected without hovering first");
+                        }
                     }
                 }
 

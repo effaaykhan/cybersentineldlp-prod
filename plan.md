@@ -61,6 +61,18 @@ policy because the channel was missing from `EventsAllowed()`.
 - ✅ Confined to the send-rect plumbing; Enter path and 1.4.9 attachment hold untouched
 - ✅ VERSION 1.4.9 → 1.4.10
 
+## Follow-on — Agent v1.4.11: blocking required hovering first
+- ✅ 1.4.10 produced the first `via=send-button-click` block, but only after a hover
+- ✅ Root cause: FindSendButton fails on WhatsApp; only the cursor probe worked,
+  so the FIRST send of every session went out uninspected
+- ✅ Extracted TryPublishSendAtPoint from the hover probe
+- ✅ Added ProbeSendBesideComposer — asks ElementFromPoint about the points
+  RectBesideComposer already says the button must occupy (no hover needed)
+- ✅ Locator tries cursor first, computed points as fallback
+- ✅ Fixed a 1.4.10 gap: the probe path never set g_sendWnd/g_sendWndRect, so the
+  window-unchanged test had nothing to compare on the path that actually worked
+- ✅ VERSION 1.4.10 → 1.4.11
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

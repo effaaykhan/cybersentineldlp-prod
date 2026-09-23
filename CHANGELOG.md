@@ -8,6 +8,56 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 👆 Blocking a send required hovering over the button first — Agent v1.4.11 (September 23, 2026)
+
+### Summary
+
+1.4.10 produced the first ever `via=send-button-click` block. But it only worked
+after the user hovered over Send, and the agent said so in its own log:
+
+```
+click at (1798,860) NOT inspected: no Send button has been located in this app.
+Hover over Send for a moment before clicking and it will be recognised.
+```
+
+A control with a documented bypass is not a control. **The first send of every
+session went out uninspected.**
+
+### What was wrong
+
+Three things can locate the Send button, and on WhatsApp only one of them worked:
+
+* `FindSendButton` — the tree walk. Fails outright:
+  `locator found no Send button in whatsapp.root.exe - by name or beside the message box`.
+* `ProbeHoveredSendControl` — `ElementFromPoint` at the cursor. Works, but only
+  once the pointer is already on the control.
+* Nothing else.
+
+So the gate depended on the user hovering before clicking.
+
+### The fix
+
+`RectBesideComposer` already states where the button must be — level with the
+message box, to its right, within 250px. Those are points `ElementFromPoint` can
+be asked about without waiting for the pointer to arrive.
+
+The point→validate→publish logic is extracted from the hover probe into
+`TryPublishSendAtPoint`, and a new `ProbeSendBesideComposer` walks candidate
+points outward from the composer's right edge (200, 150, 110, 80, 56, 36, 20px),
+outermost first because the send control sits at the end of the composer's
+button row. The locator asks the cursor first — most accurate — and falls back
+to the computed points. Same control-type, size and name/position tests as
+before; nothing is published that would not have been published on hover.
+
+### Also fixed
+
+The probe path publishes a rectangle **without caching an element**, so it never
+set the `g_sendWnd` / `g_sendWndRect` pair that 1.4.10 added. The hook's
+"has the window moved?" test therefore had nothing to compare against on the one
+path that was actually finding the button. Both are now recorded on publish.
+
+---
+
 ## 🖱 The Send button was found, measured correctly, and refused anyway — Agent v1.4.10 (September 21, 2026)
 
 ### Summary

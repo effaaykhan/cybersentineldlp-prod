@@ -8,6 +8,54 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖼 A picture sent with no caption never reached the attachment hold — Agent v1.4.12 (September 23, 2026)
+
+### Summary
+
+1.4.9 added a hold so a send waits for its attachment's OCR. For a picture sent
+**with no caption** the click never got that far.
+
+### What was wrong
+
+The locator only looks for the Send button while there is something worth
+sending:
+
+```cpp
+g_composerHasText.store(!text.empty() || HasPendingDrop(t.pid, t.exe));
+```
+
+`HasPendingDrop` is true only once classification has **finished and come back
+sensitive**. For a captionless picture, during the entire OCR there is no text
+and no verdict — so the flag was false, the locator's search block was gated
+off, no rectangle was ever published, and in `MouseProc` the click failed the
+`fresh || inside` test and returned *before* the attachment hold was reached.
+
+`KeyProc` does not consult this flag at all, which is exactly why Enter blocked
+pictures and the Send button did not — the same Enter/mouse asymmetry this file
+has been chasing throughout.
+
+### The fix
+
+`StagedRecently()` answers "was a file staged in this app recently, whatever the
+verdict turned out to be", keyed on the *start* of the inspection rather than
+the existence of a result. The locator's gate now opens the moment a file is
+staged, giving it the whole OCR to find the button before the user clicks it.
+
+Five minutes, matching the window `PendingDropFor` already allows for adding a
+caption, so both halves of the same send agree on how long a staged file stays
+interesting.
+
+### Where this leaves image blocking
+
+| Path | Before | After |
+|---|---|---|
+| Enter, picture, no caption | held (1.4.9) | held |
+| Enter, picture + caption | held | held |
+| Send button, picture + caption | held (needs 1.4.11 locator) | held |
+| Send button, picture, no caption | **sent uninspected** | held |
+
+---
+
 ## 👆 Blocking a send required hovering over the button first — Agent v1.4.11 (September 23, 2026)
 
 ### Summary

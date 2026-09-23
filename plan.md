@@ -73,6 +73,18 @@ policy because the channel was missing from `EventsAllowed()`.
   window-unchanged test had nothing to compare on the path that actually worked
 - ✅ VERSION 1.4.10 → 1.4.11
 
+## Follow-on — Agent v1.4.12: captionless pictures bypassed the attachment hold
+- ✅ Found by tracing the question "does OCR work on the click path too?" rather
+  than assuming 1.4.9 + 1.4.11 covered it — it did not
+- ✅ g_composerHasText was keyed on HasPendingDrop, true only AFTER classification
+  finished and came back sensitive; during the OCR of a captionless picture it
+  was false, so the locator never looked for the Send button
+- ✅ MouseProc therefore returned at the fresh||inside test, before the 1.4.9 hold
+- ✅ KeyProc never consults that flag — hence Enter blocked pictures, clicks did not
+- ✅ StagedRecently() opens the gate from the START of inspection (5 min, matching
+  PendingDropFor's caption window)
+- ✅ VERSION 1.4.11 → 1.4.12
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

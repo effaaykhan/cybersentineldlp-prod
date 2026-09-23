@@ -284,6 +284,19 @@ bool StagedInspectionInFlight(DWORD pid) {
 // Wait for it to finish. True = it completed and the verdict is readable;
 // false = the ceiling was reached first, which the caller must treat as
 // "not cleared" rather than "clean".
+// Was a file staged in this app recently, whatever the verdict turned out to
+// be? StagedInspectionInFlight answers only "right now", and the locator
+// needs longer: it has to FIND the Send button before the user clicks it, and
+// that search is gated on there being something worth sending. Keyed on the
+// start of the inspection, so it is true from the moment a file is staged -
+// not from the moment a verdict exists, which is far too late.
+bool StagedRecently(DWORD pid, int windowMs) {
+    std::lock_guard<std::mutex> lk(g_inspMx);
+    if (!g_inspStart) return false;
+    if (pid && g_inspPid && g_inspPid != pid) return false;
+    return NowSteadyMs() - g_inspStart <= windowMs;
+}
+
 bool AwaitStagedInspection(int budgetMs) {
     std::unique_lock<std::mutex> lk(g_inspMx);
     return g_inspCv.wait_for(lk, std::chrono::milliseconds(budgetMs),
@@ -3671,7 +3684,19 @@ void SamplerThread() {
             // Send button was never located for exactly that case - so the mouse
             // hook had no rectangle, and a click on Send went through before any
             // of the drop handling was reached.
-            g_composerHasText.store(!text.empty() || HasPendingDrop(t.pid, t.exe));
+            // StagedRecently, not just HasPendingDrop. HasPendingDrop is true only once
+            // classification has finished AND come back sensitive - so for a picture sent
+            // with no caption this was false for the entire OCR, the locator never went
+            // looking for the Send button, the mouse hook had no rectangle, and the click
+            // returned long before the attachment hold was reached. Enter was unaffected
+            // because KeyProc does not consult this flag at all, which is precisely why
+            // Enter blocked pictures and the Send button did not.
+            //
+            // Five minutes matches the window PendingDropFor already allows for adding a
+            // caption, so both halves of the same send agree on how long a staged file
+            // stays interesting.
+            g_composerHasText.store(!text.empty() || HasPendingDrop(t.pid, t.exe) ||
+                                    StagedRecently(t.pid, 300000));
 
             // ── Pre-decide, so the mouse hook never has to ───────────────
             // Only when the text actually changed: this runs four times a

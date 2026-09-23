@@ -1475,6 +1475,16 @@ bool ElementSuggestsSend(IUIAutomationElement* el) {
     return id.find("send") != std::string::npos;
 }
 
+// Is this rectangle actually inside the window it is supposed to belong to?
+// A rectangle that is not describes a layout that no longer exists - a dead
+// element answering with the geometry it had when it died.
+bool RectInsideWindow(const RECT& r, HWND wnd) {
+    RECT w{};
+    if (!wnd || !GetWindowRect(wnd, &w)) return false;
+    return r.left >= w.left && r.top >= w.top &&
+           r.right <= w.right && r.bottom <= w.bottom;
+}
+
 // Big enough to click, small enough to be a button rather than a panel or a
 // conversation row. Everything published to the mouse hook passes through here:
 // the hook swallows a click inside whatever rectangle it is given, so an
@@ -2068,7 +2078,7 @@ bool TryPublishSendAtPoint(IUIAutomation* uia, const TargetApp& t, POINT p,
         // it would be the agent breaking the app.
         const CONTROLTYPEID ct = ElementControlType(el);
         const bool clickable = (ct == kButtonControlTypeId || ct == kImageControlTypeId);
-        if (clickable && ButtonSized(r)) {
+        if (clickable && ButtonSized(r) && RectInsideWindow(r, t.wnd)) {
             if (ElementSuggestsSend(el) ||
                 (composerRect && RectBesideComposer(r, *composerRect))) {
                 std::lock_guard<std::mutex> lk(g_sendMx);
@@ -3360,6 +3370,15 @@ void LocatorThread() {
     long long lastSendFindMs   = 0;
     unsigned  sendMisses       = 0;
     bool      hadText          = false;
+    // The window geometry everything below was located against. A resize moves
+    // every control in the app, and a cached element that has died then hands
+    // back its OLD rectangle - which is how the positional search came to lock
+    // onto a 40x40 control at the TOP of the window and publish it as Send, while
+    // the real button sat at the bottom right. Nothing downstream can tell a
+    // stale rectangle from a current one, so the layout change has to be caught
+    // here, where the elements are owned.
+    RECT      locatedWndRect     = {0, 0, 0, 0};
+    HWND      locatedWnd         = nullptr;
 
     while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -3433,6 +3452,32 @@ void LocatorThread() {
                 composer->Release(); composer = nullptr; composerPid = 0;
                 contentRoot = nullptr;
             }
+            // Layout changed under us: drop every cached element and the published
+            // rectangle, and re-find from scratch. Cheaper than reasoning about which
+            // of them survived, and the only answer that cannot be subtly wrong.
+            {
+                RECT wr{};
+                const bool haveWr = t.wnd && GetWindowRect(t.wnd, &wr);
+                const bool moved  = haveWr && locatedWnd == t.wnd &&
+                                    (wr.left != locatedWndRect.left || wr.top != locatedWndRect.top ||
+                                     wr.right != locatedWndRect.right || wr.bottom != locatedWndRect.bottom);
+                if (moved) {
+                    LogInfo("the " + t.exe + " window was moved or resized - dropping the "
+                            "located controls and re-finding (every rectangle just changed)");
+                    if (composer) { PublishComposer(nullptr, 0); composer->Release(); composer = nullptr; composerPid = 0; }
+                    contentRoot = nullptr;
+                    if (sendBtn) { PublishSendBtn(nullptr, 0); sendBtn->Release(); sendBtn = nullptr; sendPid = 0; }
+                    {
+                        std::lock_guard<std::mutex> lk(g_sendMx);
+                        g_sendRect = RECT{0, 0, 0, 0};
+                        g_sendPid = 0; g_sendAtMs = 0;
+                        g_sendWnd = nullptr; g_sendWndRect = RECT{0, 0, 0, 0};
+                    }
+                    lastSendFindMs = 0; sendMisses = 0;
+                    g_hoverSaidSo.store(false); g_besideSaidSo.store(false); g_cornerSaidSo.store(false);
+                }
+                if (haveWr) { locatedWnd = t.wnd; locatedWndRect = wr; }
+            }
             if (sendBtn && (t.pid != sendPid || !ElementAlive(sendBtn))) {
                 PublishSendBtn(nullptr, 0);
                 sendBtn->Release(); sendBtn = nullptr; sendPid = 0;
@@ -3495,7 +3540,15 @@ void LocatorThread() {
                 if (!hadText) { lastSendFindMs = 0; sendMisses = 0; }
 
                 RECT cr{};
-                const bool haveCr = composer && ElementRect(composer, cr);
+                // ElementAlive first. A dead element still answers ElementRect, with the
+                // rectangle it had when it died - and "beside the message box" computed from
+                // a message box that has moved is how a control at the top of the window got
+                // published as Send.
+                RECT cr2{};
+                const bool haveCr = composer && ElementAlive(composer) && ElementRect(composer, cr2) &&
+                                    cr2.right > cr2.left && cr2.bottom > cr2.top &&
+                                    RectInsideWindow(cr2, t.wnd);
+                if (haveCr) cr = cr2;
 
                 // Cheap, every pass, and independent of the cached element.
                 if (!sendBtn) {
@@ -3673,7 +3726,8 @@ void SamplerThread() {
                 if (btn) {
                     RECT r{};
                     if (spid == t.pid && ElementRect(btn, r) &&
-                        r.right > r.left && r.bottom > r.top) {
+                        r.right > r.left && r.bottom > r.top &&
+                        ElementAlive(btn) && RectInsideWindow(r, t.wnd)) {
                         // The window is recorded with it, so the hook can ask whether
                         // the button can have moved rather than guessing from a clock.
                         RECT wr{};

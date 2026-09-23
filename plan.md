@@ -109,6 +109,22 @@ policy because the channel was missing from `EventsAllowed()`.
 - ✅ Accepted trade-off: acts even on a file that was only being previewed
 - ✅ VERSION 1.4.13 → 1.4.14
 
+## Follow-on — Agent v1.4.15: a resize published the WRONG control as Send
+- ✅ Reproduced by the user: resize WhatsApp -> text blocking stops
+- ✅ Log proved the agent published rect [1267,189 1307,229] (40x40, TOP of window)
+  as the Send button; the real one is [1833,921 1894,982]. It also drifted, so it
+  was tracking a scrolling element
+- ✅ Root cause: a DEAD element still answers ElementRect with its last-known
+  rectangle. After a resize the cached composer returned the old layout's rect,
+  and RectBesideComposer matched a control "beside" a message box that had moved
+- ✅ Locator now tracks the window geometry it located against; any move/resize
+  drops composer + contentRoot + sendBtn, clears the published rect, re-finds
+- ✅ ElementAlive checked before trusting a composer rect; rect must be sane and
+  inside the window
+- ✅ RectInsideWindow guards BOTH publish sites (point probes + sampler re-measure)
+- ✅ The 1.4.13 corner probe was suspected first and was innocent — it never fired
+- ✅ VERSION 1.4.14 → 1.4.15
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

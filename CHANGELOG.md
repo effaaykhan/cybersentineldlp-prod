@@ -8,6 +8,57 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📐 A resize made the locator publish the wrong control as Send — Agent v1.4.15 (September 23, 2026)
+
+### Summary
+
+Text blocking stopped working after the WhatsApp window was resized. The log
+shows why, and it is worse than a miss — the agent was enforcing against a
+rectangle that was not the Send button:
+
+```
+15:21:47.313  locator located the Send button ... by position (beside the message box)
+15:21:55.917  click at (949,924)  is outside the Send button rect [1267,189 1307,229]
+15:22:08.061  click at (1795,857) is outside the Send button rect [1267,120 1307,160]
+```
+
+A 40×40 box at y≈120–229 — near the **top** of the window. The real Send button
+is at `[1833,921 1894,982]`, bottom right. And it drifts (189→120), so it was
+tracking something that scrolls.
+
+### Root cause
+
+A resize moves every control in the app and kills cached accessibility nodes.
+**A dead element still answers `ElementRect`** — with the rectangle it had when
+it died. So the cached composer handed back a message-box rectangle from the old
+layout, `RectBesideComposer` faithfully found a control "beside" it, and that
+control was published as Send.
+
+Nothing downstream can tell a stale rectangle from a current one, so the layout
+change has to be caught where the elements are owned.
+
+### Fixes
+
+* **A moved or resized window drops everything.** The locator remembers the
+  window geometry it located against; when that changes it releases the
+  composer, the content root and the send button, clears the published
+  rectangle, and re-finds from scratch. Cheaper than reasoning about which
+  cached element survived, and the only answer that cannot be subtly wrong.
+* **A dead composer's rectangle is never used.** `ElementAlive` is now checked
+  before `ElementRect`, and the result must be a sane rectangle inside the
+  window.
+* **No rectangle outside its own window is ever published as Send**
+  (`RectInsideWindow`), applied at both publish sites — the point probes and the
+  sampler's re-measure.
+
+### Not the cause
+
+The window-corner probe added in 1.4.13 never fired in any of this — there is no
+"window corner" line in the log. It was the first thing suspected and it was
+innocent.
+
+---
+
 ## 🛑 Sensitive attachments are stopped at staging, not at the send — Agent v1.4.14 (September 23, 2026)
 
 ### Summary

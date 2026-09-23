@@ -8,6 +8,61 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ✋ A click is judged when it happens, not against a button found in advance — Agent v1.4.16 (September 23, 2026)
+
+### Summary
+
+1.4.15 fixed the resize. Snapping WhatsApp to half the screen broke text
+blocking again. That was the eighth distinct way the click gate had failed. The
+earlier seven: wrong control type, stale rectangle, hover-only, captionless
+pictures, acquisition lag, a wrong control after a resize, and a rectangle
+discarded on a UI rebuild. They all had the same cause.
+
+### The design flaw
+
+A click was inspected only if it landed inside a Send rectangle **located ahead
+of time**:
+
+```cpp
+if (!fresh || !inside) { ...record why...; return CallNextHookEx(...); }
+```
+
+Every way that rectangle could be missing or wrong led to that line, and the
+click went through. The line itself was never broken. It asked the question at
+the wrong time. Locating the composer alone took 4055ms on a real conversation,
+and every layout change starts that over. The Enter path never had this
+problem, because it holds the keystroke and decides afterwards.
+
+### The fix
+
+Clicks now work the same way. When there is **no trustworthy rectangle**,
+**something sensitive is waiting to be sent**, and **the policy says block**,
+the click is held. The control under the pointer is then identified off the
+hook thread, at the one point that matters:
+
+* **Send** → blocked, with an event and the notice.
+* **Anything else** → the click is replayed with `ReleaseClick`. It costs the
+  user only the time it took to ask.
+* **No answer within 2s** → blocked. With sensitive content waiting and a block
+  policy, getting no answer is not the same as getting permission.
+
+WhatsApp's Send control has no usable accessible name, so it is recognised by
+its position beside the message box, and that box is found at the moment of the
+click. The click being held is the one that would have moved focus, so the box
+the user just typed into still has it. Fallbacks are the locator's cached
+composer (if still alive) and probing to the left of the clicked control.
+
+A rectangle found ahead of time is now a **fast path**, not a requirement. When
+nothing sensitive is waiting, or the policy is alert-only, no click is held. An
+ordinary click is not touched.
+
+### Known edge
+
+While sensitive text sits unsent in the box, a *drag* that starts inside the
+app is replayed as a single click.
+
+---
+
 ## 📐 A resize made the locator publish the wrong control as Send — Agent v1.4.15 (September 23, 2026)
 
 ### Summary

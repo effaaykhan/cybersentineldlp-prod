@@ -4077,6 +4077,251 @@ LRESULT CALLBACK KeyProc(int nCode, WPARAM wParam, LPARAM lParam) {
 //
 // It fails open at every step: unknown rectangle, stale rectangle, wrong
 // process, stale snapshot, or any doubt at all, and the click goes through.
+// ── Deciding a held click ─────────────────────────────────────────────────
+//
+// Until 1.4.16 a click was inspected only if it landed inside a Send rectangle
+// located AHEAD of time, and every way that rectangle could be missing or wrong
+// ended the same way - the click went through. Never found; found 1.5s after
+// the send; stale; taken from the old layout after a resize; lost again after
+// a snap to half the screen; a different control entirely. Seven failures, one
+// cause: the question was asked at the wrong time. Enter never had this
+// problem, because it holds the keystroke and decides afterwards.
+//
+// Clicks now work the same way. When no trustworthy rectangle exists AND the
+// app has something sensitive waiting to be sent AND the policy says block,
+// the click is held and the question is asked about the one point that
+// matters - the one the user clicked - off the hook thread. Send: blocked.
+// Anything else: the click is replayed, costing the user only the time it took
+// to ask. A rectangle located in advance is now a fast path, not a
+// precondition.
+//
+// While nothing sensitive is waiting, nothing is held. An ordinary click is not
+// touched at all.
+
+enum class SendAt { Send, NotSend, Unknown };
+
+// How long a held click may wait for the answer. The same question, asked by
+// the hover probe every pass, comes back well inside this; reaching it means
+// UI Automation is wedged, and the click is then treated as a send.
+constexpr int kHeldClickBudgetMs = 2000;
+
+// Is there a message box level with this rectangle and to its left? WhatsApp's
+// Send control carries no usable name, so position beside the composer is the
+// only way to recognise it - and the composer has to be found NOW, because the
+// one the locator cached may have died with the last layout change. Three
+// ways, cheapest first.
+bool ComposerBesideRect(IUIAutomation* uia, const RECT& cand, HWND wnd) {
+    auto accept = [&](IUIAutomationElement* e) {
+        RECT er{};
+        return e && ElementIsEditable(e) && ElementRect(e, er) &&
+               er.right > er.left && er.bottom > er.top &&
+               RectInsideWindow(er, wnd) && RectBesideComposer(cand, er);
+    };
+
+    // 1. Focus. The click that would have moved it is the one being held, so
+    //    the box the user just typed into still has it.
+    {
+        IUIAutomationElement* f = nullptr;
+        if (SUCCEEDED(uia->GetFocusedElement(&f)) && f) {
+            const bool ok = accept(f);
+            f->Release();
+            if (ok) return true;
+        }
+    }
+    // 2. The locator's cached composer, if it is still alive.
+    {
+        DWORD cpid = 0;
+        IUIAutomationElement* c = AcquireComposer(cpid);
+        if (c) {
+            const bool ok = ElementAlive(c) && accept(c);
+            c->Release();
+            if (ok) return true;
+        }
+    }
+    // 3. Look left of the candidate. Nearest points first: a message box's text
+    //    is left-aligned, so the space just left of Send is usually empty box,
+    //    and a hit test there returns the box itself rather than a run of text
+    //    inside it. (No parent walk: IUIAutomationTreeWalker is missing from the
+    //    headers this is verified against, and focus above is the primary test.)
+    const LONG cy = cand.top + (cand.bottom - cand.top) / 2;
+    static const LONG kDx[] = { 24, 60, 110, 170, 240 };
+    for (const LONG dx : kDx) {
+        IUIAutomationElement* hit = nullptr;
+        if (FAILED(uia->ElementFromPoint(POINT{ cand.left - dx, cy }, &hit)) || !hit) continue;
+        const bool ok = accept(hit);
+        hit->Release();
+        if (ok) return true;
+    }
+    return false;
+}
+
+// What is under this point: the Send control, something else, or no answer.
+// Makes its own UI Automation instance - it runs on a worker thread that has no
+// apartment - and creates it directly rather than through EnsureUia, which
+// announces every acquisition in the log.
+SendAt IdentifySendAt(POINT pt, HWND wnd, std::string* desc) {
+    const bool comOk = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    IUIAutomation* uia = nullptr;
+    CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+                     IID_IUIAutomation, (void**)&uia);
+    SendAt v = SendAt::Unknown;
+    if (uia) {
+        IUIAutomationElement* el = nullptr;
+        if (SUCCEEDED(uia->ElementFromPoint(pt, &el)) && el) {
+            v = SendAt::NotSend;
+            if (desc) *desc = ElementDescription(el);
+            RECT r{};
+            const CONTROLTYPEID ct = ElementControlType(el);
+            // Image as well as Button: for an icon button the hit test returns
+            // the Image inside it.
+            const bool clickable = (ct == kButtonControlTypeId || ct == kImageControlTypeId);
+            if (clickable && ElementRect(el, r) && ButtonSized(r) && RectInsideWindow(r, wnd) &&
+                (ElementSuggestsSend(el) || ComposerBesideRect(uia, r, wnd))) {
+                v = SendAt::Send;
+            }
+            el->Release();
+        }
+        uia->Release();
+    }
+    if (comOk) CoUninitialize();
+    return v;
+}
+
+// IdentifySendAt with a deadline. A UI Automation call into a Chromium
+// renderer cannot itself be timed out, so it runs on its own thread and this
+// waits for it; a call that never returns is abandoned, not waited on forever.
+SendAt IdentifySendAtBounded(POINT pt, HWND wnd, int budgetMs, std::string* desc) {
+    struct Box {
+        std::mutex m; std::condition_variable cv;
+        bool done = false; SendAt v = SendAt::Unknown; std::string d;
+    };
+    auto box = std::make_shared<Box>();
+    std::thread([box, pt, wnd]() {
+        std::string d;
+        SendAt v = SendAt::Unknown;
+        try { v = IdentifySendAt(pt, wnd, &d); } catch (...) {}
+        {
+            std::lock_guard<std::mutex> lk(box->m);
+            box->v = v; box->d = d; box->done = true;
+        }
+        box->cv.notify_all();
+    }).detach();
+    std::unique_lock<std::mutex> lk(box->m);
+    if (!box->cv.wait_for(lk, std::chrono::milliseconds(budgetMs), [&] { return box->done; }))
+        return SendAt::Unknown;
+    if (desc) *desc = box->d;
+    return box->v;
+}
+
+// Is anything sensitive waiting to be sent in this app? Hook-safe: mutexes,
+// atomics and a clock - the same work the hook already did before this existed.
+bool SensitivePendingFor(DWORD pid) {
+    {
+        std::lock_guard<std::mutex> lk(g_snapMx);
+        const long long age = g_snapAtMs ? (NowSteadyMs() - g_snapAtMs) : -1;
+        if (g_snapPid == pid && g_snapSensitive && age >= 0 && age <= 15000) return true;
+    }
+    if (StagedInspectionInFlight(pid)) return true;
+    return HasPendingDrop(pid, std::string());
+}
+
+// The held click's decision, off the hook thread. Every path resolves the
+// click exactly once: blocked, or replayed.
+void DecideHeldClick(POINT pt, DWORD pid, HWND wnd) {
+    const std::string exe = ProcessExeName(pid);
+
+    // An attachment still being read decides nothing yet. Wait for it on the
+    // 1.4.9 ceiling, with the same fail-closed rule.
+    if (StagedInspectionInFlight(pid) && !AwaitStagedInspection(kAttachmentHoldMs)) {
+        LogWarn("held click in " + exe + ": attachment inspection exceeded " +
+                std::to_string(kAttachmentHoldMs) + "ms - BLOCKED uninspected (fail closed)");
+        ShowBlockedNotice(exe, "an attachment that could not be inspected in time");
+        return;
+    }
+
+    // What is waiting, now that any inspection has finished.
+    std::string what, text, via;
+    NetworkExfilMonitor::ClassifyResult cls;
+    bool fromDrop = false;
+    {
+        std::string dropPath;
+        NetworkExfilMonitor::ClassifyResult dropCls;
+        if (PendingDropFor(pid, exe, dropPath, dropCls)) {
+            cls = dropCls; text = dropPath; what = DescribeLabels(dropCls);
+            via = "held-click-staged-file"; fromDrop = true;
+        }
+    }
+    if (!fromDrop) {
+        std::lock_guard<std::mutex> lk(g_snapMx);
+        const long long age = g_snapAtMs ? (NowSteadyMs() - g_snapAtMs) : -1;
+        if (g_snapPid == pid && g_snapSensitive && age >= 0 && age <= 15000) {
+            what = g_snapWhat; cls = g_snapCls; text = g_snapText; via = "held-click";
+        }
+    }
+    if (via.empty()) {
+        // Nothing sensitive after all - the inspection cleared it, or the box
+        // was emptied while we asked. The click is the user's; give it back.
+        ReleaseClick(pt);
+        return;
+    }
+
+    // Something sensitive IS waiting. Was this click the send?
+    std::string desc;
+    const SendAt at = IdentifySendAtBounded(pt, wnd, kHeldClickBudgetMs, &desc);
+    if (at == SendAt::NotSend) {
+        LogInfo("held click at (" + std::to_string(pt.x) + "," + std::to_string(pt.y) +
+                ") in " + exe + " released - not the Send control: " + desc);
+        ReleaseClick(pt);
+        return;
+    }
+
+    // Send - or UI Automation gave no answer in time. With sensitive content
+    // waiting and the policy set to block, an unanswered question is not
+    // permission. Fail closed, and say which of the two it was.
+    const std::string severity =
+        (ToLowerAscii(cls.category) == "restricted") ? "critical" : "high";
+    try {
+        EmitEvent(exe, pid, "BLOCK", severity, cls,
+                  (fromDrop
+                     ? "Blocked sensitive file staged in " + exe + " (" + cls.category +
+                       ") - " + text
+                     : "Blocked sensitive message in " + exe + " (" + cls.category +
+                       ") - Send button click"),
+                  text, "send_button", wnd);
+    } catch (...) {}
+    LogWarn("MESSAGING_TEXT_BLOCKED exe=" + exe + " category=" + cls.category +
+            " detected=[" + what + "] via=" + via +
+            (at == SendAt::Unknown
+                 ? " (the clicked control could not be identified within " +
+                   std::to_string(kHeldClickBudgetMs) + "ms - failed closed)"
+                 : std::string()));
+    ShowBlockedNotice(exe, what.empty() ? std::string("a sensitive file") : what);
+    if (fromDrop) ClearPendingDrop();
+}
+
+// Hook-side half of a held click: decide whether to hold it, and if so hand
+// the decision to a worker. Cheapest test first and cached reads only - see
+// KeyProc for why a hook may not do more. Most clicks leave at the first line.
+bool HoldUnlocatedClick(POINT pt) {
+    const HWND managed = g_managedWnd.load(std::memory_order_relaxed);
+    if (!managed) return false;
+    // The click has to land in the managed app's own window...
+    const HWND under = WindowFromPoint(pt);
+    if (!under || GetAncestor(under, GA_ROOT) != GetAncestor(managed, GA_ROOT)) return false;
+    // ...something sensitive has to be waiting to be sent there...
+    DWORD pid = 0;
+    GetWindowThreadProcessId(managed, &pid);
+    if (!pid || !SensitivePendingFor(pid)) return false;
+    // ...and the policy has to say block. Alert mode never holds input.
+    TargetApp t = ResolveForegroundApp();
+    const NetworkExfilMonitor::MessagingVerdict mv = VerdictForTarget(t, /*mayWalk=*/false);
+    if (!mv.managed || !mv.block) return false;
+
+    g_swallowNextUp.store(true);
+    std::thread(DecideHeldClick, pt, pid, managed).detach();
+    return true;
+}
+
 LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     g_lastMouseHookMs.store(NowSteadyMs(), std::memory_order_relaxed);
 
@@ -4130,6 +4375,7 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
     }
 
     DWORD pid = 0;
+    int unlocatedWhy = CLICK_NONE;    // why this click is not on a known Send rectangle
     {
         std::lock_guard<std::mutex> lk(g_sendMx);
         const long long age = g_sendAtMs ? (NowSteadyMs() - g_sendAtMs) : -1;
@@ -4154,19 +4400,33 @@ LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         const bool inside = m->pt.x >= g_sendRect.left && m->pt.x < g_sendRect.right &&
                             m->pt.y >= g_sendRect.top  && m->pt.y < g_sendRect.bottom;
         if (!fresh || !inside) {
-            // Record WHY, for the sampler to report. Only stores happen here.
-            if (g_managedWnd.load(std::memory_order_relaxed)) {
-                g_clickX.store((int)m->pt.x); g_clickY.store((int)m->pt.y);
-                g_clickRL.store((int)g_sendRect.left); g_clickRT.store((int)g_sendRect.top);
-                g_clickRR.store((int)g_sendRect.right); g_clickRB.store((int)g_sendRect.bottom);
-                g_clickAgeMs.store(age);
-                g_clickGate.store(!g_sendPid || !g_sendAtMs ? CLICK_NO_BUTTON
-                                  : (!fresh ? CLICK_STALE : CLICK_OUTSIDE));
+            // Not in a managed app at all: nothing to decide.
+            if (!g_managedWnd.load(std::memory_order_relaxed)) {
+                return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
             }
-            return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
+            // Record WHY, for the sampler to report. Only stores happen here.
+            g_clickX.store((int)m->pt.x); g_clickY.store((int)m->pt.y);
+            g_clickRL.store((int)g_sendRect.left); g_clickRT.store((int)g_sendRect.top);
+            g_clickRR.store((int)g_sendRect.right); g_clickRB.store((int)g_sendRect.bottom);
+            g_clickAgeMs.store(age);
+            unlocatedWhy = !g_sendPid || !g_sendAtMs ? CLICK_NO_BUTTON
+                         : (!fresh ? CLICK_STALE : CLICK_OUTSIDE);
+        } else {
+            g_clickGate.store(CLICK_INSPECTED);
+            pid = g_sendPid;
         }
-        g_clickGate.store(CLICK_INSPECTED);
-        pid = g_sendPid;
+    }
+
+    // No Send rectangle we can trust for this click. That used to be the end of
+    // it: the click went through, and every way the rectangle could be missing
+    // or wrong was a way to send sensitive content by mouse. Now, if something
+    // sensitive is waiting and the policy blocks, the click is held and the
+    // control under it is identified directly - see DecideHeldClick. Outside
+    // those conditions this returns false at once and nothing changes.
+    if (unlocatedWhy != CLICK_NONE) {
+        if (HoldUnlocatedClick(m->pt)) return 1;
+        g_clickGate.store(unlocatedWhy);
+        return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
     }
 
     std::string what, text, via = "send-button-click";

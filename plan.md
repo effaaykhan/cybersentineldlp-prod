@@ -125,6 +125,20 @@ policy because the channel was missing from `EventsAllowed()`.
 - ✅ The 1.4.13 corner probe was suspected first and was innocent — it never fired
 - ✅ VERSION 1.4.14 → 1.4.15
 
+## Follow-on — Agent v1.4.16: decide a click when it happens
+- ✅ Snap-to-half broke text blocking after 1.4.15 fixed resize, the 8th failure
+  of the same design: a click was inspected ONLY if inside a pre-located rect
+- ✅ Click gate now holds, like Enter: no trusted rect + sensitive pending +
+  block policy -> hold, identify the clicked control off-thread, block or replay
+- ✅ Identification: Button/Image, button-sized, inside the window, and named
+  Send OR beside the message box (focused element first, then cached composer,
+  then a probe to the left)
+- ✅ 2s budget, fail closed on no answer; alert mode never holds a click
+- ✅ Pre-located rect kept as the fast path; ordinary clicks untouched
+- ✅ Dropped a TreeWalker parent walk: IUIAutomationTreeWalker is missing from
+  the local headers and unused anywhere else, so CI's headers were unproven
+- ✅ VERSION 1.4.15 → 1.4.16
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

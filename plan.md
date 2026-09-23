@@ -85,6 +85,19 @@ policy because the channel was missing from `EventsAllowed()`.
   PendingDropFor's caption window)
 - ✅ VERSION 1.4.11 → 1.4.12
 
+## Follow-on — Agent v1.4.13: the button was found 1.5s after the send
+- ✅ Drop path fully vindicated by the log: .avif detected, OCR'd, Restricted,
+  pending-drop armed 2s before the send. Only the button location was missing
+- ✅ FIXED MY OWN REGRESSION: 1.4.10's PublishSendBtn(nullptr) clear deleted the
+  data 1.4.10's window-unchanged rule reads; a click inside a valid rect on an
+  unmoved window was refused as "no Send button". Clear removed; focus-leave and
+  the GetWindowRect comparison cover the real cases
+- ✅ Composer lock took 4055ms vs a 2.5s drop-and-click, so every composer-based
+  probe was blind. Added ProbeSendInWindowCorner (no composer needed,
+  name-verified only, bottom-right band)
+- ✅ Probe order: pointer -> beside composer -> window corner
+- ✅ VERSION 1.4.12 → 1.4.13
+
 ## Remaining
 - ⬜ Push → CI builds/signs 1.4.8 → publish → update endpoint
 - ⬜ Create a real `screen_capture_control` policy in the console

@@ -318,6 +318,7 @@ std::atomic<bool>      g_convLoggedOnce{false};
 // where Send is - it is the line that tells an operator the mouse is covered.
 std::atomic<bool> g_hoverSaidSo{false};
 std::atomic<bool> g_besideSaidSo{false};
+std::atomic<bool> g_cornerSaidSo{false};
 
 // ── What the locator has found ─────────────────────────────────────
 // Both threads live in the COM multithreaded apartment, so an interface pointer
@@ -2079,6 +2080,36 @@ bool ProbeSendBesideComposer(IUIAutomation* uia, const TargetApp& t,
     return false;
 }
 
+// ── Where Send has to be when the composer is not known yet ───────
+//
+// Locking onto the composer took 4055ms on a real WhatsApp conversation, and
+// the user had dropped a file and clicked Send inside 2.5s of it. Every probe
+// that needs the message box's rectangle was therefore still blind at the one
+// moment that mattered, and the send went out with "no Send button has been
+// located" in the log. This one needs nothing but the window.
+//
+// Position alone is NOT allowed to call something Send here. Without the
+// composer there is no "beside the message box" test to corroborate it, so
+// composerRect is passed as null and only a control whose NAME or automation
+// id says send is accepted. A false positive here would swallow clicks in the
+// corner of the window the user actually uses, which is worse than a miss.
+bool ProbeSendInWindowCorner(IUIAutomation* uia, const TargetApp& t) {
+    RECT wr{};
+    if (!t.wnd || !GetWindowRect(t.wnd, &wr)) return false;
+    if (wr.right - wr.left < 320 || wr.bottom - wr.top < 320) return false;
+    // The composer row sits above the bottom edge, and the send control at its
+    // right end - so sweep a band in from the bottom-right corner.
+    static const LONG kDx[] = { 30, 56, 86, 120 };
+    static const LONG kDy[] = { 100, 130, 70, 160, 190 };
+    for (const LONG dy : kDy) {
+        for (const LONG dx : kDx) {
+            POINT p{ wr.right - dx, wr.bottom - dy };
+            if (TryPublishSendAtPoint(uia, t, p, nullptr, nullptr)) return true;
+        }
+    }
+    return false;
+}
+
 // One root, one pass. Extracted so the same rules about what counts as a
 // composer can be run against several candidate roots without being restated.
 IUIAutomationElement* SearchEditableUnder(IUIAutomation* uia, IUIAutomationElement* root,
@@ -3205,16 +3236,19 @@ void PublishSendBtn(IUIAutomationElement* el, DWORD pid) {
         if (el) el->AddRef();
         g_locSendBtn = el; g_locSendBtnPid = pid;
     }
-    // A button we no longer hold has no rectangle. Leaving the last one
-    // standing is why a click was refused as stale with a rectangle 1046967ms
-    // old - seventeen minutes after the control it described had gone.
-    // Reported as "no Send button" instead, it at least names what to fix.
-    if (!el) {
-        std::lock_guard<std::mutex> lk(g_sendMx);
-        g_sendRect = RECT{0, 0, 0, 0};
-        g_sendPid = 0; g_sendAtMs = 0;
-        g_sendWnd = nullptr; g_sendWndRect = RECT{0, 0, 0, 0};
-    }
+    // Deliberately does NOT clear the published rectangle.
+    //
+    // 1.4.10 cleared it here, and that turned out to discard a rectangle that was
+    // still exactly right: WhatsApp rebuilds its composer mid-conversation, this
+    // is called with nullptr to re-acquire, and a click on the Send button 800ms
+    // later was then refused as "no Send button has been located" - on a button
+    // that had not moved a pixel. It also defeated the window-unchanged rule
+    // added in the same release, by deleting the very data that rule reads.
+    //
+    // Losing the ELEMENT is not losing the BUTTON. The two cases that really
+    // invalidate a rectangle are handled where they belong: focus leaving a
+    // managed app clears it explicitly in the locator, and a window that has
+    // moved is caught by the hook's GetWindowRect comparison.
     if (old) old->Release();
 }
 
@@ -3301,10 +3335,12 @@ void LocatorThread() {
                     sendBtn->Release(); sendBtn = nullptr; sendPid = 0;
                     std::lock_guard<std::mutex> lk(g_sendMx);
                     g_sendPid = 0; g_sendAtMs = 0;
+                    g_sendWnd = nullptr; g_sendWndRect = RECT{0, 0, 0, 0};
                 }
                 lastSendFindMs = 0; sendMisses = 0; hadText = false;
                 g_hoverSaidSo.store(false);
                 g_besideSaidSo.store(false);
+                g_cornerSaidSo.store(false);
                 continue;
             }
 
@@ -3399,12 +3435,20 @@ void LocatorThread() {
                                     t.exe + " as Send - a click on it is now inspected");
                         }
                     // The pointer is somewhere else, or has not arrived yet. Ask where the
-                    // button has to be anyway - otherwise the first send of every session
-                    // goes out uninspected, which is what the endpoint log showed.
+                    // button has to be anyway - otherwise the first send of every session goes
+                    // out uninspected, which is what the endpoint log showed.
                     } else if (ProbeSendBesideComposer(uia, t, haveCr ? &cr : nullptr)) {
                         if (!g_besideSaidSo.exchange(true)) {
                             LogInfo("locator found the Send control beside the message box in " +
                                     t.exe + " - a click on it is inspected without hovering first");
+                        }
+                    // Still nothing - and the composer may simply not be locked onto yet, which
+                    // on WhatsApp took 4055ms while the user dropped a file and clicked Send
+                    // inside 2.5s. Needs no composer rectangle; name-verified only.
+                    } else if (ProbeSendInWindowCorner(uia, t)) {
+                        if (!g_cornerSaidSo.exchange(true)) {
+                            LogInfo("locator recognised a named Send control in " + t.exe +
+                                    " from the window corner, before the message box was located");
                         }
                     }
                 }

@@ -8,6 +8,59 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ⏱ The Send button was found 1.5 seconds after the send — Agent v1.4.13 (September 23, 2026)
+
+### Summary
+
+A Restricted `.avif` was dropped into WhatsApp, OCR'd, classified and armed —
+and the send still went through. The endpoint log has the whole sequence:
+
+```
+12:58:36.176  a sensitive file was staged ... (Restricted) - the next send will be blocked
+12:58:38.757  click at (1848,942) NOT inspected: no Send button has been located
+12:58:40.255  locator locked onto the composer after 4055ms
+12:58:40.281  locator found the Send control beside the message box
+12:58:45.510  the composer went stale (the app rebuilt it) - re-acquiring
+12:58:46.317  click at (1856,960) NOT inspected: no Send button has been located
+```
+
+Both clicks are **inside** the rectangle `[1833,921 1894,982]` the locator went
+on to publish. The verdict was ready two seconds before the send. The only thing
+missing was knowing where the button was.
+
+### A regression introduced in 1.4.10 (fixed)
+
+The 12:58:46 miss was self-inflicted. That click was inside a valid rectangle and
+the window had not moved, so 1.4.10's window-unchanged rule would have accepted
+it at 6s old — but 1.4.10's *other* change, clearing the rectangle in
+`PublishSendBtn(nullptr, 0)`, had already deleted the data that rule reads. The
+two changes worked against each other.
+
+Losing the *element* is not losing the *button*: WhatsApp rebuilds its composer
+mid-conversation and re-acquires, while the button stays where it is.
+`PublishSendBtn` no longer clears the rectangle. The two cases that genuinely
+invalidate one are handled where they belong — focus leaving a managed app
+clears it explicitly in the locator, and a moved window is caught by the hook's
+`GetWindowRect` comparison.
+
+### Acquisition was slower than the user (fixed)
+
+Locking onto the composer took **4055ms**; the drop-and-click took ~2.5s. Every
+probe so far needs the composer's rectangle, so all of them were blind at the
+only moment that mattered.
+
+`ProbeSendInWindowCorner` needs nothing but the window — it sweeps a band in
+from the bottom-right corner, where a composer's send control sits. Position
+alone is **not** allowed to identify Send there: with no composer there is no
+"beside the message box" test to corroborate it, so `composerRect` is passed as
+null and only a control whose name or automation id says *send* is accepted. A
+false positive would swallow clicks in a corner the user actually uses, which is
+worse than a miss.
+
+Order is now: pointer → beside the composer → window corner.
+
+---
+
 ## 🖼 A picture sent with no caption never reached the attachment hold — Agent v1.4.12 (September 23, 2026)
 
 ### Summary
